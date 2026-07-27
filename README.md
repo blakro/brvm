@@ -18,6 +18,7 @@ python -m brvm verifier        # diagnostic des sélecteurs, sans rien écrire
 python -m brvm ingerer         # enregistre la séance publiée
 python -m brvm referentiel     # met à jour ticker / nom / secteur
 python -m brvm noter           # classe les valeurs
+python -m brvm backtester      # rejoue le classement dans le temps
 python -m brvm exporter        # base → CSV versionnés
 python -m brvm importer        # CSV versionnés → base
 python -m brvm etat            # ce que contient la base
@@ -150,13 +151,48 @@ Quatre partis pris, détaillés dans `src/brvm/scoring.py` :
 Un historique trop court ne produit pas un classement approximatif : il ne
 produit rien, et la commande le dit.
 
+### Backtest
+
+```bash
+python -m brvm backtester --journal
+```
+
+Rejoue le classement dans le temps : rééquilibrage mensuel, dix positions
+équipondérées, frais et impact déduits, comparé à l'univers éligible
+équipondéré — c'est cette référence qu'il faut battre, pas zéro.
+
+La question qu'on doit poser à un backtest n'est pas « combien
+rapporte-t-il ? » mais « triche-t-il ? ». Deux garde-fous :
+
+- la décision d'une date `t` ne voit que les cours jusqu'à `t` inclus ;
+- l'exécution est retardée d'une séance — décider et acheter au même cours
+  revient à passer un ordre à un prix déjà connu.
+
+`tests/test_backtest.py` construit une valeur qui monte régulièrement puis
+s'effondre juste après avoir été sélectionnée, et exige que le portefeuille
+**la détienne** et **encaisse le krach**. Un moteur qui gagne sur ce
+scénario est un moteur qui triche. Le test a été vérifié par mutation :
+supprimer la coupe temporelle le fait échouer.
+
+Trois biais lui survivent en revanche, et aucun n'est corrigeable avec les
+données du projet. Ils accompagnent chaque résultat affiché :
+
+- **biais du survivant** — le référentiel liste les sociétés cotées
+  aujourd'hui ; celles radiées entre-temps ont disparu de l'univers, y
+  compris des périodes où elles cotaient, et elles ont généralement été
+  radiées après avoir mal fini ;
+- **dividendes absents** — la table `cours` porte des cours nus, alors que
+  les rendements dépassent souvent 5 % sur cette place ;
+- **frais estimés** — commissions et impact sont des paramètres pris du
+  côté prudent, pas des relevés de courtage.
+
 ## Tests
 
 ```bash
 pytest -q                     # ou : python tests/test_brvm_org.py
 ```
 
-Trente et un tests, tous hors ligne.
+Trente-neuf tests, tous hors ligne.
 
 `test_brvm_org.py` travaille sur les captures réelles de `tests/donnees/`,
 y compris les pages pathologiques : la 404 habillée du thème complet, la
@@ -176,12 +212,13 @@ donne un vide et non un nombre.
 
 MIT — voir [LICENSE](LICENSE).
 
-## Ce qui n'existe pas encore
+## Ce qui manque
 
-**Un backtest.** C'est le manque qui compte : sans lui, les pondérations du
-scoring restent un parti pris et non un résultat. Il demande d'abord que la
-série s'accumule — quelques mois pour une première idée, des années pour
-une conclusion — puis un calcul honnête des frais et de l'impact de marché.
+**Des données.** Le moteur de backtest est écrit et vérifié, mais la base
+contient une séance : `brvm backtester` refuse de conclure et dit combien
+il lui manque. Tant que la série ne s'est pas accumulée — quelques mois
+pour une première idée, des années pour une conclusion — les pondérations
+du scoring restent un parti pris et non un résultat.
 
 **Une validation en conditions réelles.** Tout a été vérifié contre des
 captures ; le premier `brvm ingerer` face au site vivant reste à faire. Les

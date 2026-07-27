@@ -75,6 +75,25 @@ DEFAUTS: dict[str, dict] = {
         # sociétés. Ceux-là sont notés face au marché entier.
         "min_par_secteur": 5,
     },
+    "backtest": {
+        "positions": 10,
+        # ~un mois de séances entre deux rééquilibrages.
+        "pas_rebalancement": 20,
+        # On décide sur la clôture de t et on achète à celle de t+1. Se
+        # servir du même cours pour décider et pour exécuter suppose de
+        # passer un ordre à un cours déjà connu : c'est le regard en avant
+        # le plus courant, et il embellit les résultats sans bruit.
+        "delai_execution": 1,
+        # ORDRES DE GRANDEUR, À VÉRIFIER AUPRÈS DE VOTRE SGI. Les
+        # commissions de la BRVM se comptent en pourcents, pas en points de
+        # base comme sur les places développées — un backtest qui les
+        # ignore est une fiction, d'autant plus qu'un portefeuille
+        # rééquilibré tous les mois les paie douze fois par an.
+        "frais_pourcent": 1.0,
+        # Écart entre le cours affiché et le cours réellement obtenu, sur
+        # des lignes qui ne s'échangent parfois pas tous les jours.
+        "impact_pourcent": 0.5,
+    },
     # Contribution de chaque trait au score. Le signe compte : la
     # volatilité pénalise.
     #

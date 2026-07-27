@@ -5,6 +5,7 @@
     python -m brvm ingerer               enregistre la séance publiée
     python -m brvm referentiel           met à jour ticker / nom / secteur
     python -m brvm noter                 classe les valeurs
+    python -m brvm backtester            rejoue le classement dans le temps
     python -m brvm exporter              base → CSV versionnés
     python -m brvm importer              CSV versionnés → base
     python -m brvm etat                  ce que contient la base
@@ -19,7 +20,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from . import db, features, scoring
+from . import backtest, db, features, scoring
 from .ingestion import brvm_org
 
 
@@ -74,6 +75,20 @@ def _noter(args) -> int:
           f"{traits.attrs.get('seances', 0)} séances en base")
     print(scoring.expliquer(classement, args.nombre))
     return 0 if not classement.empty else 1
+
+
+def _backtester(args) -> int:
+    cours = db.lire("cours")
+    if cours.empty:
+        print("aucun cours en base — lancez « brvm ingerer »", file=sys.stderr)
+        return 1
+
+    resultat = backtest.backtester(cours, db.lire("referentiel"))
+    print(backtest.expliquer(resultat))
+    if args.journal and not resultat["etapes"].empty:
+        print("\nJournal des rééquilibrages :")
+        print(resultat["etapes"].to_string(index=False))
+    return 0 if not resultat["etapes"].empty else 1
 
 
 def _exporter(args) -> int:
@@ -132,6 +147,13 @@ def construire_analyseur() -> argparse.ArgumentParser:
     noter.add_argument("-n", "--nombre", type=int, default=10,
                        help="nombre de lignes affichées (10 par défaut)")
     noter.set_defaults(fonction=_noter)
+
+    backtester = commandes.add_parser(
+        "backtester", help="rejouer le classement dans le temps"
+    )
+    backtester.add_argument("--journal", action="store_true",
+                            help="détailler chaque rééquilibrage")
+    backtester.set_defaults(fonction=_backtester)
 
     exporter = commandes.add_parser(
         "exporter", help="base → CSV versionnés de data/"
