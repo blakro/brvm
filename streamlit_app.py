@@ -22,6 +22,7 @@ import streamlit as st
 
 from brvm import backtest, db, features, scoring
 from brvm.config import DEFAUTS
+from brvm.ingestion import brvm_org
 
 # --- Palette validée (validate_palette.js, mode clair) --------------------
 HAUSSE = "#2a78d6"      # bleu — pôle positif de la paire divergente
@@ -55,8 +56,8 @@ def _theme() -> alt.theme.ThemeConfig:
 
 
 @st.cache_data(ttl=900)
-def charger():
-    """CSV versionnés → DataFrames. Rechargé au plus tous les quarts d'heure.
+def charger_archive():
+    """CSV versionnés → DataFrames. Relu au plus tous les quarts d'heure.
 
     La cote ne bouge qu'une fois par jour ; relire le fichier à chaque
     interaction ne servirait qu'à ralentir les curseurs.
@@ -64,18 +65,65 @@ def charger():
     return db.charger_archive("cours"), db.charger_archive("referentiel")
 
 
-cours, referentiel = charger()
+@st.cache_data(ttl=900, show_spinner="Lecture de brvm.org…")
+def lire_en_direct():
+    """Séance publiée, lue sur le site. (cote, erreur) — l'un des deux vaut None.
+
+    L'app ne doit pas dépendre de l'action planifiée pour montrer quelque
+    chose : celle-ci peut n'avoir jamais tourné, ou ne pas atteindre le site
+    depuis les adresses de GitHub. Quand elle a du retard, l'app va chercher
+    la séance elle-même.
+
+    Attention : hors clôture, la colonne « Cours Clôture » de brvm.org porte
+    le dernier cours traité. C'est bon à afficher, jamais à archiver — d'où
+    l'étiquette « provisoire » et l'absence totale d'écriture ici.
+    """
+    try:
+        return brvm_org.lire_cote(), None
+    except Exception as erreur:  # noqa: BLE001 — le motif est l'information utile
+        # Le type suffit à orienter (réseau, page illisible, refus) ; la pile
+        # complète d'une erreur réseau fait trois lignes de bruit à l'écran.
+        detail = str(erreur).split("\n")[0][:110]
+        return None, f"{type(erreur).__name__} — {detail}"
+
+
+cours, referentiel = charger_archive()
+if referentiel.empty:
+    referentiel = brvm_org.referentiel_amorce()
 
 st.title("Bourse Régionale des Valeurs Mobilières")
 
+# Un archive absente ne doit pas donner une page vide : on tente le site.
+direct, echec = (None, None)
+if cours.empty:
+    direct, echec = lire_en_direct()
+
+barre_1, barre_2 = st.columns([3, 1])
+with barre_2:
+    if st.button("Actualiser depuis brvm.org", width="stretch"):
+        lire_en_direct.clear()
+        direct, echec = lire_en_direct()
+
+if direct is not None and not direct.empty:
+    heure = direct.attrs.get("heure_mise_a_jour")
+    cours = (
+        pd.concat([cours, direct], ignore_index=True)
+        .drop_duplicates(subset=["date", "ticker"], keep="last")
+    )
+    barre_1.success(
+        f"Séance du {direct['date'].iloc[0]} lue à l'instant sur brvm.org "
+        f"(mise à jour du site : {heure or 'inconnue'}). "
+        "Affichée seulement — l'archive du dépôt n'est pas modifiée."
+    )
+
 if cours.empty:
     st.warning(
-        "**Aucune donnée dans `data/cours.csv`.** L'app lit l'archive "
-        "versionnée du dépôt ; elle se remplit quand l'action "
-        "`ingestion.yml` tourne, chaque jour ouvré à 16 h UTC. "
-        "Vérifiez que la branche par défaut du dépôt est bien celle qui "
-        "porte l'action — les workflows planifiés ne tournent que sur "
-        "elle."
+        "**Aucune donnée.** L'archive `data/cours.csv` est vide et brvm.org "
+        "n'a pas répondu"
+        + (f" — {echec}." if echec else ".")
+        + " L'archive se remplit quand l'action `ingestion.yml` tourne, "
+        "chaque jour ouvré à 16 h UTC ; les workflows planifiés ne "
+        "s'exécutent que sur la branche par défaut du dépôt."
     )
     st.stop()
 
@@ -86,6 +134,9 @@ haut_1, haut_2, haut_3 = st.columns(3)
 haut_1.metric("Dernière séance", derniere)
 haut_2.metric("Séances en base", f"{seances}")
 haut_3.metric("Sociétés suivies", f"{cours['ticker'].nunique()}")
+
+if echec and not cours.empty:
+    st.caption(f"brvm.org injoignable ({echec}) — affichage de l'archive.")
 
 onglets = st.tabs(["Cote du jour", "Classement", "Backtest", "Données"])
 
