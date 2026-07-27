@@ -73,17 +73,23 @@ SELECTEURS = {
             "table.views-table",
             "table",
         ],
-        # brvm.org pagine ses vues. On s'arrête dès qu'une page n'apporte
-        # plus de ticker nouveau, ce plafond n'est qu'un garde-fou contre
-        # une pagination circulaire.
-        "pages_max": 10,
-        "motif_page": "https://www.brvm.org/fr/cours-actions/{page}",
+        # La cote N'EST PAS PAGINÉE : les 47 sociétés tiennent sur une page.
+        # Le segment final de l'URL n'est pas un numéro de page mais un
+        # identifiant de secteur — vérifié sur la page du 27/07/2026, dont
+        # le menu offre /194 « Consommation de Base » … /200
+        # « Télécommunications », /0 valant « Toutes ». Boucler dessus en
+        # croyant paginer interrogeait des vues filtrées au hasard.
+        "pages_max": 1,
         # La date ne figure ni dans le tableau ni dans un titre : elle est
         # dans un bloc « Dernière mise à jour » posé au-dessus de la vue.
         "date": ["section.block-tools", ".block-tools", ".region-content"],
     },
     "societes": {
-        "url": "https://www.brvm.org/fr/societes-cotees/0",
+        # /fr/societes-cotees/0 renvoie une 404 — vérifié le 27/07/2026, le
+        # site répond « La page demandée n'a pas pu être trouvée ». Le vrai
+        # chemin est celui du menu « Émetteurs » de la page de la cote.
+        # Sans motif_page : ce chemin ne porte pas de segment numérique.
+        "url": "https://www.brvm.org/fr/emetteurs/societes-cotees",
         # Même ordre que pour la cote, par analogie : les deux pages sont
         # rendues par le même thème. À confirmer — cette page-ci n'a pas
         # encore été observée, et le filet structurel couvre l'écart.
@@ -93,8 +99,7 @@ SELECTEURS = {
             "table.views-table",
             "table",
         ],
-        "pages_max": 10,
-        "motif_page": "https://www.brvm.org/fr/societes-cotees/{page}",
+        "pages_max": 1,
     },
 }
 
@@ -520,12 +525,21 @@ def _coherence_variation(tableau: pd.DataFrame, corr: dict[str, str]) -> str | N
     Contrôle croisé gratuit : la page publie à la fois les deux cours et
     leur variation. Si `clôture / veille - 1` ne redonne pas la variation
     affichée, c'est que les trois colonnes ne décrivent pas le même
-    instant — ce qui arrive quand la page est consultée séance ouverte,
-    les colonnes ne se rafraîchissant pas au même rythme.
+    instant.
 
-    Diagnostic seulement, jamais bloquant : la variation n'est pas
-    enregistrée, et faire échouer l'ingestion sur elle empêcherait une
-    ingestion d'après clôture par ailleurs saine.
+    N'ATTENDEZ PAS 47/47, MÊME SÉANCE FERMÉE. Sur la capture du 27/07/2026
+    prise après clôture (« Séance fermée » affiché), 23 lignes sur 47 se
+    réconcilient depuis la veille, 27 depuis l'ouverture, 12 depuis les
+    deux et 9 depuis aucune des deux — sur des lignes qui ont pourtant
+    toutes échangé. Les colonnes de brvm.org se rafraîchissent
+    indépendamment et la page reste incohérente avec elle-même après la
+    clôture. Ce ratio est donc un signal de tendance, pas un seuil : une
+    chute brutale vaut inspection, une valeur autour de la moitié est
+    l'ordinaire du site.
+
+    Ni `veille` ni `variation` ne sont enregistrées, donc cette incohérence
+    ne contamine pas la base. Diagnostic seulement, jamais bloquant :
+    faire échouer l'ingestion là-dessus la bloquerait tous les jours.
     """
     if not {"veille", "variation"} <= set(corr):
         return None

@@ -26,6 +26,14 @@ sys.path.insert(0, str(RACINE / "src"))
 from brvm.ingestion import brvm_org  # noqa: E402
 
 PAGE = RACINE / "tests" / "donnees" / "cote_brvm_20260727.html"
+# Seconde capture du même jour, prise après la clôture (« Séance fermée »
+# affiché, cote horodatée 15:15). Elle est le témoin des comportements qui
+# ne se voient pas en séance : ingestion autorisée, et incohérence des
+# colonnes du site qui persiste séance close.
+PAGE_CLOTURE = RACINE / "tests" / "donnees" / "cote_brvm_20260727_cloture.html"
+# La réponse réelle de /fr/societes-cotees/0 : une 404 habillée du thème
+# complet, tableaux latéraux compris. C'est elle qui a démasqué l'URL.
+PAGE_404 = RACINE / "tests" / "donnees" / "societes_404_20260727.html"
 
 # Relevé à la main dans le HTML du témoin. Ordre des colonnes de la page :
 # Symbole, Nom, Volume, Cours veille, Cours Ouverture, Cours Clôture.
@@ -116,25 +124,83 @@ def test_echecs_bruyants():
     assert brvm_org.verifier_texte("<html><body><h1>503</h1></body></html>")["ok"] is False
 
 
-def test_pagination_sans_requete_superflue():
-    """La pagination s'arrête à la dernière page utile.
+def test_la_cote_tient_en_une_requete():
+    """La cote n'est pas paginée, et le segment final n'est pas un numéro.
 
-    Deux pièges déjà rencontrés : la vue non paginée sert la même page quel
-    que soit le numéro, et la page de fin est un tableau réduit à son
-    <thead> — comptée pour une ligne, elle relance une requête pour rien.
+    Le piège corrigé le 27/07/2026 : `/fr/cours-actions/{n}` a été pris
+    pour une pagination alors que `n` est un identifiant de secteur (194
+    « Consommation de Base » … 200 « Télécommunications », 0 valant
+    « Toutes »). Boucler dessus interrogeait des vues filtrées au hasard,
+    et une vue sectorielle prise pour une page suivante ajouterait à la
+    cote du jour un sous-ensemble déjà lu.
     """
     appels = []
 
     def faux_telechargement(url):
         appels.append(url)
-        return _tranche(int(url.rstrip("/").rsplit("/", 1)[-1]))
+        return PAGE_CLOTURE.read_text(encoding="utf-8", errors="replace")
 
     with _telechargement(faux_telechargement):
         cote = brvm_org.lire_cote()
 
+    assert appels == ["https://www.brvm.org/fr/cours-actions/0"], appels
     assert len(cote) == 47 and cote["ticker"].nunique() == 47
     assert cote["date"].nunique() == 1
-    assert len(appels) == 4, f"{len(appels)} requêtes pour 3 pages utiles"
+
+
+def test_arret_si_une_page_n_apporte_rien_de_neuf():
+    """Le garde-fou reste utile si brvm.org se met un jour à paginer.
+
+    On relève `pages_max` à la main : sans l'arrêt sur ticker déjà vu, une
+    vue qui sert la même page quel que soit le numéro serait téléchargée
+    autant de fois que le plafond l'autorise.
+    """
+    appels = []
+
+    def faux_telechargement(url):
+        appels.append(url)
+        return PAGE_CLOTURE.read_text(encoding="utf-8", errors="replace")
+
+    origine = brvm_org.SELECTEURS["cote"]["pages_max"]
+    brvm_org.SELECTEURS["cote"]["pages_max"] = 5
+    try:
+        with _telechargement(faux_telechargement):
+            cote = brvm_org.lire_cote()
+    finally:
+        brvm_org.SELECTEURS["cote"]["pages_max"] = origine
+
+    assert len(appels) == 2, f"{len(appels)} requêtes pour une vue non paginée"
+    assert len(cote) == 47
+
+
+def test_page_de_cloture_ingerable():
+    """Séance fermée : l'ingestion doit passer, là où la capture de 12:45
+    est refusée. C'est le pendant de `test_refus_pendant_la_seance`."""
+    r = brvm_org.verifier(PAGE_CLOTURE)
+    assert r["ok"] is True, r.get("echec")
+    assert r["date_seance"] == "2026-07-27"
+    # 15:15 vient de « Dernière mise à jour » (#block-tools-date-maj), pas
+    # de la bannière du site qui affichait 15:25 : deux horodatages
+    # cohabitent sur la page et seul le premier date la cote.
+    assert r["heure_mise_a_jour"] == "15:15"
+    assert r["lignes_exploitables"] == 47
+
+    with _telechargement(lambda url: PAGE_CLOTURE.read_text(encoding="utf-8", errors="replace")):
+        assert brvm_org.ingerer_jour() == 47
+
+
+def test_coherence_variation_reste_partielle_apres_cloture():
+    """Le site est incohérent avec lui-même, séance close comprise.
+
+    Documenté pour qu'un futur lecteur ne « corrige » pas les alias en
+    croyant à une colonne mal reconnue : sur cette capture, 9 lignes ayant
+    toutes échangé ne se réconcilient ni depuis la veille ni depuis
+    l'ouverture. Le seuil est un signal de tendance, pas un invariant.
+    """
+    html = PAGE_CLOTURE.read_text(encoding="utf-8", errors="replace")
+    tableau, corr = brvm_org._meilleur_tableau(html, "cote", brvm_org.REQUISES_COTE)
+    message = brvm_org._coherence_variation(tableau, corr)
+    assert message == "23/47 lignes où clôture/veille-1 redonne la variation publiée"
 
 
 def test_refus_pendant_la_seance():
@@ -195,21 +261,46 @@ def test_referentiel_reconnait_les_entetes_plausibles():
     assert "ticker" not in corr
 
 
-def test_referentiel_pagination_sans_requete_superflue():
-    """Même garde-fou que pour la cote : la vue non paginée sert la même
-    page quel que soit le numéro, et boucler dessus serait impoli."""
+def test_referentiel_interroge_l_url_qui_existe():
+    """`/fr/societes-cotees/0` renvoie une 404.
+
+    Vérifié le 27/07/2026 : le site répond « La page demandée
+    "/fr/societes-cotees/0" n'a pas pu être trouvée ». Le chemin servi par
+    le menu « Émetteurs » de la cote est le seul valide. Une 404 se serait
+    vue en production — `referentiel()` l'aurait avalée et cli.py serait
+    resté indéfiniment sur `referentiel_amorce()`, sans que rien n'alerte.
+    """
     appels = []
 
     def faux_telechargement(url):
         appels.append(url)
-        return _tranche(int(url.rstrip("/").rsplit("/", 1)[-1]), taille=20)
+        return PAGE.read_text(encoding="utf-8", errors="replace")
 
     with _telechargement(faux_telechargement):
         ref = brvm_org.lire_referentiel()
 
+    assert appels == ["https://www.brvm.org/fr/emetteurs/societes-cotees"], appels
     assert len(ref) == 47 and ref["ticker"].nunique() == 47
-    assert len(appels) == 4, f"{len(appels)} requêtes pour 3 pages utiles"
-    assert all("societes-cotees" in url for url in appels), appels
+
+
+def test_une_404_ne_produit_jamais_de_referentiel():
+    """Le cas subtil : la 404 de brvm.org n'est pas une page vide.
+
+    Elle sert le thème complet, bandeau de séance et blocs latéraux
+    compris — donc trois tableaux (top 5, flop 5, activités du marché) que
+    le filet structurel voit passer. Aucun ne porte de colonne de symbole
+    ni de nom, et c'est la seule chose qui l'empêche d'être pris pour un
+    référentiel de deux sociétés nommées « Top 5 » et « Flop 5 ».
+    """
+    assert PAGE_404.exists()
+    try:
+        brvm_org.lire_referentiel(PAGE_404)
+    except brvm_org.SourceIllisible as erreur:
+        assert "ticker" in str(erreur) and "nom" in str(erreur)
+    else:
+        raise AssertionError("une page 404 a produit un référentiel")
+
+    assert brvm_org.verifier(PAGE_404)["ok"] is False
 
 
 def test_referentiel_degrade_sans_planter():
@@ -241,17 +332,6 @@ class _telechargement:
     def __exit__(self, *_):
         brvm_org._telecharger = self.origine
         return False
-
-
-def _tranche(numero, taille=16):
-    """Les `taille` lignes de rang voulu du témoin, le reste retiré."""
-    from bs4 import BeautifulSoup
-
-    soup = BeautifulSoup(PAGE.read_text(encoding="utf-8", errors="replace"), "html.parser")
-    for rang, ligne in enumerate(soup.select("#block-system-main table tbody tr")):
-        if not (numero * taille <= rang < (numero + 1) * taille):
-            ligne.decompose()
-    return str(soup)
 
 
 if __name__ == "__main__":
