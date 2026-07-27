@@ -42,7 +42,6 @@ import re
 import time
 import unicodedata
 from datetime import datetime
-from io import StringIO
 from pathlib import Path
 
 import pandas as pd
@@ -73,6 +72,9 @@ SELECTEURS = {
         # une pagination circulaire.
         "pages_max": 10,
         "motif_page": "https://www.brvm.org/fr/cours-actions/{page}",
+        # La date ne figure ni dans le tableau ni dans un titre : elle est
+        # dans un bloc « Dernière mise à jour » posé au-dessus de la vue.
+        "date": ["section.block-tools", ".block-tools", ".region-content"],
     },
     "societes": {
         "url": "https://www.brvm.org/fr/societes-cotees/0",
@@ -111,6 +113,14 @@ ALIAS_COLONNES = {
     "volume_titres": ["volume de titres", "titres echanges", "quantite", "volume"],
     "volume_fcfa": ["valeur transigee", "capitaux", "montant", "valeur"],
     "variation": ["variation"],
+}
+
+# Mois écrits en toutes lettres — brvm.org date ses pages en français long
+# (« Lundi, 27 juillet, 2026 - 12:45 »), jamais en numérique.
+MOIS = {
+    "janvier": 1, "fevrier": 2, "mars": 3, "avril": 4, "mai": 5, "juin": 6,
+    "juillet": 7, "aout": 8, "septembre": 9, "octobre": 10,
+    "novembre": 11, "decembre": 12,
 }
 
 # Colonnes sans lesquelles une ligne de cote ne vaut rien. Le reste est un
@@ -223,6 +233,41 @@ def _correspondance(entete: list[str]) -> dict[str, str]:
     return trouve
 
 
+def _en_dataframe(balise) -> pd.DataFrame | None:
+    """Un <table> en DataFrame de chaînes, sans aucune conversion.
+
+    Écrit à la main plutôt que confié à `pandas.read_html`, qui devine le
+    type des colonnes : il lit « -0,32 » comme l'entier -32, en prenant la
+    virgule décimale française pour un séparateur de milliers. Les cours
+    BRVM sont aujourd'hui entiers, ce qui masque le problème — mais le jour
+    où une colonne porte des décimales, « 245,80 » devient 24580 et le
+    contrôle des cours aberrants ne voit rien passer. La conversion est
+    faite ensuite, et seulement par `_nombre`.
+    """
+    entete = [c.get_text(" ", strip=True) for c in balise.select("thead th")]
+    lignes_html = balise.select("tbody tr") or balise.find_all("tr")
+
+    if not entete:
+        premiere = lignes_html[0] if lignes_html else None
+        if premiere is None:
+            return None
+        entete = [c.get_text(" ", strip=True) for c in premiere.find_all(["th", "td"])]
+        lignes_html = lignes_html[1:]
+
+    lignes = []
+    for tr in lignes_html:
+        cellules = [c.get_text(" ", strip=True) for c in tr.find_all(["th", "td"])]
+        # Une ligne dont le nombre de cellules diffère de l'en-tête est
+        # une ligne de total, de titre ou de colspan : l'aligner de force
+        # décalerait les colonnes.
+        if len(cellules) == len(entete) and any(cellules):
+            lignes.append(cellules)
+
+    if not entete or not lignes:
+        return None
+    return pd.DataFrame(lignes, columns=entete, dtype=str)
+
+
 def _tableaux_candidats(html: str, cle: str) -> list[pd.DataFrame]:
     """Tableaux de la page, sélecteurs déclarés d'abord, tous ensuite."""
     soup = BeautifulSoup(html, "html.parser")
@@ -239,13 +284,9 @@ def _tableaux_candidats(html: str, cle: str) -> list[pd.DataFrame]:
         if brut in vus:
             continue
         vus.append(brut)
-        try:
-            # Analyseur par défaut (lxml) : `flavor="bs4"` imposerait
-            # html5lib en dépendance supplémentaire sans rien apporter ici.
-            lus = pd.read_html(StringIO(brut))
-        except ValueError:
-            continue  # balise <table> sans ligne exploitable
-        tableaux.extend(t for t in lus if not t.empty)
+        tableau = _en_dataframe(balise)
+        if tableau is not None and not tableau.empty:
+            tableaux.append(tableau)
     return tableaux
 
 
@@ -278,28 +319,59 @@ def _meilleur_tableau(
     return meilleur[1], meilleur[2]
 
 
-def _date_seance(html: str) -> str:
-    """Date de la séance affichée sur la page, au format ISO.
+def _sans_accents(texte: str) -> str:
+    forme = unicodedata.normalize("NFKD", texte)
+    return "".join(c for c in forme if not unicodedata.combining(c))
+
+
+def _date_seance(html: str) -> tuple[str, str | None]:
+    """Date et heure du bloc « Dernière mise à jour », au format ISO.
 
     Jamais de repli sur la date du jour. Le site sert la dernière séance
     cotée, qui n'est pas celle d'aujourd'hui un lundi férié ou avant le
     fixing — et une ligne datée d'un jour non coté fausse tous les
     décalages J → J+1 sans déclencher aucun contrôle.
+
+    Renvoie (date ISO, heure « HH:MM » ou None). L'heure sert à distinguer
+    une séance close d'une cotation encore en cours : voir `ingerer_jour`.
     """
-    texte = BeautifulSoup(html, "html.parser").get_text(" ", strip=True)
-    autour = re.search(
-        r"(?:seance|séance|cours\s+du|au)\s*(?:du|le)?\s*(\d{1,2})[/-](\d{1,2})[/-](\d{4})",
-        texte,
-        re.IGNORECASE,
-    )
-    trouve = autour or re.search(r"\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\b", texte)
-    if not trouve:
-        raise SourceIllisible(
-            "date de séance introuvable sur la page. Refus d'ingérer : une "
-            "date supposée corromprait la série sans être détectable."
+    soup = BeautifulSoup(html, "html.parser")
+
+    # Uniquement les blocs déclarés, jamais la page entière. Elle porte
+    # plusieurs horodatages — sur la page du 27/07/2026, le bloc de la cote
+    # affichait 12:45 et un autre bloc 13:01 — et rien ne garantit que le
+    # premier rencontré soit celui de la séance. Chercher partout finit un
+    # jour par dater une séance avec la date d'un communiqué.
+    zones = []
+    for selecteur in SELECTEURS["cote"].get("date", []):
+        zones.extend(e.get_text(" ", strip=True) for e in soup.select(selecteur))
+
+    for zone in zones:
+        texte = _sans_accents(zone)
+        trouve = re.search(
+            r"(\d{1,2})\s*,?\s+(" + "|".join(MOIS) + r")\s*,?\s+(\d{4})",
+            texte,
+            re.IGNORECASE,
         )
-    jour, mois, annee = (int(x) for x in trouve.groups())
-    return datetime(annee, mois, jour).strftime("%Y-%m-%d")
+        if trouve:
+            jour, mois, annee = trouve.group(1), trouve.group(2).lower(), trouve.group(3)
+            date = datetime(int(annee), MOIS[mois], int(jour))
+        else:
+            trouve = re.search(r"\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\b", texte)
+            if not trouve:
+                continue
+            jour, mois, annee = (int(x) for x in trouve.groups())
+            date = datetime(annee, mois, jour)
+
+        heure = re.search(r"(\d{1,2}):(\d{2})", texte[trouve.end():])
+        return date.strftime("%Y-%m-%d"), (heure.group(0) if heure else None)
+
+    raise SourceIllisible(
+        "date de séance introuvable sur la page. Refus d'ingérer : une "
+        "date supposée corromprait la série sans être détectable. "
+        "Le bloc attendu est « Dernière mise à jour : … » ; "
+        "ajustez SELECTEURS['cote']['date']."
+    )
 
 
 # --- Lecture --------------------------------------------------------------
@@ -337,7 +409,7 @@ def lire_cote(source: str | Path | None = None) -> pd.DataFrame:
 
     `source` : chemin d'une page enregistrée, pour travailler hors ligne.
     """
-    morceaux, date, connus = [], None, set()
+    morceaux, date, heure, connus = [], None, None, set()
     for html in _pages("cote", source):
         try:
             tableau, corr = _meilleur_tableau(html, "cote", REQUISES_COTE)
@@ -348,7 +420,8 @@ def lire_cote(source: str | Path | None = None) -> pd.DataFrame:
             if morceaux:
                 break
             raise
-        date = date or _date_seance(html)
+        if date is None:
+            date, heure = _date_seance(html)
         page = _renommer(tableau, corr)
         nouveaux = set(page["ticker"].astype(str)) - connus
         if not nouveaux:
@@ -369,12 +442,27 @@ def lire_cote(source: str | Path | None = None) -> pd.DataFrame:
             cote[colonne].map(_nombre) if colonne in cote.columns else float("nan")
         )
 
+    # brvm.org publie le volume en titres, pas en FCFA. Or c'est bien en
+    # FCFA que s'exprime le filtre de liquidité (`volume_median_min_fcfa`),
+    # et features.liquidite() remplace les manquants par zéro : laisser la
+    # colonne vide écarterait silencieusement TOUTES les valeurs du
+    # scoring. On reconstitue donc volume × clôture. C'est une
+    # approximation — le vrai montant échangé se calcule au cours de
+    # chaque transaction, pas au cours de clôture — mais l'ordre de
+    # grandeur est juste, et c'est un ordre de grandeur que le seuil teste.
+    manque = cote["volume_fcfa"].isna()
+    cote.loc[manque, "volume_fcfa"] = (
+        cote.loc[manque, "volume_titres"] * cote.loc[manque, "cloture"]
+    )
+
     cote["date"] = date
     # Une valeur non traitée de la séance apparaît avec un volume nul et
     # aucun cours : la garder produirait un faux point de série.
     cote = cote.dropna(subset=["cloture"])
     cote = cote[cote["cloture"] > 0]
-    return cote[COLONNES_COURS].drop_duplicates(subset=["date", "ticker"])
+    cote = cote[COLONNES_COURS].drop_duplicates(subset=["date", "ticker"])
+    cote.attrs["heure_mise_a_jour"] = heure
+    return cote
 
 
 def lire_referentiel(source: str | Path | None = None) -> pd.DataFrame:
@@ -406,6 +494,35 @@ def lire_referentiel(source: str | Path | None = None) -> pd.DataFrame:
         # dégradé mais exact ; l'inventer serait pire.
         ref["secteur"] = pd.NA
     return ref[["ticker", "nom", "secteur"]].drop_duplicates(subset=["ticker"])
+
+
+def _coherence_variation(tableau: pd.DataFrame, corr: dict[str, str]) -> str | None:
+    """La variation publiée se retrouve-t-elle à partir de veille et clôture ?
+
+    Contrôle croisé gratuit : la page publie à la fois les deux cours et
+    leur variation. Si `clôture / veille - 1` ne redonne pas la variation
+    affichée, c'est que les trois colonnes ne décrivent pas le même
+    instant — ce qui arrive quand la page est consultée séance ouverte,
+    les colonnes ne se rafraîchissant pas au même rythme.
+
+    Diagnostic seulement, jamais bloquant : la variation n'est pas
+    enregistrée, et faire échouer l'ingestion sur elle empêcherait une
+    ingestion d'après clôture par ailleurs saine.
+    """
+    if not {"veille", "variation"} <= set(corr):
+        return None
+
+    d = _renommer(tableau, corr)
+    for colonne in ("veille", "cloture", "variation"):
+        d[colonne] = d[colonne].map(_nombre)
+    d = d.dropna(subset=["veille", "cloture", "variation"])
+    d = d[d["veille"] > 0]
+    if d.empty:
+        return None
+
+    ecart = ((d["cloture"] / d["veille"] - 1) * 100 - d["variation"]).abs()
+    concordantes = int((ecart < 0.01).sum())
+    return f"{concordantes}/{len(d)} lignes où clôture/veille-1 redonne la variation publiée"
 
 
 # --- Interface appelée par cli.py ----------------------------------------
@@ -447,10 +564,12 @@ def verifier(source: str | Path | None = None) -> dict:
     manquantes = [c for c in COLONNES_COURS if c not in corr and c != "date"]
     resultat["colonnes_reconnues"] = ", ".join(f"{k} ← « {v} »" for k, v in corr.items())
     resultat["colonnes_absentes"] = ", ".join(manquantes) or "aucune"
+    if "volume_fcfa" in manquantes and "volume_titres" in corr:
+        resultat["volume_fcfa"] = "reconstitué : volume × clôture"
     resultat["lignes"] = len(tableau)
 
     try:
-        resultat["date_seance"] = _date_seance(html)
+        resultat["date_seance"], resultat["heure_mise_a_jour"] = _date_seance(html)
     except SourceIllisible as erreur:
         resultat["ok"] = False
         resultat["echec"] = str(erreur)
@@ -464,6 +583,10 @@ def verifier(source: str | Path | None = None) -> dict:
         resultat["ok"] = False
         resultat["echec"] = str(erreur)
         return resultat
+
+    coherence = _coherence_variation(tableau, corr)
+    if coherence:
+        resultat["coherence_variation"] = coherence
 
     if cote is not None:
         resultat["lignes_exploitables"] = len(cote)
@@ -509,10 +632,29 @@ def referentiel_amorce() -> pd.DataFrame:
 
 
 def ingerer_jour() -> int:
-    """Enregistre la séance publiée. Renvoie le nombre de lignes écrites."""
+    """Enregistre la séance publiée. Renvoie le nombre de lignes écrites.
+
+    Refuse d'écrire tant que la séance du jour n'est pas close : avant la
+    clôture, la colonne « Cours Clôture » de brvm.org porte le dernier
+    cours traité, pas le cours de clôture. L'enregistrer figerait une
+    valeur provisoire dans une série que rien ne viendra corriger — le
+    cron de 16 h UTC passe bien après, ce garde-fou ne le gêne pas.
+    """
     cote = lire_cote()
+    date = str(cote["date"].iloc[0])
+    heure = cote.attrs.get("heure_mise_a_jour")
+    limite = str(charger().get("ingestion", {}).get("heure_cloture_seance", "15:00"))
+
+    aujourdhui = datetime.now().strftime("%Y-%m-%d")
+    if date == aujourdhui and heure is not None and heure < limite:
+        raise SourceIllisible(
+            f"séance du {date} mise à jour à {heure}, avant la clôture "
+            f"({limite}) : les cours affichés sont provisoires. Relancez "
+            "après la clôture, ou ajustez ingestion.heure_cloture_seance."
+        )
+
     n = db.enregistrer(cote, "cours")
-    _journaliser("cote", n, "ok", f"séance du {cote['date'].iloc[0]}")
+    _journaliser("cote", n, "ok", f"séance du {date} (maj {heure or 'inconnue'})")
     return n
 
 
