@@ -44,6 +44,15 @@ PAGE_FICHES = RACINE / "tests" / "donnees" / "societes_fiches_20260727.html"
 PAGE_SECTEUR_INVALIDE = (
     RACINE / "tests" / "donnees" / "cote_brvm_20260727_secteur_invalide.html"
 )
+# /fr/cours-actions/194 — une vraie vue sectorielle, « Consommation de
+# Base », 9 sociétés. La seule des sept obtenue distinctement : les sept
+# téléchargements ont tous rendu celle-ci, ce que les tests ci-dessous
+# transforment en cas de non-régression plutôt qu'en donnée fausse.
+PAGE_SECTEUR_194 = RACINE / "tests" / "donnees" / "cours_secteur_194_20260727.html"
+
+CONSOMMATION_DE_BASE = {
+    "NTLC", "PALC", "SCRC", "SICC", "SLBC", "SOGC", "SPHC", "STBC", "UNLC",
+}
 
 # Relevé à la main dans le HTML du témoin. Ordre des colonnes de la page :
 # Symbole, Nom, Volume, Cours veille, Cours Ouverture, Cours Clôture.
@@ -324,6 +333,72 @@ def test_un_secteur_inconnu_renvoie_la_cote_entiere():
     # ce qui la rend dangereuse, elle ne se trahit par aucun symptôme.
     r = brvm_org.verifier(PAGE_SECTEUR_INVALIDE)
     assert r["ok"] is True and r["lignes_exploitables"] == 47
+
+
+def test_secteur_lu_sur_la_vue_filtree():
+    """La vue sectorielle est lisible, et ses 9 sociétés sont cohérentes.
+
+    Nestlé, Unilever, Solibra, SAPH, SITAB… : de la consommation de base
+    pour de bon. Si ce test tombe, c'est que les identifiants de secteur
+    ont bougé, pas que le code a régressé.
+    """
+    trouve = brvm_org.lire_secteurs({194: PAGE_SECTEUR_194})
+    assert set(trouve) == CONSOMMATION_DE_BASE
+    assert set(trouve.values()) == {"Consommation de Base"}
+
+
+def test_une_vue_qui_se_reclame_d_un_autre_secteur_est_refusee():
+    """Le contrôle qui a évité une colonne entièrement fausse.
+
+    Le 27/07/2026, sept téléchargements sur sept URL distinctes ont tous
+    rendu « Consommation de Base ». Sans vérifier l'intitulé que la page
+    affiche pour elle-même, les six autres secteurs auraient reçu les neuf
+    tickers de celui-ci — une colonne fausse, plausible, et qu'aucune
+    exception n'aurait signalée.
+    """
+    livres = {identifiant: PAGE_SECTEUR_194 for identifiant in brvm_org.SECTEURS}
+    trouve = brvm_org.lire_secteurs(livres)
+
+    assert set(trouve) == CONSOMMATION_DE_BASE
+    assert set(trouve.values()) == {"Consommation de Base"}, (
+        "un secteur autre que celui déclaré par la page a été écrit"
+    )
+
+
+def test_referentiel_enrichi_du_secteur():
+    """Le chemin réseau complet : cote pour ticker/nom, vues pour secteur.
+
+    Les tickers non classés gardent NA plutôt que d'hériter d'un secteur
+    voisin, et l'échec du secteur ne doit jamais emporter le référentiel.
+    """
+    cote = PAGE_CLOTURE.read_text(encoding="utf-8", errors="replace")
+    vue = PAGE_SECTEUR_194.read_text(encoding="utf-8", errors="replace")
+    identifiants = {str(i) for i in brvm_org.SECTEURS}
+
+    appels = []
+
+    def faux_telechargement(url):
+        appels.append(url)
+        return vue if url.rstrip("/").rsplit("/", 1)[-1] in identifiants else cote
+
+    with _telechargement(faux_telechargement):
+        ref = brvm_org.referentiel()
+
+    assert len(appels) == 8, f"{len(appels)} requêtes, attendu 1 cote + 7 secteurs"
+    assert len(ref) == 47
+    classes = ref[ref["secteur"].notna()]
+    assert set(classes["ticker"]) == CONSOMMATION_DE_BASE
+    assert ref["secteur"].isna().sum() == 47 - len(CONSOMMATION_DE_BASE)
+
+
+def test_une_vue_qui_rend_la_cote_entiere_est_refusee():
+    """L'autre dérive : segment invalide, le site sert toute la cote.
+
+    La page se dit « Actions » et non le secteur demandé. Sans ce refus,
+    les 47 sociétés se retrouveraient dans un seul secteur.
+    """
+    trouve = brvm_org.lire_secteurs({194: PAGE_SECTEUR_INVALIDE})
+    assert trouve == {}
 
 
 def test_referentiel_interroge_la_cote():

@@ -117,6 +117,29 @@ SELECTEURS = {
     },
 }
 
+# Le secteur ne se lit nulle part en colonne : il se déduit des vues
+# filtrées de la cote, une par secteur. Identifiants et intitulés relevés
+# dans le menu de la page du 27/07/2026.
+#
+# CES IDENTIFIANTS NE SONT PAS DIGNES DE CONFIANCE, ET C'EST VOULU. Ils
+# sont vérifiés à l'usage contre l'intitulé que la page affiche elle-même
+# (voir `_secteur_declare`), parce que deux dérives ont été observées :
+# un identifiant inconnu renvoie la cote entière au lieu d'une 404, et
+# sept requêtes lancées coup sur coup ont toutes rendu le même secteur.
+# Le libellé ci-dessous n'est donc pas ce qu'on écrit en base : c'est ce
+# qu'on exige de retrouver dans la page avant d'écrire quoi que ce soit.
+SECTEURS = {
+    194: "Consommation de Base",
+    195: "Consommation Discrétionnaire",
+    196: "Energie",
+    197: "Industriels",
+    198: "Services Financiers",
+    199: "Services Publics",
+    200: "Télécommunications",
+}
+
+MOTIF_SECTEUR = "https://www.brvm.org/fr/cours-actions/{secteur}"
+
 # ---------------------------------------------------------------------------
 # TOUT CE QUI CASSE QUAND LE SITE CHANGE — 2/2 : comment nommer les colonnes
 # ---------------------------------------------------------------------------
@@ -558,6 +581,74 @@ def lire_referentiel(source: str | Path | None = None) -> pd.DataFrame:
     return ref[["ticker", "nom", "secteur"]].drop_duplicates(subset=["ticker"])
 
 
+def _secteur_declare(html: str) -> str | None:
+    """L'intitulé du secteur que la page affiche pour elle-même.
+
+    Le seul point d'ancrage fiable : le titre h1 de la vue filtrée porte le
+    nom du secteur (« Consommation de Base »), là où la cote complète porte
+    « Actions » ou « Toutes ». Demander une vue ne garantit pas de
+    l'obtenir — voir `SECTEURS` — donc on ne croit que ce que la page dit.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    titre = soup.select_one("h1")
+    return titre.get_text(" ", strip=True) if titre else None
+
+
+def lire_secteurs(sources: dict[int, str | Path] | None = None) -> dict[str, str]:
+    """Appartenance sectorielle de chaque ticker, {ticker: secteur}.
+
+    Une requête par secteur. Chaque page doit se réclamer du secteur
+    demandé, sinon elle est écartée : c'est ce contrôle qui empêche
+    d'étiqueter en masse des sociétés avec un secteur qui n'est pas le
+    leur, la seule erreur de ce module qui serait à la fois invisible et
+    intégralement fausse.
+
+    Un secteur absent du résultat vaut mieux qu'un secteur inventé : les
+    tickers non classés gardent `NA` et scoring.py leur applique la
+    pondération par défaut.
+
+    `sources` : {identifiant: chemin} pour travailler hors ligne.
+    """
+    appartenance: dict[str, str] = {}
+    ecartes: list[str] = []
+
+    for identifiant, intitule in SECTEURS.items():
+        if sources is not None and identifiant not in sources:
+            continue
+        try:
+            html = _obtenir_html(
+                sources[identifiant] if sources else None,
+                MOTIF_SECTEUR.format(secteur=identifiant),
+            )
+        except (SourceIllisible, requests.RequestException) as erreur:
+            ecartes.append(f"{intitule} : {type(erreur).__name__}")
+            continue
+
+        declare = _secteur_declare(html)
+        if declare is None or _normaliser(declare) != _normaliser(intitule):
+            # Cas vu le 27/07/2026 : les sept vues ont rendu la même. Sans
+            # ce refus, six secteurs auraient reçu les tickers du septième.
+            ecartes.append(f"{intitule} : la page se dit « {declare} »")
+            continue
+
+        try:
+            tableau, corr = _meilleur_tableau(html, "societes", REQUISES_REFERENTIEL)
+        except SourceIllisible:
+            ecartes.append(f"{intitule} : aucun tableau exploitable")
+            continue
+
+        page = _renommer(tableau, corr)
+        tickers = page["ticker"].astype(str).str.strip().str.upper()
+        for ticker in tickers[tickers.str.fullmatch(r"[A-Z]{2,6}")]:
+            # Premier secteur rencontré : une société apparaissant dans deux
+            # vues signale une page mal servie, pas un double classement.
+            appartenance.setdefault(ticker, intitule)
+
+    if ecartes:
+        _journaliser("secteurs", len(appartenance), "partiel", " ; ".join(ecartes))
+    return appartenance
+
+
 def _coherence_variation(tableau: pd.DataFrame, corr: dict[str, str]) -> str | None:
     """La variation publiée se retrouve-t-elle à partir de veille et clôture ?
 
@@ -690,13 +781,27 @@ def _diagnostiquer(html: str, resultat: dict) -> dict:
 
 
 def referentiel() -> pd.DataFrame:
-    """Référentiel scrapé. Vide en cas d'échec : cli.py bascule alors sur
-    `referentiel_amorce()`."""
+    """Référentiel scrapé, secteur compris. Vide en cas d'échec : cli.py
+    bascule alors sur `referentiel_amorce()`."""
     try:
-        return lire_referentiel()
+        ref = lire_referentiel()
     except (SourceIllisible, requests.RequestException) as erreur:
         _journaliser("referentiel", 0, "echec", str(erreur))
         return pd.DataFrame(columns=["ticker", "nom", "secteur"])
+
+    # L'échec du secteur ne doit pas emporter le référentiel : ticker et nom
+    # suffisent à faire tourner l'ingestion, le secteur ne pondère que le
+    # scoring et sait déjà se passer de lui.
+    try:
+        appartenance = lire_secteurs()
+    except requests.RequestException as erreur:
+        _journaliser("secteurs", 0, "echec", str(erreur))
+        appartenance = {}
+
+    if appartenance:
+        ref["secteur"] = ref["ticker"].map(appartenance).astype("object")
+        ref["secteur"] = ref["secteur"].where(ref["secteur"].notna(), pd.NA)
+    return ref
 
 
 def referentiel_amorce() -> pd.DataFrame:
