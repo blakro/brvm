@@ -49,17 +49,18 @@ PAGE_SECTEUR_INVALIDE = (
 # téléchargements ont tous rendu celle-ci, ce que les tests ci-dessous
 # transforment en cas de non-régression plutôt qu'en donnée fausse.
 DONNEES = RACINE / "tests" / "donnees"
-PAGE_SECTEUR_194 = DONNEES / "cours_secteur_194_20260727.html"
-PAGE_SECTEUR_195 = DONNEES / "cours_secteur_195_20260727.html"
-PAGE_SECTEUR_196 = DONNEES / "cours_secteur_196_20260727.html"
-PAGE_SECTEUR_197 = DONNEES / "cours_secteur_197_20260727.html"
+PAGES_SECTEURS = {
+    i: DONNEES / f"cours_secteur_{i}_20260727.html" for i in range(194, 201)
+}
+PAGE_SECTEUR_194 = PAGES_SECTEURS[194]
 # Autre réponse à /fr/cours-actions/197, obtenue quelques minutes plus tôt :
 # la page se réclamait d'« Energie ». Deux réponses contradictoires pour une
 # même URL, à quelques minutes d'intervalle — la preuve que l'URL demandée
 # ne dit rien du secteur servi.
 PAGE_SECTEUR_197_CACHE = DONNEES / "cours_secteur_197_cache_20260727.html"
 
-# Relevé dans les trois vues réellement obtenues distinctes.
+# Les sept secteurs de la BRVM au 27/07/2026, relevés dans les sept vues.
+# Ensemble, ils partitionnent exactement les 47 sociétés de la cote.
 SECTEURS_REELS = {
     194: ("Consommation de Base",
           {"NTLC", "PALC", "SCRC", "SICC", "SLBC", "SOGC", "SPHC", "STBC", "UNLC"}),
@@ -69,12 +70,13 @@ SECTEURS_REELS = {
           {"SHEC", "SMBC", "TTLC", "TTLS"}),
     197: ("Industriels",
           {"CABC", "FTSC", "SDSC", "SEMC", "SIVC", "STAC"}),
-}
-PAGES_SECTEURS = {
-    194: PAGE_SECTEUR_194,
-    195: PAGE_SECTEUR_195,
-    196: PAGE_SECTEUR_196,
-    197: PAGE_SECTEUR_197,
+    198: ("Services Financiers",
+          {"BICB", "BICC", "BOAB", "BOABF", "BOAC", "BOAM", "BOAN", "BOAS",
+           "CBIBF", "ECOC", "ETIT", "NSBC", "ORGT", "SAFC", "SGBC", "SIBC"}),
+    199: ("Services Publics",
+          {"CIEC", "SDCC"}),
+    200: ("Télécommunications",
+          {"ONTBF", "ORAC", "SNTS"}),
 }
 CONSOMMATION_DE_BASE = SECTEURS_REELS[194][1]
 
@@ -360,13 +362,15 @@ def test_un_secteur_inconnu_renvoie_la_cote_entiere():
 
 
 def test_secteurs_lus_sur_les_vues_filtrees():
-    """Les quatre vues obtenues distinctes se lisent et ne se chevauchent pas.
+    """Les sept vues couvrent exactement la cote, sans trou ni recouvrement.
 
     Les appartenances sont vérifiables à l'œil : Nestlé et Unilever en
     consommation de base, Uniwax et CFAO en discrétionnaire, Total Côte
-    d'Ivoire et Sénégal en énergie, Filtisac et Sicable en industriels. Si
-    ce test tombe, ce sont les identifiants de secteur du site qui ont
-    bougé, pas le code.
+    d'Ivoire et Sénégal en énergie, Filtisac et Sicable en industriels, les
+    Bank of Africa et Ecobank en services financiers, la CIE et la SODECI en
+    services publics, Sonatel et Orange en télécommunications. Si ce test
+    tombe, ce sont les identifiants de secteur du site qui ont bougé, pas
+    le code.
     """
     trouve = brvm_org.lire_secteurs(PAGES_SECTEURS)
 
@@ -375,7 +379,24 @@ def test_secteurs_lus_sur_les_vues_filtrees():
 
     # Une société n'appartient qu'à un secteur : les vues sont disjointes.
     total = sum(len(tickers) for _, tickers in SECTEURS_REELS.values())
-    assert len(trouve) == total == 26
+    assert len(trouve) == total == 47
+
+
+def test_les_secteurs_partitionnent_la_cote():
+    """Chaque société cotée reçoit un secteur, et un seul.
+
+    C'est le contrôle qui dira qu'une introduction en bourse est passée
+    inaperçue : une nouvelle société apparaîtra dans la cote avant d'être
+    rangée, et ce test la signalera au lieu de la laisser en NA silencieux.
+    """
+    secteurs = brvm_org.lire_secteurs(PAGES_SECTEURS)
+    cote = set(brvm_org.lire_referentiel(PAGE_CLOTURE)["ticker"])
+
+    assert set(secteurs) == cote, (
+        f"sans secteur : {sorted(cote - set(secteurs))} ; "
+        f"hors cote : {sorted(set(secteurs) - cote)}"
+    )
+    assert len(cote) == 47
 
 
 def test_une_vue_qui_se_reclame_d_un_autre_secteur_est_refusee():
@@ -391,13 +412,16 @@ def test_une_vue_qui_se_reclame_d_un_autre_secteur_est_refusee():
     # Le cas réel : on demande Industriels, la page se dit Energie.
     assert brvm_org.lire_secteurs({197: PAGE_SECTEUR_197_CACHE}) == {}
 
-    # Et le lot mêlant vues justes et vue trompeuse ne garde que les justes.
-    livres = dict(PAGES_SECTEURS)
+    # Un lot mêlant vues justes et vue trompeuse ne garde que les justes :
+    # les trois secteurs substitués sortent vides plutôt que faux.
+    livres = {i: PAGES_SECTEURS[i] for i in (194, 195, 196, 197)}
     livres.update({i: PAGE_SECTEUR_197_CACHE for i in (198, 199, 200)})
     trouve = brvm_org.lire_secteurs(livres)
 
-    assert set(trouve.values()) == {nom for nom, _ in SECTEURS_REELS.values()}
-    assert "Services Financiers" not in trouve.values()
+    attendus = {SECTEURS_REELS[i][0] for i in (194, 195, 196, 197)}
+    assert set(trouve.values()) == attendus
+    for substitue in ("Services Financiers", "Services Publics", "Télécommunications"):
+        assert substitue not in trouve.values()
     assert len(trouve) == 26
 
 
