@@ -1,0 +1,14 @@
+# Thème fixé en clair : les couleurs des graphiques ont été validées contre
+# la surface claire #fcfcfb (contraste, séparation en vision des couleurs
+# déficiente). Laisser l'app basculer en sombre les poserait sur une
+# surface pour laquelle elles n'ont pas été vérifiées.
+[theme]
+base = "light"
+primaryColor = "#2a78d6"
+backgroundColor = "#fcfcfb"
+secondaryBackgroundColor = "#f0efec"
+textColor = "#0b0b0b"
+font = "sans serif"
+
+[server]
+headless = true

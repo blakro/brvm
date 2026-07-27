@@ -3,15 +3,44 @@
 Ingestion de la cote de la [Bourse Régionale des Valeurs Mobilières](https://www.brvm.org)
 — les 47 sociétés cotées de l'UEMOA — dans une base SQLite locale.
 
-## Installation
+## L'application web
+
+Le tableau de bord est le point d'entrée : cote du jour, classement,
+backtest, état des données. Il tourne sur **Streamlit Community Cloud**,
+sans rien à installer.
+
+### Déploiement
+
+1. Sur [share.streamlit.io](https://share.streamlit.io), connectez le
+   dépôt GitHub.
+2. Fichier principal : `streamlit_app.py`. Branche : `main`.
+3. Déployez. Les dépendances viennent de `requirements.txt`.
+
+L'app **ne lit que les CSV versionnés** du dépôt : elle n'écrit rien et ne
+conserve aucun état. C'est délibéré — sur un hébergeur gratuit le
+conteneur redémarre quand il veut et son disque ne survit pas ; y stocker
+des données donnerait une app affichant ce que personne ne peut retrouver
+ailleurs. Les données arrivent par l'action `ingestion.yml`, qui commite
+l'archive.
+
+Il n'y a donc **rien à faire tourner en local**. La ligne de commande
+ci-dessous reste disponible pour le diagnostic et sert à l'action GitHub,
+mais l'usage courant passe par l'app.
+
+### En local, si besoin
+
+```bash
+pip install -e ".[web]"
+streamlit run streamlit_app.py
+```
+
+## Ligne de commande
 
 ```bash
 pip install -e ".[dev]"
 ```
 
 Python 3.11 ou plus (le module lit sa configuration avec `tomllib`).
-
-## Utilisation
 
 ```bash
 python -m brvm verifier        # diagnostic des sélecteurs, sans rien écrire

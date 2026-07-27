@@ -1,0 +1,8 @@
+# Streamlit Community Cloud installe ce fichier.
+# `-e .` rend le paquet brvm importable depuis streamlit_app.py.
+pandas>=2.0
+requests>=2.28
+beautifulsoup4>=4.11
+streamlit>=1.49
+altair>=5.5
+-e .

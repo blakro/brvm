@@ -18,5 +18,7 @@ dist/
 *.db-shm
 *.sqlite3
 
-# Configuration propre à un poste ; voir config.exemple.toml
-config.toml
+# Configuration propre à un poste ; voir config.exemple.toml.
+# Ancré à la racine : sans le « / », le motif attraperait aussi
+# .streamlit/config.toml, qui porte le thème de l'app et doit être versionné.
+/config.toml

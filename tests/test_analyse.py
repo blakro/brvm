@@ -199,6 +199,49 @@ def test_un_secteur_trop_petit_est_note_face_au_marche():
         assert abs(avec.loc[ticker, "score"] - sans.loc[ticker, "score"]) < 1e-9
 
 
+def test_l_archive_se_lit_sans_base():
+    """Le chemin de la web app : lire le CSV sans créer de SQLite.
+
+    Sur un hébergeur gratuit le conteneur est éphémère et son disque ne
+    survit pas ; y ouvrir une base donnerait une app affichant des données
+    que personne ne pourrait retrouver ailleurs.
+    """
+    from brvm import db
+
+    colonnes = db._colonnes_declarees("cours")
+    assert colonnes == ["date", "ticker", "ouverture", "haut", "bas",
+                        "cloture", "volume_titres", "volume_fcfa"]
+    assert db._colonnes_declarees("referentiel") == ["ticker", "nom", "secteur"]
+
+    with tempfile.TemporaryDirectory() as dossier:
+        config = Path(dossier) / "c.toml"
+        archive = Path(dossier) / "cours.csv"
+        config.write_text(
+            f'[base]\narchive_cours = "{archive.as_posix()}"\n', encoding="utf-8"
+        )
+        ancien = os.environ.get("BRVM_CONFIG")
+        os.environ["BRVM_CONFIG"] = str(config)
+        try:
+            # Archive absente : tableau vide aux bonnes colonnes, pas d'erreur.
+            vide = db.charger_archive("cours")
+            assert vide.empty and list(vide.columns) == colonnes
+
+            pd.DataFrame([{"date": "2026-07-27", "ticker": "SNTS",
+                           "cloture": 31010.0}]).to_csv(archive, index=False)
+            lu = db.charger_archive("cours")
+            assert len(lu) == 1 and lu.iloc[0]["ticker"] == "SNTS"
+            # Date et ticker doivent rester du texte : lus en nombres,
+            # « 2026-07-27 » deviendrait une date locale et un ticker
+            # numérique perdrait ses zéros de tête.
+            assert pd.api.types.is_string_dtype(lu["date"])
+            assert pd.api.types.is_string_dtype(lu["ticker"])
+        finally:
+            if ancien is None:
+                del os.environ["BRVM_CONFIG"]
+            else:
+                os.environ["BRVM_CONFIG"] = ancien
+
+
 def test_sortie_lisible_quand_rien_n_est_classable():
     """Le message doit dire quoi faire, pas seulement que c'est vide."""
     message = scoring.expliquer(scoring.noter(pd.DataFrame(), None, REGLAGES))

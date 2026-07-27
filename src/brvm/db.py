@@ -191,6 +191,35 @@ def chemin_archive(table: str) -> Path:
     return chemin if chemin.is_absolute() else RACINE / chemin
 
 
+def charger_archive(table: str = "cours") -> pd.DataFrame:
+    """Lit le CSV versionné sans passer par SQLite.
+
+    C'est le chemin de la web app : sur un hébergeur, le conteneur est
+    éphémère et son disque n'est ni sauvegardé ni partagé entre deux
+    réveils. Y créer une base serait au mieux inutile, au pire trompeur —
+    l'app afficherait des données que personne ne pourrait retrouver.
+
+    Renvoie un tableau vide si l'archive n'existe pas encore : c'est l'état
+    normal d'un dépôt fraîchement cloné, pas une erreur.
+    """
+    fichier = chemin_archive(table)
+    if not fichier.exists():
+        colonnes = _colonnes_declarees(table)
+        return pd.DataFrame(columns=colonnes)
+    return pd.read_csv(fichier, dtype={"date": str, "ticker": str})
+
+
+def _colonnes_declarees(table: str) -> list[str]:
+    """Colonnes du schéma, sans ouvrir de base."""
+    corps = SCHEMAS[table].split("(", 1)[1]
+    colonnes = []
+    for ligne in corps.splitlines():
+        mot = ligne.strip().split(" ")[0].strip(",")
+        if mot and mot.upper() not in {"PRIMARY", ")", ""}:
+            colonnes.append(mot)
+    return colonnes
+
+
 def exporter(table: str = "cours", chemin: str | Path | None = None) -> int:
     """Base → CSV. Renvoie le nombre de lignes écrites.
 

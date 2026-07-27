@@ -21,6 +21,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=7"]
+# Interface web. Streamlit Community Cloud installe requirements.txt,
+# pas cet extra ; il sert à retrouver le même environnement en local.
+web = ["streamlit>=1.49", "altair>=5.5"]
 
 [project.scripts]
 brvm = "brvm.cli:main"
