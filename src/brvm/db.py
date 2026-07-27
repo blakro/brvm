@@ -27,7 +27,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from .config import chemin_base
+from .config import RACINE, charger, chemin_base
 
 # Clé = nom de table. Valeur = (DDL, colonnes dans l'ordre du DDL).
 #
@@ -63,6 +63,15 @@ SCHEMAS: dict[str, str] = {
             message    TEXT
         )
     """,
+}
+
+# Décimales conservées à l'écriture. Les cours de la BRVM sont entiers en
+# FCFA ; `volume_fcfa` est reconstitué par une multiplication et traîne
+# sinon des queues de flottant (152949400.00000003) qui polluent les diffs
+# du CSV versionné sans rien apporter.
+PRECISION = {
+    "ouverture": 2, "haut": 2, "bas": 2, "cloture": 2,
+    "volume_titres": 2, "volume_fcfa": 2,
 }
 
 INDEX = [
@@ -128,6 +137,11 @@ def enregistrer(df: pd.DataFrame, table: str, chemin: str | Path | None = None) 
             )
 
         donnees = df.reindex(columns=colonnes)
+        for colonne, decimales in PRECISION.items():
+            if colonne in donnees.columns:
+                donnees[colonne] = pd.to_numeric(
+                    donnees[colonne], errors="coerce"
+                ).round(decimales)
         # NaN de pandas → NULL de SQLite. Sans cela, sqlite3 refuse
         # d'insérer un float('nan') dans une colonne REAL contrainte.
         donnees = donnees.astype(object).where(pd.notna(donnees), None)
@@ -153,6 +167,56 @@ def lire(table: str, chemin: str | Path | None = None) -> pd.DataFrame:
         return pd.read_sql_query(f"SELECT * FROM {table}", cnx)
     finally:
         cnx.close()
+
+
+# --- Archive versionnée ---------------------------------------------------
+#
+# La base SQLite est un fichier binaire : la versionner produirait un dépôt
+# qui grossit sans qu'on puisse lire ce qui a changé, et deux ingestions
+# concurrentes donneraient un conflit irréparable. Le CSV, lui, se relit,
+# se corrige à la main et se compare — quand une réingestion suit une
+# correction de sélecteur, le diff montre exactement quelles lignes ont
+# bougé. C'est donc le CSV qui fait foi, et la base qui s'en déduit.
+
+ARCHIVES = {
+    "cours": ("archive_cours", ["date", "ticker"]),
+    "referentiel": ("archive_referentiel", ["ticker"]),
+}
+
+
+def chemin_archive(table: str) -> Path:
+    cle, _ = ARCHIVES[table]
+    brut = charger()["base"][cle]
+    chemin = Path(brut).expanduser()
+    return chemin if chemin.is_absolute() else RACINE / chemin
+
+
+def exporter(table: str = "cours", chemin: str | Path | None = None) -> int:
+    """Base → CSV. Renvoie le nombre de lignes écrites.
+
+    Trié sur la clé, pour qu'une ligne insérée rétroactivement se place à
+    sa date au lieu de décaler la fin du fichier : un diff d'une ligne doit
+    rester un diff d'une ligne.
+    """
+    _, cle = ARCHIVES[table]
+    donnees = lire(table, chemin).sort_values(cle)
+    fichier = chemin_archive(table)
+    fichier.parent.mkdir(parents=True, exist_ok=True)
+    donnees.to_csv(fichier, index=False)
+    return len(donnees)
+
+
+def importer(table: str = "cours", chemin: str | Path | None = None) -> int:
+    """CSV → base. Renvoie le nombre de lignes chargées.
+
+    Reconstruit la base depuis l'archive : c'est ainsi qu'un runner
+    éphémère retrouve l'historique avant d'y ajouter la séance du jour.
+    """
+    fichier = chemin_archive(table)
+    if not fichier.exists():
+        return 0
+    donnees = pd.read_csv(fichier, dtype={"date": str, "ticker": str})
+    return enregistrer(donnees, table, chemin)
 
 
 def resume(chemin: str | Path | None = None) -> dict[str, int]:

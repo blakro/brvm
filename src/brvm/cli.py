@@ -4,6 +4,9 @@
     python -m brvm verifier page.html    idem, sur une page enregistrée
     python -m brvm ingerer               enregistre la séance publiée
     python -m brvm referentiel           met à jour ticker / nom / secteur
+    python -m brvm noter                 classe les valeurs
+    python -m brvm exporter              base → CSV versionnés
+    python -m brvm importer              CSV versionnés → base
     python -m brvm etat                  ce que contient la base
 
 Chaque commande rend 0 en cas de succès et 1 en cas d'échec, pour qu'un
@@ -16,7 +19,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from . import db
+from . import db, features, scoring
 from .ingestion import brvm_org
 
 
@@ -57,6 +60,36 @@ def _referentiel(args) -> int:
     return 0
 
 
+def _noter(args) -> int:
+    cours = db.lire("cours")
+    if cours.empty:
+        print("aucun cours en base — lancez « brvm ingerer »", file=sys.stderr)
+        return 1
+
+    traits = features.calculer(cours)
+    referentiel = db.lire("referentiel")
+    classement = scoring.noter(traits, referentiel)
+
+    print(f"Séance du {traits.attrs.get('date', '?')} — "
+          f"{traits.attrs.get('seances', 0)} séances en base")
+    print(scoring.expliquer(classement, args.nombre))
+    return 0 if not classement.empty else 1
+
+
+def _exporter(args) -> int:
+    for table in ("cours", "referentiel"):
+        lignes = db.exporter(table)
+        print(f"{lignes:>6} lignes → {db.chemin_archive(table)}")
+    return 0
+
+
+def _importer(args) -> int:
+    for table in ("cours", "referentiel"):
+        lignes = db.importer(table)
+        print(f"{lignes:>6} lignes ← {db.chemin_archive(table)}")
+    return 0
+
+
 def _etat(args) -> int:
     for table, lignes in db.resume().items():
         print(f"{table:<18} {lignes:>7}")
@@ -92,6 +125,23 @@ def construire_analyseur() -> argparse.ArgumentParser:
         "referentiel", help="mettre à jour la liste des sociétés cotées"
     )
     referentiel.set_defaults(fonction=_referentiel)
+
+    noter = commandes.add_parser(
+        "noter", help="classer les valeurs (momentum filtré par liquidité)"
+    )
+    noter.add_argument("-n", "--nombre", type=int, default=10,
+                       help="nombre de lignes affichées (10 par défaut)")
+    noter.set_defaults(fonction=_noter)
+
+    exporter = commandes.add_parser(
+        "exporter", help="base → CSV versionnés de data/"
+    )
+    exporter.set_defaults(fonction=_exporter)
+
+    importer = commandes.add_parser(
+        "importer", help="CSV de data/ → base"
+    )
+    importer.set_defaults(fonction=_importer)
 
     etat = commandes.add_parser("etat", help="afficher le contenu de la base")
     etat.set_defaults(fonction=_etat)

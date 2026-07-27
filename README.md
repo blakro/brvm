@@ -17,6 +17,9 @@ Python 3.11 ou plus (le module lit sa configuration avec `tomllib`).
 python -m brvm verifier        # diagnostic des sélecteurs, sans rien écrire
 python -m brvm ingerer         # enregistre la séance publiée
 python -m brvm referentiel     # met à jour ticker / nom / secteur
+python -m brvm noter           # classe les valeurs
+python -m brvm exporter        # base → CSV versionnés
+python -m brvm importer        # CSV versionnés → base
 python -m brvm etat            # ce que contient la base
 ```
 
@@ -89,16 +92,85 @@ Réenregistrer une séance déjà présente la corrige au lieu de la dupliquer.
 référentiel échoue. Il a été constitué à partir des captures du 27/07/2026
 et couvre les 47 sociétés avec leur secteur.
 
+### La source de vérité est le CSV, pas la base
+
+`data/cours.csv` et `data/referentiel.csv` sont versionnés ; `data/brvm.db`
+ne l'est pas et se reconstruit par `brvm importer`. Trois raisons :
+
+- un binaire versionné grossit sans qu'on puisse lire ce qui a changé, et
+  deux ingestions concurrentes y produisent un conflit irréparable ;
+- une réingestion après correction d'un sélecteur apparaît en diff, ligne à
+  ligne — c'est exactement ce qu'on veut relire pour valider la correction ;
+- git fournit alors l'historique et la sauvegarde, sans service externe ni
+  identifiants à gérer.
+
+L'action `ingestion.yml` s'appuie là-dessus : elle reconstruit la base
+depuis les CSV, ingère la séance, réécrit les CSV et les commite. Elle
+tourne à 16 h UTC du lundi au vendredi, une heure après la clôture.
+
+Un refus d'ingestion n'y est pas traité comme une panne — jour férié,
+séance non close, site en maintenance sont des cas normaux. Marquer
+l'exécution en rouge chaque jour chômé apprendrait à ignorer les alertes.
+Ce qui est anormal, plusieurs jours sans nouvelle ligne, se voit dans
+l'historique du CSV.
+
+## Analyse
+
+```bash
+python -m brvm noter -n 15
+```
+
+Momentum « 12-1 » — rendement sur un an en sautant le dernier mois —
+combiné à une tendance courte et pénalisé par la volatilité, le tout filtré
+par un volume médian minimal et neutralisé par secteur.
+
+**Ces pondérations n'ont été calibrées sur rien.** Le module sait produire
+un classement reproductible ; il ne sait pas si ce classement gagne de
+l'argent, et personne ne le saura avant plusieurs années de séances en base
+et un backtest tenant compte des frais et de l'impact de marché — lequel
+est considérable sur une place où certaines lignes ne s'échangent pas tous
+les jours. Traitez la sortie comme une liste de valeurs à examiner.
+
+Quatre partis pris, détaillés dans `src/brvm/scoring.py` :
+
+- **rangs centiles plutôt que z-scores** — sur 47 valeurs dont certaines
+  bougent de 7 % en une séance, une aberration déplacerait la moyenne et
+  donc le score de toutes les autres ;
+- **filtre de liquidité avant notation** — écartée après coup, une valeur
+  illiquide aurait quand même servi à calculer les rangs des autres ;
+- **saut du dernier mois dans le momentum** — momentum à un an et
+  retournement à un mois sont deux effets opposés ; mesurer jusqu'à
+  aujourd'hui achète les hausses les plus fraîches, les plus fragiles ;
+- **neutralisation sectorielle au-delà de cinq membres** — seize bancaires
+  sur quarante-sept : sans elle, une bonne année du secteur suffirait à
+  transformer la sélection de valeurs en pari sectoriel déguisé. En deçà de
+  cinq, la valeur est notée face au marché entier, comme celles dont le
+  secteur est inconnu.
+
+Un historique trop court ne produit pas un classement approximatif : il ne
+produit rien, et la commande le dit.
+
 ## Tests
 
 ```bash
 pytest -q                     # ou : python tests/test_brvm_org.py
 ```
 
-Vingt-trois tests, tous hors ligne : ils travaillent sur les captures
-réelles de `tests/donnees/`, y compris les pages pathologiques (la 404, la
-vue en fiches, la vue sectorielle trompeuse). Un test qui dépend du réseau
-échoue pour des raisons étrangères au code qu'il vérifie.
+Trente et un tests, tous hors ligne.
+
+`test_brvm_org.py` travaille sur les captures réelles de `tests/donnees/`,
+y compris les pages pathologiques : la 404 habillée du thème complet, la
+vue en fiches sans symboles, la vue sectorielle qui se réclame d'un autre
+secteur. Un test qui dépend du réseau échoue pour des raisons étrangères au
+code qu'il vérifie.
+
+`test_analyse.py` travaille sur des séries fabriquées, faute d'historique :
+la base ne contient qu'une séance. Ces tests ne disent pas que la stratégie
+gagne — ils ne peuvent pas. Ils vérifient que le calcul fait ce qu'il
+annonce sur des séries dont la bonne réponse se pose à la main : que le
+saut du momentum écarte bien un krach de trois semaines, qu'une valeur
+illiquide n'influence pas les rangs des autres, qu'un historique court
+donne un vide et non un nombre.
 
 ## Licence
 
@@ -106,7 +178,13 @@ MIT — voir [LICENSE](LICENSE).
 
 ## Ce qui n'existe pas encore
 
-Les commentaires du scraper mentionnent `features.liquidite`, `scoring.py`
-et `depot.PRECISION` : l'analyse en aval de l'ingestion reste à écrire.
-Le module dégrade proprement en attendant — un secteur manquant vaut `NA`,
-où le scoring appliquera la pondération par défaut.
+**Un backtest.** C'est le manque qui compte : sans lui, les pondérations du
+scoring restent un parti pris et non un résultat. Il demande d'abord que la
+série s'accumule — quelques mois pour une première idée, des années pour
+une conclusion — puis un calcul honnête des frais et de l'impact de marché.
+
+**Une validation en conditions réelles.** Tout a été vérifié contre des
+captures ; le premier `brvm ingerer` face au site vivant reste à faire. Les
+runners GitHub n'atteignent pas toujours brvm.org depuis leurs plages
+d'adresses : si `ingestion.yml` échoue systématiquement au téléchargement,
+c'est cela, et il faudra la faire tourner ailleurs.

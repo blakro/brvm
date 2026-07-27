@@ -1,0 +1,84 @@
+name: ingestion quotidienne
+
+on:
+  schedule:
+    # 16 h 00 UTC, du lundi au vendredi. La séance de la BRVM ferme vers
+    # 15 h heure d'Abidjan, qui est UTC : une heure de marge avant que le
+    # site publie sa clôture définitive. Avant elle, `ingerer` refuse
+    # d'écrire — la colonne « Cours Clôture » porte alors le dernier cours
+    # traité, pas la clôture.
+    - cron: "0 16 * * 1-5"
+  workflow_dispatch:
+
+# Nécessaire pour reverser l'archive CSV dans le dépôt.
+permissions:
+  contents: write
+
+concurrency:
+  group: ingestion
+  cancel-in-progress: false
+
+jobs:
+  ingerer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - run: python -m pip install --upgrade pip && pip install -e .
+
+      # La base SQLite n'est pas versionnée : le runner est éphémère, il
+      # reconstruit l'historique depuis les CSV avant d'y ajouter le jour.
+      - name: Reconstruire la base depuis l'archive
+        run: python -m brvm importer
+
+      # `continue-on-error` parce qu'un refus est un cas normal : jour
+      # férié, séance non close, site en maintenance. Marquer l'exécution
+      # en rouge chaque jour chômé apprendrait vite à ignorer les alertes,
+      # et l'alerte qui compte passerait avec les autres. Ce qui est
+      # anormal — plusieurs jours sans nouvelle ligne — se voit dans
+      # l'historique du CSV.
+      - name: Ingérer la séance
+        id: ingestion
+        continue-on-error: true
+        run: python -m brvm ingerer
+
+      - name: Rafraîchir le référentiel
+        continue-on-error: true
+        run: python -m brvm referentiel
+
+      - name: Réécrire l'archive
+        run: python -m brvm exporter
+
+      - name: Publier la journée
+        run: |
+          if git diff --quiet -- data/; then
+            echo "Aucune nouvelle donnée." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/
+          git commit -m "Séance du $(date -u +%F)"
+          git push
+          {
+            echo "### Séance enregistrée"
+            echo '```'
+            git show --stat --oneline HEAD | head -5
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Résumé
+        if: always()
+        run: |
+          {
+            echo "### État de la base"
+            echo '```'
+            python -m brvm etat || true
+            echo '```'
+            echo "ingestion : ${{ steps.ingestion.outcome }}"
+          } >> "$GITHUB_STEP_SUMMARY"
