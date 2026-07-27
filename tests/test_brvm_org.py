@@ -52,8 +52,11 @@ DONNEES = RACINE / "tests" / "donnees"
 PAGE_SECTEUR_194 = DONNEES / "cours_secteur_194_20260727.html"
 PAGE_SECTEUR_195 = DONNEES / "cours_secteur_195_20260727.html"
 PAGE_SECTEUR_196 = DONNEES / "cours_secteur_196_20260727.html"
-# Réponse à /fr/cours-actions/197 « Industriels » : la page se réclame
-# d'« Energie ». Témoin du cache qui sert un secteur pour un autre.
+PAGE_SECTEUR_197 = DONNEES / "cours_secteur_197_20260727.html"
+# Autre réponse à /fr/cours-actions/197, obtenue quelques minutes plus tôt :
+# la page se réclamait d'« Energie ». Deux réponses contradictoires pour une
+# même URL, à quelques minutes d'intervalle — la preuve que l'URL demandée
+# ne dit rien du secteur servi.
 PAGE_SECTEUR_197_CACHE = DONNEES / "cours_secteur_197_cache_20260727.html"
 
 # Relevé dans les trois vues réellement obtenues distinctes.
@@ -64,8 +67,15 @@ SECTEURS_REELS = {
           {"ABJC", "BNBC", "CFAC", "LNBB", "NEIC", "PRSC", "UNXC"}),
     196: ("Energie",
           {"SHEC", "SMBC", "TTLC", "TTLS"}),
+    197: ("Industriels",
+          {"CABC", "FTSC", "SDSC", "SEMC", "SIVC", "STAC"}),
 }
-PAGES_SECTEURS = {194: PAGE_SECTEUR_194, 195: PAGE_SECTEUR_195, 196: PAGE_SECTEUR_196}
+PAGES_SECTEURS = {
+    194: PAGE_SECTEUR_194,
+    195: PAGE_SECTEUR_195,
+    196: PAGE_SECTEUR_196,
+    197: PAGE_SECTEUR_197,
+}
 CONSOMMATION_DE_BASE = SECTEURS_REELS[194][1]
 
 # Relevé à la main dans le HTML du témoin. Ordre des colonnes de la page :
@@ -350,12 +360,13 @@ def test_un_secteur_inconnu_renvoie_la_cote_entiere():
 
 
 def test_secteurs_lus_sur_les_vues_filtrees():
-    """Les trois vues obtenues distinctes se lisent et ne se chevauchent pas.
+    """Les quatre vues obtenues distinctes se lisent et ne se chevauchent pas.
 
     Les appartenances sont vérifiables à l'œil : Nestlé et Unilever en
     consommation de base, Uniwax et CFAO en discrétionnaire, Total Côte
-    d'Ivoire et Sénégal en énergie. Si ce test tombe, ce sont les
-    identifiants de secteur du site qui ont bougé, pas le code.
+    d'Ivoire et Sénégal en énergie, Filtisac et Sicable en industriels. Si
+    ce test tombe, ce sont les identifiants de secteur du site qui ont
+    bougé, pas le code.
     """
     trouve = brvm_org.lire_secteurs(PAGES_SECTEURS)
 
@@ -364,30 +375,30 @@ def test_secteurs_lus_sur_les_vues_filtrees():
 
     # Une société n'appartient qu'à un secteur : les vues sont disjointes.
     total = sum(len(tickers) for _, tickers in SECTEURS_REELS.values())
-    assert len(trouve) == total == 20
+    assert len(trouve) == total == 26
 
 
 def test_une_vue_qui_se_reclame_d_un_autre_secteur_est_refusee():
     """Le contrôle qui a évité une colonne entièrement fausse.
 
-    Deux lots ont été téléchargés le 27/07/2026 et les deux ont souffert du
-    même cache : le premier a rendu sept fois « Consommation de Base », le
-    second a servi « Energie » pour les quatre derniers secteurs. Sans
-    vérifier l'intitulé que la page affiche pour elle-même, « Industriels »,
-    « Services Financiers », « Services Publics » et « Télécommunications »
-    auraient tous reçu les tickers de l'énergie.
+    Le 27/07/2026, /fr/cours-actions/197 a rendu « Energie » à 16:05 puis
+    « Industriels » à 16:15 — deux réponses contradictoires pour une même
+    URL, à dix minutes d'intervalle. L'URL demandée ne dit donc rien du
+    secteur servi, et sans vérifier l'intitulé que la page affiche pour
+    elle-même, les six sociétés industrielles auraient été rangées en
+    énergie.
     """
     # Le cas réel : on demande Industriels, la page se dit Energie.
     assert brvm_org.lire_secteurs({197: PAGE_SECTEUR_197_CACHE}) == {}
 
-    # Et le lot mêlant vues valides et vues rejouées ne garde que les bonnes.
+    # Et le lot mêlant vues justes et vue trompeuse ne garde que les justes.
     livres = dict(PAGES_SECTEURS)
-    livres.update({i: PAGE_SECTEUR_197_CACHE for i in (197, 198, 199, 200)})
+    livres.update({i: PAGE_SECTEUR_197_CACHE for i in (198, 199, 200)})
     trouve = brvm_org.lire_secteurs(livres)
 
     assert set(trouve.values()) == {nom for nom, _ in SECTEURS_REELS.values()}
-    assert "Industriels" not in trouve.values()
-    assert len(trouve) == 20
+    assert "Services Financiers" not in trouve.values()
+    assert len(trouve) == 26
 
 
 def test_referentiel_enrichi_du_secteur():
