@@ -123,29 +123,14 @@ def test_pagination_sans_requete_superflue():
     que soit le numéro, et la page de fin est un tableau réduit à son
     <thead> — comptée pour une ligne, elle relance une requête pour rien.
     """
-    from bs4 import BeautifulSoup
-
-    page = PAGE.read_text(encoding="utf-8", errors="replace")
-
-    def tranche(numero, taille=16):
-        soup = BeautifulSoup(page, "html.parser")
-        for rang, ligne in enumerate(soup.select("#block-system-main table tbody tr")):
-            if not (numero * taille <= rang < (numero + 1) * taille):
-                ligne.decompose()
-        return str(soup)
-
     appels = []
 
     def faux_telechargement(url):
         appels.append(url)
-        return tranche(int(url.rstrip("/").rsplit("/", 1)[-1]))
+        return _tranche(int(url.rstrip("/").rsplit("/", 1)[-1]))
 
-    origine = brvm_org._telecharger
-    brvm_org._telecharger = faux_telechargement
-    try:
+    with _telechargement(faux_telechargement):
         cote = brvm_org.lire_cote()
-    finally:
-        brvm_org._telecharger = origine
 
     assert len(cote) == 47 and cote["ticker"].nunique() == 47
     assert cote["date"].nunique() == 1
@@ -156,13 +141,117 @@ def test_refus_pendant_la_seance():
     """Séance ouverte, « Cours Clôture » porte le dernier cours traité.
     L'enregistrer figerait un provisoire que rien ne viendrait corriger."""
     page = PAGE.read_text(encoding="utf-8", errors="replace")
-    brvm_org._telecharger = lambda url: page
-    try:
-        brvm_org.ingerer_jour()
-    except brvm_org.SourceIllisible as erreur:
-        assert "provisoires" in str(erreur)
-    else:
-        raise AssertionError("l'ingestion aurait dû être refusée à 12:45")
+    with _telechargement(lambda url: page):
+        try:
+            brvm_org.ingerer_jour()
+        except brvm_org.SourceIllisible as erreur:
+            assert "provisoires" in str(erreur)
+        else:
+            raise AssertionError("l'ingestion aurait dû être refusée à 12:45")
+
+
+# --- Référentiel ----------------------------------------------------------
+#
+# La page societes-cotees n'a jamais été observée : l'environnement de
+# développement n'atteint pas brvm.org (le proxy de sortie refuse l'hôte).
+# Ces tests ne valident donc PAS les sélecteurs de cette page ; ils
+# verrouillent ce qui est vérifiable sans elle — la reconnaissance des
+# intitulés, l'arrêt de la pagination, et la dégradation quand la page
+# n'est pas exploitable. Le jour où une capture de societes-cotees est
+# disponible, elle remplace le témoin de la cote dans le premier test.
+
+
+def test_referentiel_lit_ticker_nom_et_secteur():
+    """Le témoin de la cote porte « Symbole » et « Nom » : à défaut de la
+    page des sociétés, il exerce toute la chaîne du référentiel."""
+    ref = brvm_org.lire_referentiel(PAGE)
+    assert list(ref.columns) == ["ticker", "nom", "secteur"]
+    assert len(ref) == 47 and ref["ticker"].nunique() == 47
+    assert ref["ticker"].str.fullmatch(r"[A-Z]{2,6}").all()
+    # Aucune colonne secteur sur ce témoin : le repli doit laisser vide,
+    # jamais deviner — scoring.py applique alors la pondération par défaut.
+    assert ref["secteur"].isna().all()
+    assert ref.set_index("ticker").loc["BICC", "nom"] == "BICI COTE D'IVOIRE"
+
+
+def test_referentiel_reconnait_les_entetes_plausibles():
+    """Le piège attendu : « Code ISIN » capté comme ticker.
+
+    L'ISIN et le symbole cohabitent sur les pages de sociétés. Si l'ISIN
+    l'emporte, le référentiel ne se raccorde plus à la cote — aucune ligne
+    ne se joint, et le scoring travaille sur un univers vide.
+    """
+    for entete, attendu in [
+        (["Symbole", "Nom de la société", "Secteur d'activité"], "Symbole"),
+        (["Code ISIN", "Symbole", "Dénomination sociale"], "Symbole"),
+        (["Ticker", "Société", "Branche"], "Ticker"),
+    ]:
+        corr = brvm_org._correspondance(entete)
+        assert all(c in corr for c in brvm_org.REQUISES_REFERENTIEL), entete
+        assert corr["ticker"] == attendu, f"{entete} : ticker ← {corr.get('ticker')}"
+
+    # Sans colonne de symbole, mieux vaut échouer que joindre sur le nom.
+    corr = brvm_org._correspondance(["Société", "Secteur d'activité"])
+    assert "ticker" not in corr
+
+
+def test_referentiel_pagination_sans_requete_superflue():
+    """Même garde-fou que pour la cote : la vue non paginée sert la même
+    page quel que soit le numéro, et boucler dessus serait impoli."""
+    appels = []
+
+    def faux_telechargement(url):
+        appels.append(url)
+        return _tranche(int(url.rstrip("/").rsplit("/", 1)[-1]), taille=20)
+
+    with _telechargement(faux_telechargement):
+        ref = brvm_org.lire_referentiel()
+
+    assert len(ref) == 47 and ref["ticker"].nunique() == 47
+    assert len(appels) == 4, f"{len(appels)} requêtes pour 3 pages utiles"
+    assert all("societes-cotees" in url for url in appels), appels
+
+
+def test_referentiel_degrade_sans_planter():
+    """Page illisible : `referentiel()` doit rendre un tableau vide, pas
+    lever — c'est ce qui laisse cli.py basculer sur `referentiel_amorce()`."""
+    with _telechargement(lambda url: "<html><body><ul><li>SONATEL</li></ul></body></html>"):
+        ref = brvm_org.referentiel()
+    assert ref.empty and list(ref.columns) == ["ticker", "nom", "secteur"]
+
+
+# --- Outils communs -------------------------------------------------------
+
+
+class _telechargement:
+    """Remplace `_telecharger` le temps d'un test, et le remet en place.
+
+    Un patch laissé en place fuit sur les tests suivants et les fait
+    dépendre de leur ordre d'exécution.
+    """
+
+    def __init__(self, remplacant):
+        self.remplacant = remplacant
+
+    def __enter__(self):
+        self.origine = brvm_org._telecharger
+        brvm_org._telecharger = self.remplacant
+        return self
+
+    def __exit__(self, *_):
+        brvm_org._telecharger = self.origine
+        return False
+
+
+def _tranche(numero, taille=16):
+    """Les `taille` lignes de rang voulu du témoin, le reste retiré."""
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(PAGE.read_text(encoding="utf-8", errors="replace"), "html.parser")
+    for rang, ligne in enumerate(soup.select("#block-system-main table tbody tr")):
+        if not (numero * taille <= rang < (numero + 1) * taille):
+            ligne.decompose()
+    return str(soup)
 
 
 if __name__ == "__main__":
