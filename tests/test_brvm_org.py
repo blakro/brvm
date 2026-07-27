@@ -48,11 +48,25 @@ PAGE_SECTEUR_INVALIDE = (
 # Base », 9 sociétés. La seule des sept obtenue distinctement : les sept
 # téléchargements ont tous rendu celle-ci, ce que les tests ci-dessous
 # transforment en cas de non-régression plutôt qu'en donnée fausse.
-PAGE_SECTEUR_194 = RACINE / "tests" / "donnees" / "cours_secteur_194_20260727.html"
+DONNEES = RACINE / "tests" / "donnees"
+PAGE_SECTEUR_194 = DONNEES / "cours_secteur_194_20260727.html"
+PAGE_SECTEUR_195 = DONNEES / "cours_secteur_195_20260727.html"
+PAGE_SECTEUR_196 = DONNEES / "cours_secteur_196_20260727.html"
+# Réponse à /fr/cours-actions/197 « Industriels » : la page se réclame
+# d'« Energie ». Témoin du cache qui sert un secteur pour un autre.
+PAGE_SECTEUR_197_CACHE = DONNEES / "cours_secteur_197_cache_20260727.html"
 
-CONSOMMATION_DE_BASE = {
-    "NTLC", "PALC", "SCRC", "SICC", "SLBC", "SOGC", "SPHC", "STBC", "UNLC",
+# Relevé dans les trois vues réellement obtenues distinctes.
+SECTEURS_REELS = {
+    194: ("Consommation de Base",
+          {"NTLC", "PALC", "SCRC", "SICC", "SLBC", "SOGC", "SPHC", "STBC", "UNLC"}),
+    195: ("Consommation Discrétionnaire",
+          {"ABJC", "BNBC", "CFAC", "LNBB", "NEIC", "PRSC", "UNXC"}),
+    196: ("Energie",
+          {"SHEC", "SMBC", "TTLC", "TTLS"}),
 }
+PAGES_SECTEURS = {194: PAGE_SECTEUR_194, 195: PAGE_SECTEUR_195, 196: PAGE_SECTEUR_196}
+CONSOMMATION_DE_BASE = SECTEURS_REELS[194][1]
 
 # Relevé à la main dans le HTML du témoin. Ordre des colonnes de la page :
 # Symbole, Nom, Volume, Cours veille, Cours Ouverture, Cours Clôture.
@@ -335,34 +349,45 @@ def test_un_secteur_inconnu_renvoie_la_cote_entiere():
     assert r["ok"] is True and r["lignes_exploitables"] == 47
 
 
-def test_secteur_lu_sur_la_vue_filtree():
-    """La vue sectorielle est lisible, et ses 9 sociétés sont cohérentes.
+def test_secteurs_lus_sur_les_vues_filtrees():
+    """Les trois vues obtenues distinctes se lisent et ne se chevauchent pas.
 
-    Nestlé, Unilever, Solibra, SAPH, SITAB… : de la consommation de base
-    pour de bon. Si ce test tombe, c'est que les identifiants de secteur
-    ont bougé, pas que le code a régressé.
+    Les appartenances sont vérifiables à l'œil : Nestlé et Unilever en
+    consommation de base, Uniwax et CFAO en discrétionnaire, Total Côte
+    d'Ivoire et Sénégal en énergie. Si ce test tombe, ce sont les
+    identifiants de secteur du site qui ont bougé, pas le code.
     """
-    trouve = brvm_org.lire_secteurs({194: PAGE_SECTEUR_194})
-    assert set(trouve) == CONSOMMATION_DE_BASE
-    assert set(trouve.values()) == {"Consommation de Base"}
+    trouve = brvm_org.lire_secteurs(PAGES_SECTEURS)
+
+    attendu = {t: nom for nom, tickers in SECTEURS_REELS.values() for t in tickers}
+    assert trouve == attendu
+
+    # Une société n'appartient qu'à un secteur : les vues sont disjointes.
+    total = sum(len(tickers) for _, tickers in SECTEURS_REELS.values())
+    assert len(trouve) == total == 20
 
 
 def test_une_vue_qui_se_reclame_d_un_autre_secteur_est_refusee():
     """Le contrôle qui a évité une colonne entièrement fausse.
 
-    Le 27/07/2026, sept téléchargements sur sept URL distinctes ont tous
-    rendu « Consommation de Base ». Sans vérifier l'intitulé que la page
-    affiche pour elle-même, les six autres secteurs auraient reçu les neuf
-    tickers de celui-ci — une colonne fausse, plausible, et qu'aucune
-    exception n'aurait signalée.
+    Deux lots ont été téléchargés le 27/07/2026 et les deux ont souffert du
+    même cache : le premier a rendu sept fois « Consommation de Base », le
+    second a servi « Energie » pour les quatre derniers secteurs. Sans
+    vérifier l'intitulé que la page affiche pour elle-même, « Industriels »,
+    « Services Financiers », « Services Publics » et « Télécommunications »
+    auraient tous reçu les tickers de l'énergie.
     """
-    livres = {identifiant: PAGE_SECTEUR_194 for identifiant in brvm_org.SECTEURS}
+    # Le cas réel : on demande Industriels, la page se dit Energie.
+    assert brvm_org.lire_secteurs({197: PAGE_SECTEUR_197_CACHE}) == {}
+
+    # Et le lot mêlant vues valides et vues rejouées ne garde que les bonnes.
+    livres = dict(PAGES_SECTEURS)
+    livres.update({i: PAGE_SECTEUR_197_CACHE for i in (197, 198, 199, 200)})
     trouve = brvm_org.lire_secteurs(livres)
 
-    assert set(trouve) == CONSOMMATION_DE_BASE
-    assert set(trouve.values()) == {"Consommation de Base"}, (
-        "un secteur autre que celui déclaré par la page a été écrit"
-    )
+    assert set(trouve.values()) == {nom for nom, _ in SECTEURS_REELS.values()}
+    assert "Industriels" not in trouve.values()
+    assert len(trouve) == 20
 
 
 def test_referentiel_enrichi_du_secteur():
