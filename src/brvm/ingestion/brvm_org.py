@@ -520,6 +520,14 @@ def lire_referentiel(source: str | Path | None = None) -> pd.DataFrame:
     coder à l'aveugle une correspondance ticker → secteur produirait
     exactement le genre de donnée fausse et plausible que ce module
     s'attache à refuser.
+
+    PIÈGE À CONNAÎTRE AVANT DE L'IMPLÉMENTER : un identifiant de secteur
+    inconnu ne provoque pas de 404, le site sert la cote entière. Vérifié
+    le 27/07/2026 sur /fr/cours-actions/$n — 47 lignes, exactement les
+    tickers de la cote. Un identifiant périmé ou mal recopié rangerait donc
+    les 47 sociétés dans un seul secteur, sans que rien n'échoue. Toute
+    lecture sectorielle doit se valider sur le nombre de lignes : une vue
+    de secteur en compte nécessairement moins que la cote.
     """
     morceaux, connus = [], set()
     for html in _pages("societes", source):

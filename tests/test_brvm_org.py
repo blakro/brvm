@@ -38,6 +38,12 @@ PAGE_404 = RACINE / "tests" / "donnees" / "societes_404_20260727.html"
 # mais en fiches et sans symbole boursier. Elle est le témoin de la raison
 # pour laquelle le référentiel ne peut pas en venir.
 PAGE_FICHES = RACINE / "tests" / "donnees" / "societes_fiches_20260727.html"
+# Réponse à /fr/cours-actions/$n — un identifiant de secteur invalide. Le
+# site ne renvoie pas 404 : il sert la cote entière. Témoin du piège qui
+# guette toute lecture sectorielle.
+PAGE_SECTEUR_INVALIDE = (
+    RACINE / "tests" / "donnees" / "cote_brvm_20260727_secteur_invalide.html"
+)
 
 # Relevé à la main dans le HTML du témoin. Ordre des colonnes de la page :
 # Symbole, Nom, Volume, Cours veille, Cours Ouverture, Cours Clôture.
@@ -292,6 +298,32 @@ def test_la_page_des_societes_ne_porte_aucun_symbole():
         assert "ticker" in str(erreur)
     else:
         raise AssertionError("une vue en fiches a produit un référentiel")
+
+
+def test_un_secteur_inconnu_renvoie_la_cote_entiere():
+    """Le piège qui attend quiconque implémentera la colonne secteur.
+
+    `/fr/cours-actions/{n}` avec un `n` invalide ne provoque pas de 404 :
+    brvm.org sert la cote complète. Un identifiant périmé ou mal recopié
+    rangerait donc les 47 sociétés dans un seul secteur — une colonne
+    entièrement fausse, parfaitement plausible, et qu'aucune exception ne
+    signalerait. La seule parade est de compter les lignes : une vraie vue
+    sectorielle en a nécessairement moins que la cote.
+
+    C'est aussi ce qui rend le garde-fou « aucun ticker nouveau »
+    indispensable : sans lui, la boucle de pagination d'origine aurait
+    concaténé la cote entière autant de fois que le plafond l'autorisait.
+    """
+    entiere = brvm_org.lire_referentiel(PAGE_CLOTURE)
+    invalide = brvm_org.lire_referentiel(PAGE_SECTEUR_INVALIDE)
+
+    assert len(invalide) == len(entiere) == 47
+    assert set(invalide["ticker"]) == set(entiere["ticker"])
+
+    # La page reste par ailleurs une cote parfaitement lisible : c'est bien
+    # ce qui la rend dangereuse, elle ne se trahit par aucun symptôme.
+    r = brvm_org.verifier(PAGE_SECTEUR_INVALIDE)
+    assert r["ok"] is True and r["lignes_exploitables"] == 47
 
 
 def test_referentiel_interroge_la_cote():
