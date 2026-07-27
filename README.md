@@ -100,6 +100,10 @@ réelles de `tests/donnees/`, y compris les pages pathologiques (la 404, la
 vue en fiches, la vue sectorielle trompeuse). Un test qui dépend du réseau
 échoue pour des raisons étrangères au code qu'il vérifie.
 
+## Licence
+
+MIT — voir [LICENSE](LICENSE).
+
 ## Ce qui n'existe pas encore
 
 Les commentaires du scraper mentionnent `features.liquidite`, `scoring.py`
