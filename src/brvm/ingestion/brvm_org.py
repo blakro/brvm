@@ -85,14 +85,28 @@ SELECTEURS = {
         "date": ["section.block-tools", ".block-tools", ".region-content"],
     },
     "societes": {
-        # /fr/societes-cotees/0 renvoie une 404 — vérifié le 27/07/2026, le
-        # site répond « La page demandée n'a pas pu être trouvée ». Le vrai
-        # chemin est celui du menu « Émetteurs » de la page de la cote.
-        # Sans motif_page : ce chemin ne porte pas de segment numérique.
-        "url": "https://www.brvm.org/fr/emetteurs/societes-cotees",
-        # Même ordre que pour la cote, par analogie : les deux pages sont
-        # rendues par le même thème. À confirmer — cette page-ci n'a pas
-        # encore été observée, et le filet structurel couvre l'écart.
+        # LE RÉFÉRENTIEL SE LIT SUR LA COTE, PAS SUR LA PAGE DES SOCIÉTÉS.
+        #
+        # Les deux candidats évidents ont été observés le 27/07/2026 et
+        # écartés, dans cet ordre :
+        #
+        #   /fr/societes-cotees/0            → 404. La page d'erreur sert le
+        #     thème complet, blocs latéraux compris : trois tableaux que le
+        #     filet structurel voit passer. Elle ne se trahit que par
+        #     l'absence de colonne symbole.
+        #
+        #   /fr/emetteurs/societes-cotees    → existe, mais c'est une vue en
+        #     fiches (`.views-row`), pas un tableau : logo, raison sociale,
+        #     adresse, téléphone, fax. AUCUN SYMBOLE BOURSIER, aucun
+        #     secteur, 10 fiches par page paginées en `?page=N`. Aucun
+        #     réglage de sélecteur ne peut en tirer un ticker qui n'y est
+        #     pas — le raccordement à la cote serait impossible.
+        #
+        # La cote, elle, porte « Symbole » et « Nom » pour les 47 sociétés,
+        # y compris celles qui n'ont pas échangé. C'est donc la source du
+        # couple ticker/nom. Le secteur n'y figure pas et reste vide : voir
+        # `lire_referentiel`, qui documente d'où le tirer le jour venu.
+        "url": "https://www.brvm.org/fr/cours-actions/0",
         "tableaux": [
             "#block-system-main table",
             "div.view-content table",
@@ -489,7 +503,24 @@ def _finaliser(cote: pd.DataFrame, date: str, heure: str | None) -> pd.DataFrame
 
 
 def lire_referentiel(source: str | Path | None = None) -> pd.DataFrame:
-    """Liste des sociétés cotées : ticker, nom, secteur."""
+    """Liste des sociétés cotées : ticker, nom, secteur.
+
+    Lue sur la cote, seule page de brvm.org à publier les symboles — voir
+    le commentaire de `SELECTEURS['societes']` pour les deux pages
+    écartées.
+
+    `secteur` sort donc toujours vide aujourd'hui. Pour le renseigner sans
+    rien inventer, la piste vérifiée est la cote elle-même : son menu
+    filtre par secteur via sept URL libellées, relevées le 27/07/2026 —
+    /fr/cours-actions/194 « Consommation de Base », 195 « Consommation
+    Discrétionnaire », 196 « Energie », 197 « Industriels », 198
+    « Services Financiers », 199 « Services Publics », 200
+    « Télécommunications ». Sept requêtes donnent l'appartenance de chaque
+    ticker. Non implémenté : ces vues n'ont pas encore été observées, et
+    coder à l'aveugle une correspondance ticker → secteur produirait
+    exactement le genre de donnée fausse et plausible que ce module
+    s'attache à refuser.
+    """
     morceaux, connus = [], set()
     for html in _pages("societes", source):
         try:

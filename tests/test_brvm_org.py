@@ -34,6 +34,10 @@ PAGE_CLOTURE = RACINE / "tests" / "donnees" / "cote_brvm_20260727_cloture.html"
 # La réponse réelle de /fr/societes-cotees/0 : une 404 habillée du thème
 # complet, tableaux latéraux compris. C'est elle qui a démasqué l'URL.
 PAGE_404 = RACINE / "tests" / "donnees" / "societes_404_20260727.html"
+# /fr/emetteurs/societes-cotees : la page des sociétés existe bel et bien,
+# mais en fiches et sans symbole boursier. Elle est le témoin de la raison
+# pour laquelle le référentiel ne peut pas en venir.
+PAGE_FICHES = RACINE / "tests" / "donnees" / "societes_fiches_20260727.html"
 
 # Relevé à la main dans le HTML du témoin. Ordre des colonnes de la page :
 # Symbole, Nom, Volume, Cours veille, Cours Ouverture, Cours Clôture.
@@ -261,26 +265,55 @@ def test_referentiel_reconnait_les_entetes_plausibles():
     assert "ticker" not in corr
 
 
-def test_referentiel_interroge_l_url_qui_existe():
-    """`/fr/societes-cotees/0` renvoie une 404.
+def test_la_page_des_societes_ne_porte_aucun_symbole():
+    """Pourquoi le référentiel ne vient pas de /fr/emetteurs/societes-cotees.
 
-    Vérifié le 27/07/2026 : le site répond « La page demandée
-    "/fr/societes-cotees/0" n'a pas pu être trouvée ». Le chemin servi par
-    le menu « Émetteurs » de la cote est le seul valide. Une 404 se serait
-    vue en production — `referentiel()` l'aurait avalée et cli.py serait
-    resté indéfiniment sur `referentiel_amorce()`, sans que rien n'alerte.
+    Cette page existe — elle ne renvoie pas 404 — mais rend les sociétés
+    en fiches : logo, raison sociale, adresse, téléphone. Aucun symbole,
+    donc rien à raccorder à la cote. Le test fige ce constat pour qu'il ne
+    soit pas re-tenté à chaque refonte du site : ce n'est pas un problème
+    de sélecteur, c'est une donnée absente de la page.
+    """
+    from bs4 import BeautifulSoup
+
+    html = PAGE_FICHES.read_text(encoding="utf-8", errors="replace")
+    soup = BeautifulSoup(html, "html.parser")
+
+    fiches = soup.select(".view-societes .views-row")
+    assert len(fiches) == 10, "vue en fiches, 10 par page, paginée en ?page=N"
+    contenu = " ".join(str(f) for f in fiches)
+    for symbole in ("SNTS", "BOAB", "ABJC", "SGBC", "ETIT"):
+        assert symbole not in contenu, f"{symbole} trouvé : la page a changé"
+
+    # Et donc : aucun tableau exploitable comme référentiel.
+    try:
+        brvm_org.lire_referentiel(PAGE_FICHES)
+    except brvm_org.SourceIllisible as erreur:
+        assert "ticker" in str(erreur)
+    else:
+        raise AssertionError("une vue en fiches a produit un référentiel")
+
+
+def test_referentiel_interroge_la_cote():
+    """Le référentiel se lit sur la cote, seule page à publier les symboles.
+
+    `/fr/societes-cotees/0` — l'URL d'origine — renvoie une 404, et la vraie
+    page des sociétés n'a pas de symboles. L'une comme l'autre laissaient
+    `referentiel()` rendre un tableau vide en silence, et cli.py rester
+    indéfiniment sur `referentiel_amorce()` sans que rien n'alerte.
     """
     appels = []
 
     def faux_telechargement(url):
         appels.append(url)
-        return PAGE.read_text(encoding="utf-8", errors="replace")
+        return PAGE_CLOTURE.read_text(encoding="utf-8", errors="replace")
 
     with _telechargement(faux_telechargement):
         ref = brvm_org.lire_referentiel()
 
-    assert appels == ["https://www.brvm.org/fr/emetteurs/societes-cotees"], appels
+    assert appels == ["https://www.brvm.org/fr/cours-actions/0"], appels
     assert len(ref) == 47 and ref["ticker"].nunique() == 47
+    assert ref["nom"].str.len().gt(0).all()
 
 
 def test_une_404_ne_produit_jamais_de_referentiel():
