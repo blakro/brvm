@@ -61,10 +61,16 @@ from ..config import RACINE, charger
 SELECTEURS = {
     "cote": {
         "url": "https://www.brvm.org/fr/cours-actions/0",
+        # Vérifié sur la page du 27/07/2026 : `#block-system-main table`
+        # désigne le tableau de la cote et lui seul, là où `table` en
+        # attrape quatre (top 5, flop 5, activités du marché). Les classes
+        # sont celles de Bootstrap, pas de Drupal : `views-table` ne
+        # correspond à rien sur ce site, elle reste en dernier recours au
+        # cas où une autre vue serait rendue autrement.
         "tableaux": [
-            "table.views-table",
-            "div.view-content table",
             "#block-system-main table",
+            "div.view-content table",
+            "table.views-table",
             "table",
         ],
         # brvm.org pagine ses vues. On s'arrête dès qu'une page n'apporte
@@ -78,10 +84,13 @@ SELECTEURS = {
     },
     "societes": {
         "url": "https://www.brvm.org/fr/societes-cotees/0",
+        # Même ordre que pour la cote, par analogie : les deux pages sont
+        # rendues par le même thème. À confirmer — cette page-ci n'a pas
+        # encore été observée, et le filet structurel couvre l'écart.
         "tableaux": [
-            "table.views-table",
-            "div.view-content table",
             "#block-system-main table",
+            "div.view-content table",
+            "table.views-table",
             "table",
         ],
         "pages_max": 10,
@@ -245,13 +254,18 @@ def _en_dataframe(balise) -> pd.DataFrame | None:
     faite ensuite, et seulement par `_nombre`.
     """
     entete = [c.get_text(" ", strip=True) for c in balise.select("thead th")]
-    lignes_html = balise.select("tbody tr") or balise.find_all("tr")
+    lignes_html = balise.select("tbody tr")
+    if not lignes_html:
+        # Sans <tbody>, ne jamais reprendre la ligne d'en-tête comme donnée.
+        # Au-delà de la dernière page, brvm.org sert un tableau réduit à son
+        # <thead> : la compter pour une ligne fait croire à une page utile
+        # et déclenche une requête de plus pour rien.
+        lignes_html = [tr for tr in balise.find_all("tr") if not tr.find_parent("thead")]
 
     if not entete:
-        premiere = lignes_html[0] if lignes_html else None
-        if premiere is None:
+        if not lignes_html:
             return None
-        entete = [c.get_text(" ", strip=True) for c in premiere.find_all(["th", "td"])]
+        entete = [c.get_text(" ", strip=True) for c in lignes_html[0].find_all(["th", "td"])]
         lignes_html = lignes_html[1:]
 
     lignes = []
@@ -432,7 +446,11 @@ def lire_cote(source: str | Path | None = None) -> pd.DataFrame:
     if not morceaux:
         raise SourceIllisible("aucune page de cote récupérée")
 
-    cote = pd.concat(morceaux, ignore_index=True)
+    return _finaliser(pd.concat(morceaux, ignore_index=True), date, heure)
+
+
+def _finaliser(cote: pd.DataFrame, date: str, heure: str | None) -> pd.DataFrame:
+    """Colonnes brutes reconnues → lignes prêtes pour la table `cours`."""
     cote["ticker"] = cote["ticker"].astype(str).str.strip().str.upper()
     cote = cote[cote["ticker"].str.fullmatch(r"[A-Z]{2,6}")]
 
@@ -544,6 +562,19 @@ def verifier(source: str | Path | None = None) -> dict:
         resultat["echec"] = f"page inaccessible : {type(erreur).__name__}: {erreur}"
         return resultat
 
+    return _diagnostiquer(html, resultat)
+
+
+def verifier_texte(html: str) -> dict:
+    """Même diagnostic, sur une page déjà en mémoire.
+
+    Utilisé par les tests : ils fabriquent des pages abîmées à partir du
+    témoin sans avoir à les écrire sur disque.
+    """
+    return _diagnostiquer(html, {"source": "texte fourni"})
+
+
+def _diagnostiquer(html: str, resultat: dict) -> dict:
     resultat["octets"] = len(html)
     resultat["tableaux_sur_la_page"] = len(_tableaux_candidats(html, "cote"))
 
@@ -578,7 +609,9 @@ def verifier(source: str | Path | None = None) -> dict:
     # Le test qui compte : la chaîne complète jusqu'au format attendu par
     # la base. Un en-tête reconnu ne garantit pas des nombres lisibles.
     try:
-        cote = lire_cote(source) if source is not None else None
+        cote = _finaliser(
+            _renommer(tableau, corr), resultat["date_seance"], resultat["heure_mise_a_jour"]
+        )
     except SourceIllisible as erreur:
         resultat["ok"] = False
         resultat["echec"] = str(erreur)
@@ -588,22 +621,18 @@ def verifier(source: str | Path | None = None) -> dict:
     if coherence:
         resultat["coherence_variation"] = coherence
 
-    if cote is not None:
-        resultat["lignes_exploitables"] = len(cote)
-        resultat["exemple"] = ", ".join(
-            f"{r.ticker}={r.cloture:g}" for r in cote.head(3).itertuples()
+    resultat["lignes_exploitables"] = len(cote)
+    resultat["exemple"] = ", ".join(
+        f"{r.ticker}={r.cloture:g}" for r in cote.head(3).itertuples()
+    )
+    # Le diagnostic ne porte que sur la première page ; la cote en compte
+    # ~47, un chiffre nettement plus bas signale des cours illisibles.
+    resultat["ok"] = len(cote) >= 15
+    if not resultat["ok"]:
+        resultat["echec"] = (
+            f"{len(cote)} lignes exploitables sur {len(tableau)} lues — "
+            "cours illisibles ou colonne clôture mal reconnue"
         )
-        resultat["ok"] = len(cote) >= 15
-        if not resultat["ok"]:
-            resultat["echec"] = (
-                f"{len(cote)} lignes exploitables seulement (la cote compte "
-                "~47 valeurs) — cours illisibles ou pagination incomplète"
-            )
-    else:
-        resultat["ok"] = len(tableau) >= 15
-        if not resultat["ok"]:
-            resultat["echec"] = f"{len(tableau)} lignes seulement sur la page"
-
     return resultat
 
 
