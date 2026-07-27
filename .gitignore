@@ -1,0 +1,13 @@
+# Bytecode et caches d'outils
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Environnements virtuels
+.venv/
+venv/
+
+# Base locale et sorties d'ingestion — reconstructibles, jamais versionnées.
+*.db
+*.sqlite3
