@@ -20,7 +20,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from . import backtest, db, features, scoring
+from . import backtest, db, features, prediction, scoring
 from .ingestion import brvm_org
 
 
@@ -91,6 +91,27 @@ def _backtester(args) -> int:
     return 0 if not resultat["etapes"].empty else 1
 
 
+def _predire(args) -> int:
+    cours = db.lire("cours")
+    if cours.empty:
+        print("aucun cours en base — lancez « brvm ingerer »", file=sys.stderr)
+        return 1
+
+    validation = prediction.valider(cours)
+    print(prediction.expliquer(validation))
+
+    classement = prediction.predire(cours)
+    if classement.empty:
+        return 1
+
+    referentiel = db.lire("referentiel")
+    if not referentiel.empty:
+        classement = classement.merge(referentiel, on="ticker", how="left")
+    print("\nProbabilité de surperformer le marché :")
+    print(classement.head(args.nombre).to_string(index=False))
+    return 0
+
+
 def _exporter(args) -> int:
     for table in ("cours", "referentiel"):
         lignes = db.exporter(table)
@@ -154,6 +175,13 @@ def construire_analyseur() -> argparse.ArgumentParser:
     backtester.add_argument("--journal", action="store_true",
                             help="détailler chaque rééquilibrage")
     backtester.set_defaults(fonction=_backtester)
+
+    predire = commandes.add_parser(
+        "predire", help="probabilité de surperformance, et sa validation"
+    )
+    predire.add_argument("-n", "--nombre", type=int, default=15,
+                         help="nombre de lignes affichées (15 par défaut)")
+    predire.set_defaults(fonction=_predire)
 
     exporter = commandes.add_parser(
         "exporter", help="base → CSV versionnés de data/"

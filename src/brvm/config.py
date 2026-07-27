@@ -75,10 +75,33 @@ DEFAUTS: dict[str, dict] = {
         # sociétés. Ceux-là sont notés face au marché entier.
         "min_par_secteur": 5,
     },
+    "prediction": {
+        # Horizon en séances — environ trois mois.
+        #
+        # PAS UN HORIZON JOURNALIER, ET C'EST STRUCTUREL. La BRVM cote par
+        # fixing, avec une limite de variation de ±7,5 % et des lignes qui
+        # ne s'échangent parfois que quelques fois par semaine. Sur des
+        # cours ainsi figés, un modèle apprend « demain ≈ aujourd'hui », en
+        # tire un R² magnifique, et produit un backtest brillant et
+        # inexécutable. Le signal exploitable est à un à six mois.
+        "horizon": 60,
+        # Périodes de test successives de la validation glissante.
+        "decoupes": 4,
+        # En deçà, on ne valide ni ne prédit.
+        "lignes_minimum": 400,
+    },
     "backtest": {
         "positions": 10,
-        # ~un mois de séances entre deux rééquilibrages.
-        "pas_rebalancement": 20,
+        # ~un trimestre entre deux rééquilibrages.
+        #
+        # LES FRAIS COMMANDENT CETTE VALEUR, PAS LA FINESSE DU SIGNAL. Le
+        # courtage SGI va de 0,5 % à 1,2 % selon l'intermédiaire, plus une
+        # rétrocession BRVM de 0,2 %, les frais DC/BR et les taxes : de 2,5
+        # à 3,5 % l'aller-retour. Un rééquilibrage mensuel les paie douze
+        # fois l'an, soit plus de trente points de performance à rattraper
+        # avant de gagner un centime. Quatre fois par an est déjà
+        # ambitieux ; c'est le plancher qu'impose ce marché.
+        "pas_rebalancement": 60,
         # On décide sur la clôture de t et on achète à celle de t+1. Se
         # servir du même cours pour décider et pour exécuter suppose de
         # passer un ordre à un cours déjà connu : c'est le regard en avant

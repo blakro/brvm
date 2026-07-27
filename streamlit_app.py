@@ -20,7 +20,7 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from brvm import backtest, db, features, scoring
+from brvm import backtest, db, features, prediction, scoring
 from brvm.config import DEFAUTS
 from brvm.ingestion import brvm_org
 
@@ -138,7 +138,8 @@ haut_3.metric("Sociétés suivies", f"{cours['ticker'].nunique()}")
 if echec and not cours.empty:
     st.caption(f"brvm.org injoignable ({echec}) — affichage de l'archive.")
 
-onglets = st.tabs(["Cote du jour", "Classement", "Backtest", "Données"])
+onglets = st.tabs(["Cote du jour", "Classement", "Prédiction", "Backtest",
+                   "Données"])
 
 
 # --- Cote du jour ---------------------------------------------------------
@@ -279,8 +280,77 @@ with onglets[1]:
         st.dataframe(tete, width="stretch", hide_index=True)
 
 
-# --- Backtest -------------------------------------------------------------
+# --- Prédiction -----------------------------------------------------------
 with onglets[2]:
+    st.caption(
+        "Probabilité de **surperformer le marché sur trois mois** — pas de "
+        "prévoir un cours, pas de deviner si la place monte. La BRVM cote "
+        "par fixing, avec une limite de ±7,5 % et des lignes qui "
+        "s'échangent parfois quelques fois par semaine : un modèle entraîné "
+        "sur le lendemain apprend « demain ≈ aujourd'hui » et produit un "
+        "backtest brillant et inexécutable."
+    )
+
+    validation = prediction.valider(cours)
+    if validation["periodes"].empty:
+        st.info(prediction.expliquer(validation))
+    else:
+        mesures = st.columns(3)
+        mesures[0].metric("IC du modèle", f"{validation['ic']:+.3f}")
+        mesures[1].metric("IC du score composite",
+                          f"{validation['ic_composite']:+.3f}")
+        mesures[2].metric("Écart", f"{validation['ecart']:+.3f}")
+
+        if validation["ecart"] <= 0:
+            st.warning(
+                "**Le modèle ne bat pas le score composite.** C'est le cas "
+                "le plus fréquent sur ce marché, et ce n'est pas un défaut "
+                "du code : c'est le composite — onglet Classement — qui doit "
+                "partir en production. L'apprentissage n'ajouterait qu'un "
+                "risque de surajustement."
+            )
+        elif validation["ic"] > 0.30:
+            st.error(
+                f"**IC de {validation['ic']:.3f} — anormalement élevé.** "
+                "Sur ce type de problème, un IC exploitable vaut 0,02 à "
+                "0,05. Cherchez la fuite avant d'y croire."
+            )
+
+        st.dataframe(validation["periodes"], width="stretch", hide_index=True)
+
+        classement_ml = prediction.predire(cours)
+        if not classement_ml.empty:
+            classement_ml = classement_ml.merge(
+                referentiel[["ticker", "nom", "secteur"]], on="ticker",
+                how="left")
+            st.altair_chart(
+                alt.Chart(classement_ml.head(15))
+                .mark_bar(cornerRadiusEnd=4, height=16, color=SERIE_1)
+                .encode(
+                    x=alt.X("probabilite:Q", title="probabilité de surperformer",
+                            axis=alt.Axis(format=".0%")),
+                    y=alt.Y("ticker:N", sort="-x", title=None,
+                            axis=alt.Axis(labelOverlap=False)),
+                    tooltip=[
+                        alt.Tooltip("ticker:N", title="Symbole"),
+                        alt.Tooltip("nom:N", title="Société"),
+                        alt.Tooltip("probabilite:Q", title="Probabilité",
+                                    format=".1%"),
+                        alt.Tooltip("secteur:N", title="Secteur"),
+                    ],
+                )
+                .properties(height=max(220, 22 * 15)),
+                width="stretch",
+            )
+
+    st.warning(
+        "**Ce que ces chiffres ne disent pas.** " + " ; ".join(
+            validation["avertissements"]) + "."
+    )
+
+
+# --- Backtest -------------------------------------------------------------
+with onglets[3]:
     bt_1, bt_2, bt_3 = st.columns(3)
     with bt_1:
         positions = st.slider("Positions en portefeuille", 3, 20, 10)
@@ -365,7 +435,7 @@ with onglets[2]:
 
 
 # --- Données --------------------------------------------------------------
-with onglets[3]:
+with onglets[4]:
     st.subheader("Répartition sectorielle")
     if not referentiel.empty and referentiel["secteur"].notna().any():
         comptes = (referentiel.groupby("secteur").size()

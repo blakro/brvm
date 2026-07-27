@@ -6,7 +6,7 @@ Ingestion de la cote de la [Bourse Régionale des Valeurs Mobilières](https://w
 ## L'application web
 
 Le tableau de bord est le point d'entrée : cote du jour, classement,
-backtest, état des données. Il tourne sur **Streamlit Community Cloud**,
+prédiction, backtest, état des données. Il tourne sur **Streamlit Community Cloud**,
 sans rien à installer.
 
 ### Déploiement
@@ -47,6 +47,7 @@ python -m brvm verifier        # diagnostic des sélecteurs, sans rien écrire
 python -m brvm ingerer         # enregistre la séance publiée
 python -m brvm referentiel     # met à jour ticker / nom / secteur
 python -m brvm noter           # classe les valeurs
+python -m brvm predire         # probabilité de surperformance à 3 mois
 python -m brvm backtester      # rejoue le classement dans le temps
 python -m brvm exporter        # base → CSV versionnés
 python -m brvm importer        # CSV versionnés → base
@@ -180,6 +181,43 @@ Quatre partis pris, détaillés dans `src/brvm/scoring.py` :
 Un historique trop court ne produit pas un classement approximatif : il ne
 produit rien, et la commande le dit.
 
+### Prédiction
+
+```bash
+python -m brvm predire
+```
+
+Probabilité, par valeur, de **surperformer le marché sur trois mois**.
+
+Le cadrage n'est pas une esquive, ce sont les seules conditions où la
+question est soluble ici. La BRVM cote par fixing, avec une limite de
+variation de ±7,5 % et des lignes qui ne s'échangent parfois que quelques
+fois par semaine : un modèle entraîné à prédire le lendemain apprend
+« demain ≈ aujourd'hui », affiche un R² magnifique et produit un backtest
+brillant et inexécutable. Et 47 valeurs sur des années font un panel
+utilisable en **classement**, là où chaque valeur prise isolément est une
+série trop courte et trop bruitée.
+
+**La métrique est l'IC de Spearman**, jamais le RMSE — on juge l'ordre
+prédit, pas un cours. **La référence est le score composite** de
+`scoring.py`, sans apprentissage. Sur ce marché, un composite simple bat
+très souvent un modèle appris : s'il gagne encore ici, c'est lui qui part
+en production et le module de prédiction n'est qu'une vérification
+coûteuse. L'app le dit explicitement quand c'est le cas.
+
+Ordres de grandeur : un IC de 0,02 à 0,05 est exploitable, 0,10 excellent.
+Au-delà de 0,30, cherchez la fuite avant d'y croire.
+
+Deux fuites sont fermées et testées : la validation est glissante — jamais
+de découpe aléatoire, qui entraînerait sur mardi pour prédire lundi — et
+les dates dont l'étiquette déborde sur la période de test sont **purgées**.
+À trois mois d'horizon, cela fait soixante dates retirées avant chaque
+période.
+
+Le premier échantillon exige environ quinze mois de cotation : un an pour
+que le momentum existe, trois mois de plus pour que la première étiquette
+soit connue.
+
 ### Backtest
 
 ```bash
@@ -221,13 +259,20 @@ données du projet. Ils accompagnent chaque résultat affiché :
 pytest -q                     # ou : python tests/test_brvm_org.py
 ```
 
-Trente-neuf tests, tous hors ligne.
+Quarante-sept tests, tous hors ligne.
 
 `test_brvm_org.py` travaille sur les captures réelles de `tests/donnees/`,
 y compris les pages pathologiques : la 404 habillée du thème complet, la
 vue en fiches sans symboles, la vue sectorielle qui se réclame d'un autre
 secteur. Un test qui dépend du réseau échoue pour des raisons étrangères au
 code qu'il vérifie.
+
+`test_prediction.py` pose au module les deux questions opposées qui le
+jugent : sur du bruit pur il ne doit **rien** trouver — un modèle qui bat
+la référence sur une marche aléatoire a une fuite, et cette fuite le fera
+briller en validation puis perdre de l'argent ; sur un signal planté à la
+main il doit le trouver — un modèle qui ne trouve jamais rien est honnête
+et inutile.
 
 `test_analyse.py` travaille sur des séries fabriquées, faute d'historique :
 la base ne contient qu'une séance. Ces tests ne disent pas que la stratégie
@@ -241,13 +286,33 @@ donne un vide et non un nombre.
 
 MIT — voir [LICENSE](LICENSE).
 
-## Ce qui manque
+## Modèles sectoriels : ce qu'il faudrait, et ce qui manque
 
-**Des données.** Le moteur de backtest est écrit et vérifié, mais la base
-contient une séance : `brvm backtester` refuse de conclure et dit combien
-il lui manque. Tant que la série ne s'est pas accumulée — quelques mois
-pour une première idée, des années pour une conclusion — les pondérations
-du scoring restent un parti pris et non un résultat.
+Le modèle actuel est **transversal et unique** : les mêmes traits pour les
+47 valeurs. C'est le bon point de départ, mais les secteurs de la BRVM
+n'obéissent pas aux mêmes moteurs, et chacun appellerait un traitement
+propre. Aucun n'est implémenté, faute des données correspondantes — que le
+scraper ne collecte pas.
+
+| Secteur | Approche adaptée | Données manquantes |
+|---|---|---|
+| Télécommunications (Sonatel, Orange CI, Onatel) | Retour à la moyenne sur le rendement du dividende (Ornstein-Uhlenbeck) + calendrier des annonces. Le ML n'apporte rien : revenus stables, logique de rendement | historique des dividendes, calendrier des annonces |
+| Consommation de Base / agro (SAPH, SOGB, Palmci, Sucrivoire) | ARIMAX ou VAR à variables exogènes retardées de 1 à 3 mois — le temps que la marge passe dans les résultats publiés. **C'est là que le pouvoir prédictif est le meilleur** | cours du caoutchouc (TSR20, RSS3), huile de palme (CPO), sucre, parité EUR/USD |
+| Services Financiers (16 valeurs) | Le secteur le plus profond, donc le seul assez large pour un modèle transversal de fondamentaux | ROE, P/B, taux de distribution, croissance du crédit, taux directeur BCEAO, coût du risque |
+| Services Publics (CIE, SODECI) | Retour à la moyenne sur le rendement, point. Tarifs régulés, volatilité quasi obligataire — un modèle complexe ne ferait que surajuster | historique des dividendes |
+| Industriels, Consommation Discrétionnaire, Énergie | **Ne pas chercher à prédire.** Trop illiquides, mouvements dictés par les annonces. Filtre de liquidité et écran de valorisation | flux d'annonces émetteurs |
+
+Le préalable commun est un second scraper : dividendes et fondamentaux
+depuis les rapports des sociétés cotées, et une source externe pour les
+commodités et les taux. Rien de cela n'existe aujourd'hui.
+
+## Ce qui manque aussi
+
+**Des données de marché.** Le moteur de backtest et celui de prédiction
+sont écrits et vérifiés, mais la base contient une séance : les deux
+refusent de conclure et disent combien il leur manque. Tant que la série ne
+s'est pas accumulée — quinze mois avant la première prévision calculable —
+les pondérations du scoring restent un parti pris et non un résultat.
 
 **Une validation en conditions réelles.** Tout a été vérifié contre des
 captures ; le premier `brvm ingerer` face au site vivant reste à faire. Les
