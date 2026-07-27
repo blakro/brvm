@@ -17,11 +17,20 @@ travers, une date supposée quand la page n'en donne pas.
 
 from __future__ import annotations
 
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 RACINE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(RACINE / "src"))
+
+# Base jetable, AVANT d'importer le module : deux tests appellent
+# `ingerer_jour()`, qui écrit pour de bon. Sans cette redirection ils
+# rempliraient la base du projet de la séance du témoin, datée de 2026.
+os.environ.setdefault(
+    "BRVM_BASE", str(Path(tempfile.gettempdir()) / "brvm_tests.db")
+)
 
 from brvm.ingestion import brvm_org  # noqa: E402
 

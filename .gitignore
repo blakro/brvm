@@ -4,10 +4,19 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 
-# Environnements virtuels
+# Environnements virtuels et artefacts d'installation
 .venv/
 venv/
+*.egg-info/
+build/
+dist/
 
-# Base locale et sorties d'ingestion — reconstructibles, jamais versionnées.
+# Base locale produite par l'ingestion — reconstructible, jamais versionnée.
+# Les fichiers -wal et -shm accompagnent le mode WAL de SQLite.
 *.db
+*.db-wal
+*.db-shm
 *.sqlite3
+
+# Configuration propre à un poste ; voir config.exemple.toml
+config.toml

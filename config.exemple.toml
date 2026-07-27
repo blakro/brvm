@@ -1,0 +1,21 @@
+# Copiez ce fichier en `config.toml` pour modifier un réglage.
+# Tout est facultatif : chaque clé absente reprend le défaut de
+# src/brvm/config.py, et un config.toml absent est un cas normal.
+
+[ingestion]
+# Identifiez-vous : si le scraping gêne brvm.org, autant qu'ils sachent
+# qui appeler plutôt que de bloquer une plage d'adresses.
+user_agent = "brvm-conseil/0.1 (+https://github.com/blakro/brvm)"
+
+# Politesse entre deux requêtes, en secondes.
+delai_entre_requetes_s = 1.5
+
+# Avant cette heure, `ingerer` refuse d'écrire une séance du jour : la
+# colonne « Cours Clôture » de brvm.org porte alors le dernier cours
+# traité, pas la clôture. Enregistrer ce provisoire le figerait dans une
+# série que rien ne viendrait corriger.
+heure_cloture_seance = "15:00"
+
+[base]
+# Relatif à la racine du dépôt, ou absolu.
+chemin = "data/brvm.db"
