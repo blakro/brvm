@@ -54,6 +54,40 @@ SCHEMAS: dict[str, str] = {
             secteur TEXT
         )
     """,
+    "dividendes": """
+        CREATE TABLE IF NOT EXISTS dividendes (
+            ticker           TEXT NOT NULL,
+            date_detachement TEXT NOT NULL,
+            montant          REAL NOT NULL,
+            exercice         TEXT,
+            PRIMARY KEY (ticker, date_detachement)
+        )
+    """,
+    # FORMAT LONG, ET NON UNE COLONNE PAR INDICATEUR. On ne sait pas encore
+    # quels fondamentaux les rapports des sociétés cotées publient, ni sous
+    # quel intitulé, ni lesquels toutes publient. Une table large obligerait
+    # à migrer le schéma à chaque découverte et laisserait des colonnes
+    # vides pour les sociétés qui n'en publient qu'une partie.
+    "fondamentaux": """
+        CREATE TABLE IF NOT EXISTS fondamentaux (
+            ticker     TEXT NOT NULL,
+            date       TEXT NOT NULL,
+            indicateur TEXT NOT NULL,
+            valeur     REAL,
+            PRIMARY KEY (ticker, date, indicateur)
+        )
+    """,
+    # Séries hors BRVM : caoutchouc TSR20, huile de palme, sucre, EUR/USD,
+    # taux directeur BCEAO. Même format long, même raison — et parce que
+    # chaque source a son propre calendrier de publication.
+    "exogenes": """
+        CREATE TABLE IF NOT EXISTS exogenes (
+            date   TEXT NOT NULL,
+            serie  TEXT NOT NULL,
+            valeur REAL,
+            PRIMARY KEY (date, serie)
+        )
+    """,
     "journal_ingestion": """
         CREATE TABLE IF NOT EXISTS journal_ingestion (
             horodatage TEXT NOT NULL,

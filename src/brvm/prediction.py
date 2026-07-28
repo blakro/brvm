@@ -64,7 +64,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
-from . import features
+from . import exogene, features
 from .config import charger
 
 # Traits utilisés. Volontairement peu nombreux et déjà éprouvés ailleurs
@@ -89,6 +89,33 @@ def _rangs(colonne: pd.Series) -> pd.Series:
     rang du jour, lui, garde le même sens partout.
     """
     return colonne.rank(pct=True)
+
+
+def _joindre_exogenes(
+    echantillon: pd.DataFrame,
+    exogenes: pd.DataFrame | None,
+    referentiel: pd.DataFrame | None,
+    reglages: dict,
+) -> tuple[pd.DataFrame, list[str]]:
+    """Ajoute les colonnes exogènes × secteur, si elles existent.
+
+    Renvoie l'échantillon et la liste des traits effectivement ajoutés — le
+    modèle doit savoir sur quoi il apprend, et l'absence de séries en base
+    est le cas normal aujourd'hui.
+    """
+    if exogenes is None or exogenes.empty or referentiel is None:
+        return echantillon, []
+
+    dates = sorted(echantillon["date"].unique())
+    colonnes = exogene.traits(exogenes, dates, referentiel, reglages)
+    if colonnes.empty:
+        return echantillon, []
+
+    ajoutes = [c for c in colonnes.columns if c.startswith("exo_")]
+    fusion = echantillon.merge(colonnes, on=["date", "ticker"], how="left")
+    for colonne in ajoutes:
+        fusion[colonne] = fusion[colonne].fillna(0.0)
+    return fusion, ajoutes
 
 
 def construire_echantillon(
@@ -185,7 +212,12 @@ def _modele():
     )
 
 
-def valider(cours: pd.DataFrame, reglages: dict | None = None) -> dict:
+def valider(
+    cours: pd.DataFrame,
+    reglages: dict | None = None,
+    exogenes: pd.DataFrame | None = None,
+    referentiel: pd.DataFrame | None = None,
+) -> dict:
     """Validation glissante, purgée. Renvoie mesures et détail par période."""
     conf = reglages or charger()
     pred = conf.get("prediction", {})
@@ -195,8 +227,11 @@ def valider(cours: pd.DataFrame, reglages: dict | None = None) -> dict:
     minimum = int(pred.get("lignes_minimum", 400))
 
     echantillon = construire_echantillon(cours, conf)
+    echantillon, exo = _joindre_exogenes(echantillon, exogenes, referentiel, conf)
+    traits = TRAITS + exo
     vide = {
         "periodes": pd.DataFrame(),
+        "traits": traits,
         "lignes": len(echantillon),
         "lignes_minimum": minimum,
         "horizon": horizon,
@@ -229,9 +264,9 @@ def valider(cours: pd.DataFrame, reglages: dict | None = None) -> dict:
             continue
 
         modele = _modele()
-        modele.fit(train[TRAITS], train["cible"])
+        modele.fit(train[traits], train["cible"])
         test = test.copy()
-        test["score_modele"] = modele.predict_proba(test[TRAITS])[:, 1]
+        test["score_modele"] = modele.predict_proba(test[traits])[:, 1]
         test["score_composite"] = _score_composite(test, poids)
 
         # L'IC se calcule séance par séance puis se moyenne : agrégé d'un
@@ -265,6 +300,7 @@ def valider(cours: pd.DataFrame, reglages: dict | None = None) -> dict:
     ic_composite = float(periodes["ic_composite"].mean())
     return {
         "periodes": periodes,
+        "traits": traits,
         "lignes": len(echantillon),
         "horizon": horizon,
         "ic": ic,
@@ -275,7 +311,12 @@ def valider(cours: pd.DataFrame, reglages: dict | None = None) -> dict:
     }
 
 
-def predire(cours: pd.DataFrame, reglages: dict | None = None) -> pd.DataFrame:
+def predire(
+    cours: pd.DataFrame,
+    reglages: dict | None = None,
+    exogenes: pd.DataFrame | None = None,
+    referentiel: pd.DataFrame | None = None,
+) -> pd.DataFrame:
     """Probabilité de battre la médiane, par valeur, à la dernière date.
 
     Entraîné sur tout l'historique disponible. Renvoie un tableau vide si
@@ -287,11 +328,13 @@ def predire(cours: pd.DataFrame, reglages: dict | None = None) -> pd.DataFrame:
     minimum = int(pred.get("lignes_minimum", 400))
 
     echantillon = construire_echantillon(cours, conf)
+    echantillon, exo = _joindre_exogenes(echantillon, exogenes, referentiel, conf)
+    traits_utiles = TRAITS + exo
     if len(echantillon) < minimum or echantillon["cible"].nunique() < 2:
         return pd.DataFrame(columns=["ticker", "probabilite"])
 
     modele = _modele()
-    modele.fit(echantillon[TRAITS], echantillon["cible"])
+    modele.fit(echantillon[traits_utiles], echantillon["cible"])
 
     traits = features.calculer(cours, conf).dropna(
         subset=["momentum", "tendance", "volatilite"]
@@ -300,9 +343,15 @@ def predire(cours: pd.DataFrame, reglages: dict | None = None) -> pd.DataFrame:
         return pd.DataFrame(columns=["ticker", "probabilite"])
 
     courant = pd.DataFrame({t: _rangs(traits[t]) for t in TRAITS})
+    # Les colonnes exogènes de la date courante : mêmes noms, valeur du
+    # jour, zéro hors du secteur visé.
+    for colonne in exo:
+        derniere = echantillon[echantillon["date"] == echantillon["date"].max()]
+        par_ticker = derniere.set_index("ticker")[colonne]
+        courant[colonne] = courant.index.map(par_ticker).fillna(0.0)
     resultat = pd.DataFrame({
         "ticker": traits.index,
-        "probabilite": modele.predict_proba(courant[TRAITS])[:, 1],
+        "probabilite": modele.predict_proba(courant[traits_utiles])[:, 1],
     })
     return resultat.sort_values("probabilite", ascending=False).reset_index(drop=True)
 

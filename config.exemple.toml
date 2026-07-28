@@ -19,3 +19,27 @@ heure_cloture_seance = "15:00"
 [base]
 # Relatif à la racine du dépôt, ou absolu.
 chemin = "data/brvm.db"
+
+[exogenes]
+# Variation mesurée sur ~3 mois, décalée de ~2 mois : une hausse du
+# caoutchouc n'atteint pas le cours de la SAPH le lendemain, elle passe
+# d'abord dans les marges puis dans des résultats trimestriels.
+fenetre_variation = 60
+retard = 40
+
+# Série → secteur qu'elle concerne. Les noms sont libres : ce sont ceux
+# employés dans le CSV chargé par « brvm importer-exogenes ».
+[exogenes.correspondance]
+caoutchouc_tsr20 = "Consommation de Base"
+huile_palme_cpo  = "Consommation de Base"
+sucre            = "Consommation de Base"
+eur_usd          = "Consommation de Base"
+taux_bceao       = "Services Financiers"
+
+[prediction]
+# Horizon en séances (~3 mois). Pas journalier : la BRVM cote par fixing
+# avec une limite de ±7,5 %, et un modèle entraîné sur le lendemain apprend
+# « demain ≈ aujourd'hui ».
+horizon = 60
+decoupes = 4
+lignes_minimum = 400

@@ -90,6 +90,30 @@ DEFAUTS: dict[str, dict] = {
         # En deçà, on ne valide ni ne prédit.
         "lignes_minimum": 400,
     },
+    "exogenes": {
+        # Variation mesurée sur ~3 mois, décalée de ~2 mois.
+        #
+        # Le décalage n'est pas un réglage fin : une hausse du caoutchouc
+        # n'atteint pas le cours de la SAPH le lendemain, elle passe
+        # d'abord dans les marges puis dans des résultats publiés
+        # trimestriellement. Un à trois mois est l'hypothèse de travail, à
+        # revoir quand il y aura de quoi la tester.
+        "fenetre_variation": 60,
+        "retard": 40,
+        # Série → secteur qu'elle concerne. Une série absente de la base est
+        # simplement ignorée ; ce tableau décrit l'intention, pas l'état.
+        #
+        # Les noms de séries sont libres : ce sont ceux qu'on emploiera en
+        # important les CSV. Aucune source n'est joignable depuis ce projet,
+        # les données doivent donc être fournies (voir README).
+        "correspondance": {
+            "caoutchouc_tsr20": "Consommation de Base",
+            "huile_palme_cpo": "Consommation de Base",
+            "sucre": "Consommation de Base",
+            "eur_usd": "Consommation de Base",
+            "taux_bceao": "Services Financiers",
+        },
+    },
     "backtest": {
         "positions": 10,
         # ~un trimestre entre deux rééquilibrages.

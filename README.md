@@ -48,6 +48,10 @@ python -m brvm ingerer         # enregistre la séance publiée
 python -m brvm referentiel     # met à jour ticker / nom / secteur
 python -m brvm noter           # classe les valeurs
 python -m brvm predire         # probabilité de surperformance à 3 mois
+python -m brvm rendement       # retour à la moyenne du rendement du dividende
+python -m brvm importer-dividendes fichier.csv
+python -m brvm importer-exogenes   fichier.csv
+python -m brvm importer-fondamentaux fichier.csv
 python -m brvm backtester      # rejoue le classement dans le temps
 python -m brvm exporter        # base → CSV versionnés
 python -m brvm importer        # CSV versionnés → base
@@ -259,7 +263,7 @@ données du projet. Ils accompagnent chaque résultat affiché :
 pytest -q                     # ou : python tests/test_brvm_org.py
 ```
 
-Quarante-sept tests, tous hors ligne.
+Cinquante-sept tests, tous hors ligne.
 
 `test_brvm_org.py` travaille sur les captures réelles de `tests/donnees/`,
 y compris les pages pathologiques : la 404 habillée du thème complet, la
@@ -286,13 +290,64 @@ donne un vide et non un nombre.
 
 MIT — voir [LICENSE](LICENSE).
 
-## Modèles sectoriels : ce qu'il faudrait, et ce qui manque
+## Modèles sectoriels
 
-Le modèle actuel est **transversal et unique** : les mêmes traits pour les
-47 valeurs. C'est le bon point de départ, mais les secteurs de la BRVM
-n'obéissent pas aux mêmes moteurs, et chacun appellerait un traitement
-propre. Aucun n'est implémenté, faute des données correspondantes — que le
-scraper ne collecte pas.
+Les secteurs de la BRVM n'obéissent pas aux mêmes moteurs. Deux traitements
+sont désormais implémentés ; les autres attendent des données.
+
+### Rendement du dividende — télécoms et services publics
+
+```bash
+python -m brvm rendement
+```
+
+Sonatel, Orange CI, Onatel, la CIE, la SODECI : revenus réguliers, tarifs
+régulés ou quasi, logique d'obligation plus que d'action. Le cours y oscille
+autour d'un rendement d'équilibre, estimé par un processus
+d'Ornstein-Uhlenbeck. Pas de ML : cinq valeurs ne font pas un échantillon
+d'apprentissage.
+
+**La demi-vie est le garde-fou.** Un retour à la moyenne dont la demi-vie
+dépasse l'horizon de détention ne dit rien d'exploitable — il aura lieu
+après qu'on aura vendu. C'est ce contrôle qui distingue le modèle d'un
+simple « ce titre a beaucoup baissé ».
+
+Et un second contrôle, appris à la dure : **les moindres carrés appliqués à
+une marche aléatoire trouvent presque toujours un retour à la moyenne**.
+Avant correction, ce code en « détectait » un sur 162 marches aléatoires sur
+200 — le biais de Dickey-Fuller. La significativité du coefficient est donc
+testée, ce qui ramène le taux à 3,5 %. Un test verrouille cette proportion.
+
+### Variables exogènes — agro-industrie
+
+Le cours du caoutchouc à une date donnée est **le même pour les 47
+sociétés** : versé tel quel dans un modèle de classement, il a une variance
+nulle à l'intérieur d'une séance et ne peut distinguer aucune valeur. Un
+modèle l'ingérerait sans broncher et l'IC ne bougerait pas — on conclurait à
+tort que les commodités n'expliquent rien.
+
+La variable utile est son produit avec l'appartenance sectorielle :
+`caoutchouc(t-L) × 1[valeur en Consommation de Base]`. Celle-là varie bien
+entre valeurs d'une même séance. Le retard vaut deux mois par défaut : une
+hausse du caoutchouc passe d'abord dans les marges, puis dans des résultats
+publiés trimestriellement.
+
+Les séries sont alignées sur le calendrier de la cote par **report de la
+dernière valeur connue, jamais par interpolation** — interpoler entre deux
+publications mensuelles fabriquerait des valeurs dépendant de la
+publication suivante, donc du futur.
+
+Aucune source de commodités n'étant joignable depuis ce projet, les séries
+se chargent à la main :
+
+```bash
+python -m brvm importer-exogenes commodites.csv   # date,serie,valeur
+```
+
+Les noms de séries attendus sont configurables (`[exogenes.correspondance]`
+dans `config.exemple.toml`).
+
+### Ce qui reste à faire, et la donnée que chacun réclame
 
 | Secteur | Approche adaptée | Données manquantes |
 |---|---|---|
@@ -302,9 +357,11 @@ scraper ne collecte pas.
 | Services Publics (CIE, SODECI) | Retour à la moyenne sur le rendement, point. Tarifs régulés, volatilité quasi obligataire — un modèle complexe ne ferait que surajuster | historique des dividendes |
 | Industriels, Consommation Discrétionnaire, Énergie | **Ne pas chercher à prédire.** Trop illiquides, mouvements dictés par les annonces. Filtre de liquidité et écran de valorisation | flux d'annonces émetteurs |
 
-Le préalable commun est un second scraper : dividendes et fondamentaux
-depuis les rapports des sociétés cotées, et une source externe pour les
-commodités et les taux. Rien de cela n'existe aujourd'hui.
+Le préalable commun est la **donnée**, pas le code : les tables
+`dividendes`, `fondamentaux` et `exogenes` existent, et `brvm
+importer-*` les alimente depuis des CSV. Ce qui manque est un scraper des
+rapports des sociétés cotées, et une source pour les commodités et les
+taux — aucune n'est joignable depuis l'environnement de ce projet.
 
 ## Ce qui manque aussi
 

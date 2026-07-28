@@ -19,8 +19,11 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
-from . import backtest, db, features, prediction, scoring
+import pandas as pd
+
+from . import backtest, db, dividende, exogene, features, prediction, scoring
 from .ingestion import brvm_org
 
 
@@ -112,6 +115,56 @@ def _predire(args) -> int:
     return 0
 
 
+def _importer_csv(args) -> int:
+    """Charge un CSV externe dans une table du schéma.
+
+    Les dividendes, les fondamentaux et les séries de commodités ne sont
+    scrapés par aucun module du projet : aucune source ne l'autorise ou ne
+    l'expose simplement. Ce chemin permet de les fournir à la main, ce qui
+    rend les modèles utilisables sans attendre un scraper.
+    """
+    chemin = Path(args.fichier)
+    if not chemin.exists():
+        print(f"fichier introuvable : {chemin}", file=sys.stderr)
+        return 1
+
+    donnees = pd.read_csv(chemin, dtype=str)
+    attendues = db._colonnes_declarees(args.table)
+    manquantes = [c for c in attendues if c not in donnees.columns]
+    if manquantes:
+        print(f"colonnes manquantes dans {chemin.name} : {manquantes}\n"
+              f"attendu : {attendues}", file=sys.stderr)
+        return 1
+
+    for colonne in ("montant", "valeur"):
+        if colonne in donnees.columns:
+            donnees[colonne] = pd.to_numeric(donnees[colonne], errors="coerce")
+
+    lignes = db.enregistrer(donnees, args.table)
+    print(f"{lignes} lignes chargées dans « {args.table} »")
+    if args.table == "exogenes":
+        print(exogene.couverture(db.lire("exogenes")).to_string(index=False))
+    return 0
+
+
+def _rendement(args) -> int:
+    cours = db.lire("cours")
+    dividendes = db.lire("dividendes")
+    if cours.empty:
+        print("aucun cours en base", file=sys.stderr)
+        return 1
+
+    referentiel = db.lire("referentiel")
+    secteurs = args.secteurs or ["Télécommunications", "Services Publics"]
+    tickers = None
+    if not referentiel.empty:
+        tickers = list(referentiel[referentiel["secteur"].isin(secteurs)]["ticker"])
+
+    tableau = dividende.signal(cours, dividendes, tickers)
+    print(dividende.expliquer(tableau))
+    return 0 if not tableau.empty else 1
+
+
 def _exporter(args) -> int:
     for table in ("cours", "referentiel"):
         lignes = db.exporter(table)
@@ -182,6 +235,23 @@ def construire_analyseur() -> argparse.ArgumentParser:
     predire.add_argument("-n", "--nombre", type=int, default=15,
                          help="nombre de lignes affichées (15 par défaut)")
     predire.set_defaults(fonction=_predire)
+
+    for table, aide in (
+        ("dividendes", "détachements : ticker, date_detachement, montant, exercice"),
+        ("fondamentaux", "ticker, date, indicateur, valeur"),
+        ("exogenes", "séries externes : date, serie, valeur"),
+    ):
+        sous = commandes.add_parser(f"importer-{table}", help=f"CSV → {aide}")
+        sous.add_argument("fichier", help="chemin du CSV à charger")
+        sous.set_defaults(fonction=_importer_csv, table=table)
+
+    rendement = commandes.add_parser(
+        "rendement", help="retour à la moyenne du rendement du dividende"
+    )
+    rendement.add_argument("--secteurs", nargs="*", default=None,
+                           help="secteurs analysés (télécoms et services "
+                                "publics par défaut)")
+    rendement.set_defaults(fonction=_rendement)
 
     exporter = commandes.add_parser(
         "exporter", help="base → CSV versionnés de data/"
