@@ -398,10 +398,21 @@ def temoin(table: pd.DataFrame) -> str:
 # strict nécessaire : tout ce qui précède se teste sur réponse enregistrée.
 
 def _session(session: requests.Session | None = None) -> requests.Session:
+    """Session partagée, avec un agent qui dit qui appelle.
+
+    La clé de configuration est `user_agent`, la même que pour brvm.org —
+    j'ai d'abord lu `agent`, qui n'existe pas : la valeur de repli
+    s'appliquait donc toujours, et le réglage du projet ne servait à rien.
+
+    L'agent reste identifiable plutôt que déguisé en navigateur. Si
+    sikafinance refuse ce choix, `sonder` le dira et le réglage se change
+    dans la configuration — mais c'est une décision à prendre en connaissance
+    de cause, pas un défaut à contourner par défaut.
+    """
     s = session or requests.Session()
     conf = charger().get("ingestion", {})
     s.headers.update({
-        "User-Agent": conf.get("agent", "brvm/0.1"),
+        "User-Agent": conf.get("user_agent", "brvm/0.1"),
         "Accept": "*/*",
         "Origin": "https://www.sikafinance.com",
     })
@@ -421,6 +432,14 @@ def _appeler(symbole_site: str, debut: str, fin: str,
         headers={"Referer": PAGE.format(symbole=symbole_site)},
         timeout=int(conf.get("delai_secondes", 30)),
     )
+    if reponse.status_code in (403, 429):
+        raise SourceIllisible(
+            f"{reponse.status_code} sur l'API pour {symbole_site} — le "
+            f"service refuse l'appel. Causes probables, dans l'ordre : "
+            f"l'agent « {s.headers.get('User-Agent')} » (réglable par "
+            "[ingestion] user_agent), un rythme trop soutenu (--pause), "
+            "ou un filtrage réseau en amont."
+        )
     reponse.raise_for_status()
     return reponse.json()
 
