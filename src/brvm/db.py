@@ -215,6 +215,11 @@ def lire(table: str, chemin: str | Path | None = None) -> pd.DataFrame:
 ARCHIVES = {
     "cours": ("archive_cours", ["date", "ticker"]),
     "referentiel": ("archive_referentiel", ["ticker"]),
+    # Chargés à la main faute de source scrapable, mais versionnés comme le
+    # reste : ce sont des données acquises, pas un cache.
+    "dividendes": ("archive_dividendes", ["ticker", "date_detachement"]),
+    "fondamentaux": ("archive_fondamentaux", ["ticker", "date", "indicateur"]),
+    "exogenes": ("archive_exogenes", ["date", "serie"]),
 }
 
 

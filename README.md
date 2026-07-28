@@ -5,9 +5,29 @@ Ingestion de la cote de la [Bourse Régionale des Valeurs Mobilières](https://w
 
 ## L'application web
 
-Le tableau de bord est le point d'entrée : cote du jour, classement,
-prédiction, backtest, état des données. Il tourne sur **Streamlit Community Cloud**,
-sans rien à installer.
+Le tableau de bord est le point d'entrée. Six onglets — marché, fiche par
+valeur, classement, prédiction, backtest, données — cadrés par un **filtre
+unique** (secteurs, recherche) placé au-dessus : tous se redessinent sur la
+même tranche, le lecteur n'a pas à se demander quel réglage s'applique où.
+Il tourne sur **Streamlit Community Cloud**, sans rien à installer.
+
+Chaque tableau s'exporte en CSV, et chaque graphique a son jumeau
+tabulaire : une infobulle ne doit jamais être le seul accès à une valeur.
+
+### Couleurs
+
+Le mode sombre est une palette **choisie**, pas un inversement automatique :
+l'app lit le thème actif et sélectionne le jeu correspondant, chacun validé
+séparément contre son propre fond.
+
+Hausse et baisse suivent une paire **bleu ↔ rouge** et non le vert/rouge
+boursier habituel — la confusion vert-rouge est le déficit visuel le plus
+répandu. La paire retenue mesure ΔE 21,6 en protanopie là où vert/rouge
+s'effondre, et le signe reste écrit dans les tableaux.
+
+Le texte ne porte jamais la couleur d'une série : l'identité vient de la
+marque colorée posée à côté — un point en bout de courbe — parce qu'une
+teinte claire est illisible en texte sur le fond.
 
 ### Déploiement
 

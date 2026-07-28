@@ -3,15 +3,21 @@
 L'app ne lit que les CSV versionnés du dépôt : pas de base sur le
 conteneur, pas d'écriture, pas d'état. Un hébergeur gratuit redémarre le
 conteneur quand il veut et son disque ne survit pas ; y stocker quoi que ce
-soit donnerait une app qui affiche des données introuvables ailleurs.
+soit donnerait une app qui affiche des données introuvables ailleurs. Les
+données arrivent par l'action `ingestion.yml` ; l'app lit et calcule.
 
-Le pipeline reste l'action GitHub `ingestion.yml` : elle ingère, réécrit
-les CSV et les commite. L'app ne fait que lire et calculer.
-
-Les couleurs suivent une paire divergente bleu ↔ rouge plutôt que le
-vert/rouge boursier habituel : la confusion vert-rouge est le déficit
-visuel le plus répandu, et le signe est de toute façon écrit dans les
-tableaux à côté.
+PARTIS PRIS DE VISUALISATION
+----------------------------
+- Paire divergente bleu ↔ rouge, jamais vert/rouge : la confusion
+  vert-rouge est le déficit visuel le plus répandu. Les deux modes ont été
+  validés au script — séparation en vision déficiente et contraste au fond.
+- Le mode sombre est une palette CHOISIE, pas un inversement automatique :
+  les mêmes teintes, reprises à des pas adaptés à un fond sombre.
+- Le texte ne porte jamais la couleur d'une série. L'identité vient de la
+  marque colorée posée à côté — un point en bout de courbe — parce qu'une
+  teinte claire est illisible en texte sur le fond.
+- Un seul rang de filtres, au-dessus des onglets, cadre tout ce qu'il
+  concerne : le lecteur n'a pas à se demander quel réglage s'applique où.
 """
 
 from __future__ import annotations
@@ -20,165 +26,213 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from brvm import backtest, db, features, prediction, scoring
+from brvm import backtest, db, dividende, features, prediction, scoring
 from brvm.config import DEFAUTS
 from brvm.ingestion import brvm_org
-
-# --- Palette validée (validate_palette.js, mode clair) --------------------
-HAUSSE = "#2a78d6"      # bleu — pôle positif de la paire divergente
-BAISSE = "#e34948"      # rouge — pôle négatif
-NEUTRE = "#f0efec"
-SERIE_1 = "#2a78d6"
-SERIE_2 = "#eb6834"     # orange, slot 2 : ΔE 24.7 face au bleu en protanopie
-ENCRE = "#0b0b0b"
-ENCRE_DOUCE = "#52514e"
-GRILLE = "#e1e0d9"
-SURFACE = "#fcfcfb"
 
 st.set_page_config(page_title="BRVM", page_icon="📈", layout="wide")
 
 
+# --- Palette --------------------------------------------------------------
+
+def _sombre() -> bool:
+    """Thème actif côté navigateur, si Streamlit sait le dire."""
+    try:
+        return getattr(st.context.theme, "type", "light") == "dark"
+    except Exception:  # noqa: BLE001 — hors runtime, ou version ancienne
+        return False
+
+
+SOMBRE = _sombre()
+
+# Validées par scripts/validate_palette.js dans les deux modes : séparation
+# en protanopie ΔE 21,6 (clair) / 19,2 (sombre) pour la paire divergente,
+# 24,7 / 26,8 pour les deux séries du backtest.
+if SOMBRE:
+    HAUSSE, BAISSE = "#3987e5", "#e66767"
+    SERIE_1, SERIE_2 = "#3987e5", "#d95926"
+    ENCRE, ENCRE_DOUCE = "#ffffff", "#c3c2b7"
+    GRILLE, AXE, SURFACE = "#2c2c2a", "#383835", "#1a1a19"
+else:
+    HAUSSE, BAISSE = "#2a78d6", "#e34948"
+    SERIE_1, SERIE_2 = "#2a78d6", "#eb6834"
+    ENCRE, ENCRE_DOUCE = "#0b0b0b", "#52514e"
+    GRILLE, AXE, SURFACE = "#e1e0d9", "#c3c2b7", "#fcfcfb"
+
+POLICE = 'system-ui, -apple-system, "Segoe UI", sans-serif'
+
+
 @alt.theme.register("brvm", enable=True)
 def _theme() -> alt.theme.ThemeConfig:
-    """Chrome discret : la grille et les axes ne doivent pas concurrencer
-    les marques qui portent la donnée."""
+    """Chrome discret : la grille et les axes ne concurrencent pas les
+    marques qui portent la donnée. Traits pleins, jamais pointillés — un
+    pointillé se lit comme une projection ou un seuil."""
     return alt.theme.ThemeConfig({
         "background": SURFACE,
         "view": {"stroke": "transparent"},
         "axis": {
             "labelColor": ENCRE_DOUCE, "titleColor": ENCRE_DOUCE,
-            "gridColor": GRILLE, "domainColor": "#c3c2b7",
-            "tickColor": "#c3c2b7", "labelFontSize": 12, "titleFontSize": 12,
+            "gridColor": GRILLE, "domainColor": AXE, "tickColor": AXE,
+            "labelFontSize": 12, "titleFontSize": 12,
         },
         "legend": {"labelColor": ENCRE, "titleColor": ENCRE_DOUCE},
-        "font": 'system-ui, -apple-system, "Segoe UI", sans-serif',
+        "font": POLICE,
     })
 
 
+def _telecharger(donnees: pd.DataFrame, nom: str, cle: str) -> None:
+    """Bouton d'export : un tableau à l'écran doit pouvoir en sortir."""
+    st.download_button(
+        "Télécharger en CSV", donnees.to_csv(index=False).encode("utf-8"),
+        file_name=nom, mime="text/csv", key=cle,
+    )
+
+
+# --- Données --------------------------------------------------------------
+
 @st.cache_data(ttl=900)
 def charger_archive():
-    """CSV versionnés → DataFrames. Relu au plus tous les quarts d'heure.
-
-    La cote ne bouge qu'une fois par jour ; relire le fichier à chaque
-    interaction ne servirait qu'à ralentir les curseurs.
-    """
-    return db.charger_archive("cours"), db.charger_archive("referentiel")
+    return (db.charger_archive("cours"), db.charger_archive("referentiel"),
+            db.charger_archive("dividendes"))
 
 
 @st.cache_data(ttl=900, show_spinner="Lecture de brvm.org…")
 def lire_en_direct():
-    """Séance publiée, lue sur le site. (cote, erreur) — l'un des deux vaut None.
+    """Séance publiée, lue sur le site. (cote, erreur) — l'un vaut None.
 
     L'app ne doit pas dépendre de l'action planifiée pour montrer quelque
-    chose : celle-ci peut n'avoir jamais tourné, ou ne pas atteindre le site
-    depuis les adresses de GitHub. Quand elle a du retard, l'app va chercher
-    la séance elle-même.
-
-    Attention : hors clôture, la colonne « Cours Clôture » de brvm.org porte
-    le dernier cours traité. C'est bon à afficher, jamais à archiver — d'où
-    l'étiquette « provisoire » et l'absence totale d'écriture ici.
+    chose. Affiché seulement, jamais archivé : hors clôture, la colonne
+    « Cours Clôture » du site porte le dernier cours traité.
     """
     try:
         return brvm_org.lire_cote(), None
-    except Exception as erreur:  # noqa: BLE001 — le motif est l'information utile
-        # Le type suffit à orienter (réseau, page illisible, refus) ; la pile
-        # complète d'une erreur réseau fait trois lignes de bruit à l'écran.
-        detail = str(erreur).split("\n")[0][:110]
+    except Exception as erreur:  # noqa: BLE001
+        detail = str(erreur).splitlines()[0][:110]
         return None, f"{type(erreur).__name__} — {detail}"
 
 
-cours, referentiel = charger_archive()
+cours, referentiel, dividendes = charger_archive()
 if referentiel.empty:
     referentiel = brvm_org.referentiel_amorce()
 
 st.title("Bourse Régionale des Valeurs Mobilières")
 
-# Un archive absente ne doit pas donner une page vide : on tente le site.
 direct, echec = (None, None)
 if cours.empty:
     direct, echec = lire_en_direct()
 
-barre_1, barre_2 = st.columns([3, 1])
-with barre_2:
+entete_1, entete_2 = st.columns([3, 1])
+with entete_2:
     if st.button("Actualiser depuis brvm.org", width="stretch"):
         lire_en_direct.clear()
         direct, echec = lire_en_direct()
 
 if direct is not None and not direct.empty:
-    heure = direct.attrs.get("heure_mise_a_jour")
-    cours = (
-        pd.concat([cours, direct], ignore_index=True)
-        .drop_duplicates(subset=["date", "ticker"], keep="last")
-    )
-    barre_1.success(
-        f"Séance du {direct['date'].iloc[0]} lue à l'instant sur brvm.org "
-        f"(mise à jour du site : {heure or 'inconnue'}). "
+    cours = (pd.concat([cours, direct], ignore_index=True)
+             .drop_duplicates(subset=["date", "ticker"], keep="last"))
+    entete_1.success(
+        f"Séance du {direct['date'].iloc[0]} lue à l'instant "
+        f"(site mis à jour à {direct.attrs.get('heure_mise_a_jour') or '?'}). "
         "Affichée seulement — l'archive du dépôt n'est pas modifiée."
     )
 
 if cours.empty:
     st.warning(
         "**Aucune donnée.** L'archive `data/cours.csv` est vide et brvm.org "
-        "n'a pas répondu"
-        + (f" — {echec}." if echec else ".")
+        "n'a pas répondu" + (f" — {echec}." if echec else ".")
         + " L'archive se remplit quand l'action `ingestion.yml` tourne, "
-        "chaque jour ouvré à 16 h UTC ; les workflows planifiés ne "
-        "s'exécutent que sur la branche par défaut du dépôt."
+        "chaque jour ouvré à 16 h UTC."
     )
     st.stop()
 
-seances = cours["date"].nunique()
-derniere = cours["date"].max()
-
-haut_1, haut_2, haut_3 = st.columns(3)
-haut_1.metric("Dernière séance", derniere)
-haut_2.metric("Séances en base", f"{seances}")
-haut_3.metric("Sociétés suivies", f"{cours['ticker'].nunique()}")
-
-if echec and not cours.empty:
+if echec:
     st.caption(f"brvm.org injoignable ({echec}) — affichage de l'archive.")
 
-onglets = st.tabs(["Cote du jour", "Classement", "Prédiction", "Backtest",
-                   "Données"])
+seances = cours["date"].nunique()
+derniere = cours["date"].max()
+dates_triees = sorted(cours["date"].unique())
 
 
-# --- Cote du jour ---------------------------------------------------------
-with onglets[0]:
-    jour = cours[cours["date"] == derniere].copy()
-    veille = cours["date"].sort_values().unique()
-    if len(veille) >= 2:
-        precedent = cours[cours["date"] == veille[-2]].set_index("ticker")["cloture"]
-        jour["variation"] = jour["ticker"].map(precedent)
-        jour["variation"] = jour["cloture"] / jour["variation"] - 1
+# --- Filtre unique, au-dessus de tout ce qu'il cadre ----------------------
+
+secteurs_connus = sorted(referentiel["secteur"].dropna().unique())
+filtre_1, filtre_2 = st.columns([3, 2])
+with filtre_1:
+    secteurs = st.multiselect(
+        "Secteurs", secteurs_connus, default=secteurs_connus,
+        help="Cadre l'ensemble du tableau de bord.",
+    )
+with filtre_2:
+    recherche = st.text_input("Rechercher", placeholder="Symbole ou société")
+
+retenus = (set(referentiel[referentiel["secteur"].isin(secteurs)]["ticker"])
+           if secteurs else set(referentiel["ticker"]))
+if recherche:
+    motif = recherche.strip().lower()
+    retenus &= set(referentiel[
+        referentiel["ticker"].str.lower().str.contains(motif, na=False)
+        | referentiel["nom"].str.lower().str.contains(motif, na=False)
+    ]["ticker"])
+
+cours_filtre = cours[cours["ticker"].isin(retenus)]
+if cours_filtre.empty:
+    st.warning("Aucune valeur ne correspond à ce filtre.")
+    st.stop()
+referentiel_filtre = referentiel[referentiel["ticker"].isin(retenus)]
+
+onglets = st.tabs(["Marché", "Valeur", "Classement", "Prédiction",
+                   "Backtest", "Données"])
+
+
+def _variations(table: pd.DataFrame) -> pd.DataFrame:
+    """Dernière séance, avec la variation face à la précédente."""
+    jour = table[table["date"] == derniere].copy()
+    if len(dates_triees) >= 2:
+        veille = table[table["date"] == dates_triees[-2]].set_index("ticker")["cloture"]
+        jour["variation"] = jour["cloture"] / jour["ticker"].map(veille) - 1
     else:
         jour["variation"] = pd.NA
-
-    jour = jour.merge(referentiel[["ticker", "nom", "secteur"]], on="ticker",
+    return jour.merge(referentiel[["ticker", "nom", "secteur"]], on="ticker",
                       how="left")
 
-    if jour["variation"].notna().any():
+
+# --- Marché ---------------------------------------------------------------
+with onglets[0]:
+    jour = _variations(cours_filtre)
+    connues = jour["variation"].dropna()
+
+    tuiles = st.columns(4)
+    tuiles[0].metric("Séance", derniere)
+    tuiles[1].metric("Variation médiane",
+                     "—" if connues.empty else f"{connues.median():+.2%}")
+    # Largeur du marché : une médiane positive portée par trois valeurs ne
+    # dit pas la même chose qu'une hausse partagée.
+    tuiles[2].metric(
+        "Hausses / baisses",
+        "—" if connues.empty
+        else f"{int((connues > 0).sum())} / {int((connues < 0).sum())}",
+    )
+    tuiles[3].metric("Valeurs affichées", f"{jour['ticker'].nunique()}",
+                     delta=(None if len(retenus) == len(referentiel)
+                            else f"{len(retenus) - len(referentiel)} filtrées"))
+
+    if not connues.empty:
         st.subheader(f"Variation de la séance du {derniere}")
         classees = jour.dropna(subset=["variation"]).sort_values("variation")
-        graphe = (
+        st.altair_chart(
             alt.Chart(classees)
             .mark_bar(cornerRadiusEnd=4, height=14)
             .encode(
-                # Axe en haut : le graphique fait plusieurs écrans de haut,
-                # une échelle reléguée en bas obligerait à faire l'aller-retour
-                # pour lire une barre.
+                # Axe en haut : le graphique fait plusieurs écrans, une
+                # échelle en bas obligerait à l'aller-retour.
                 x=alt.X("variation:Q", title="variation",
                         axis=alt.Axis(format="+.1%", orient="top")),
-                # `labelOverlap=False` : sans cela Vega masque un libellé sur
-                # deux dès que les lignes se resserrent, et la moitié des
-                # barres devient impossible à rattacher à une société.
+                # labelOverlap=False : sinon Vega masque un libellé sur deux
+                # et la moitié des barres devient inidentifiable.
                 y=alt.Y("ticker:N", sort=alt.SortField("variation", "descending"),
                         title=None, axis=alt.Axis(labelOverlap=False)),
-                # Divergent : le signe porte la couleur, et il est aussi
-                # écrit dans l'infobulle et dans le tableau ci-dessous.
-                color=alt.condition(
-                    alt.datum.variation >= 0,
-                    alt.value(HAUSSE), alt.value(BAISSE),
-                ),
+                color=alt.condition(alt.datum.variation >= 0,
+                                    alt.value(HAUSSE), alt.value(BAISSE)),
                 tooltip=[
                     alt.Tooltip("ticker:N", title="Symbole"),
                     alt.Tooltip("nom:N", title="Société"),
@@ -187,26 +241,18 @@ with onglets[0]:
                     alt.Tooltip("secteur:N", title="Secteur"),
                 ],
             )
-            .properties(height=max(280, 22 * len(classees)))
+            .properties(height=max(280, 22 * len(classees))),
+            width="stretch",
         )
-        st.altair_chart(graphe, width="stretch")
     else:
-        st.info(
-            "Une seule séance en base : aucune variation calculable. "
-            "Il en faut deux."
-        )
+        st.info("Une seule séance en base : aucune variation calculable.")
 
-    # La colonne de variation n'est affichée que si elle existe : remplie de
-    # « None » sur toute la hauteur, elle occupe la place d'une donnée en
-    # laissant croire à une valeur nulle plutôt qu'à une valeur incalculable.
     colonnes = ["ticker", "nom", "secteur", "cloture"]
-    if jour["variation"].notna().any():
+    if not connues.empty:
         colonnes.append("variation")
     colonnes += ["volume_titres", "volume_fcfa"]
-
     st.dataframe(
-        jour[colonnes].sort_values("ticker"),
-        width="stretch", hide_index=True,
+        jour[colonnes].sort_values("ticker"), width="stretch", hide_index=True,
         column_config={
             "ticker": st.column_config.TextColumn("Symbole"),
             "nom": st.column_config.TextColumn("Société"),
@@ -217,46 +263,115 @@ with onglets[0]:
             "volume_fcfa": st.column_config.NumberColumn("FCFA", format="%.0f"),
         },
     )
+    _telecharger(jour[colonnes], f"brvm_{derniere}.csv", "dl_marche")
+
+
+# --- Valeur ---------------------------------------------------------------
+with onglets[1]:
+    noms = referentiel.set_index("ticker")["nom"]
+    choix = st.selectbox(
+        "Valeur", sorted(cours_filtre["ticker"].unique()),
+        format_func=lambda t: f"{t} — {noms.get(t, '')}",
+    )
+
+    serie = cours_filtre[cours_filtre["ticker"] == choix].sort_values("date")
+    fiche = referentiel[referentiel["ticker"] == choix]
+    dernier = serie.iloc[-1]
+
+    div_valeur = (dividendes[dividendes["ticker"] == choix]
+                  if not dividendes.empty else pd.DataFrame())
+
+    # Le secteur est un libellé, pas une mesure : dans une tuile il se fait
+    # tronquer — « Consommation Dis… » ne distingue plus les deux secteurs
+    # de consommation. Il passe donc en légende, où il tient en entier.
+    st.caption(
+        f"**{fiche['nom'].iloc[0] if not fiche.empty else choix}** · "
+        f"{fiche['secteur'].iloc[0] if not fiche.empty else 'secteur inconnu'}"
+    )
+
+    faits = st.columns(3)
+    faits[0].metric(
+        "Clôture", f"{dernier['cloture']:,.0f}".replace(",", " "),
+        delta=(f"{serie['cloture'].iloc[-1] / serie['cloture'].iloc[-2] - 1:+.2%}"
+               if len(serie) >= 2 else None),
+    )
+    faits[1].metric(
+        "Volume (FCFA)",
+        f"{dernier['volume_fcfa']:,.0f}".replace(",", " ")
+        if pd.notna(dernier["volume_fcfa"]) else "—",
+    )
+    faits[2].metric("Dividendes connus", f"{len(div_valeur)}")
+
+    if len(serie) >= 2:
+        st.altair_chart(
+            alt.Chart(serie)
+            .mark_line(strokeWidth=2, color=SERIE_1)
+            .encode(
+                x=alt.X("date:T", title=None,
+                        axis=alt.Axis(format="%d/%m/%y", tickCount=8)),
+                # Format SI (« 22k ») : « 22,000 » est une convention
+                # anglaise, et l'app affiche « 14 229 » juste au-dessus.
+                y=alt.Y("cloture:Q", title="clôture (FCFA)",
+                        scale=alt.Scale(zero=False),
+                        axis=alt.Axis(format="~s")),
+                tooltip=[
+                    alt.Tooltip("date:T", title="Séance", format="%d/%m/%Y"),
+                    alt.Tooltip("cloture:Q", title="Clôture", format=",.0f"),
+                    alt.Tooltip("volume_titres:Q", title="Titres", format=",.0f"),
+                ],
+            )
+            # Une série de plusieurs années ne se lit pas d'un bloc.
+            .properties(height=320).interactive(),
+            width="stretch",
+        )
+        st.caption("Molette pour zoomer, glisser pour parcourir.")
+    else:
+        st.info(f"Une seule séance en base pour {choix} : pas d'historique à "
+                "tracer. Le graphique apparaîtra dès la deuxième.")
+
+    if not div_valeur.empty:
+        st.subheader("Dividendes")
+        st.dataframe(div_valeur.sort_values("date_detachement", ascending=False),
+                     width="stretch", hide_index=True)
+
+    _telecharger(serie, f"{choix}.csv", "dl_valeur")
 
 
 # --- Classement -----------------------------------------------------------
-with onglets[1]:
+with onglets[2]:
     st.caption(
         "Momentum « 12-1 », filtré par liquidité et neutralisé par secteur. "
-        "**Les pondérations n'ont été calibrées sur rien** : ce classement "
-        "est une liste de valeurs à examiner, pas un signal validé."
+        "**Les pondérations n'ont été calibrées sur rien** : une liste de "
+        "valeurs à examiner, pas un signal validé."
     )
-
-    reglages_1, reglages_2 = st.columns([1, 2])
-    with reglages_1:
+    reg_1, reg_2 = st.columns([1, 2])
+    with reg_1:
         seuil = st.number_input(
             "Volume médian minimal (FCFA)", min_value=0, step=100_000,
             value=int(DEFAUTS["analyse"]["volume_median_min_fcfa"]),
             help="Une valeur qui ne s'échange pas ne se vend pas non plus.",
         )
         combien = st.slider("Lignes affichées", 5, 47, 15)
-    with reglages_2:
+    with reg_2:
         poids = {
             "momentum": st.slider("Poids du momentum", -1.0, 1.0, 0.5, 0.05),
             "tendance": st.slider("Poids de la tendance", -1.0, 1.0, 0.3, 0.05),
-            "volatilite": st.slider("Poids de la volatilité", -1.0, 1.0, -0.2,
-                                    0.05),
+            "volatilite": st.slider("Poids de la volatilité", -1.0, 1.0, -0.2, 0.05),
         }
 
-    reglages = {
-        "analyse": {**DEFAUTS["analyse"], "volume_median_min_fcfa": seuil},
-        "ponderations": poids,
-    }
-    traits = features.calculer(cours, reglages)
-    classement = scoring.noter(traits, referentiel, reglages)
+    reglages = {"analyse": {**DEFAUTS["analyse"],
+                            "volume_median_min_fcfa": seuil},
+                "ponderations": poids}
+    classement = scoring.noter(features.calculer(cours_filtre, reglages),
+                               referentiel_filtre, reglages)
 
     if classement.empty:
         st.info(
-            f"Aucune valeur classée. {seances} séance{'s' if seances > 1 else ''} "
-            f"en base ; le momentum "
-            f"en demande {reglages['analyse']['fenetre_momentum'] + 1}. "
-            "Un momentum calculé sur moins aurait l'apparence d'un momentum "
-            "sans rien mesurer — d'où le refus plutôt qu'une approximation."
+            f"Aucune valeur classée. {seances} séance"
+            f"{'s' if seances > 1 else ''} en base ; le momentum en demande "
+            f"{reglages['analyse']['fenetre_momentum'] + 1}. Un momentum "
+            "calculé sur moins aurait l'apparence d'un momentum sans rien "
+            "mesurer — d'où le refus plutôt qu'une approximation."
         )
     else:
         tete = classement.head(combien)
@@ -265,7 +380,8 @@ with onglets[1]:
             .mark_bar(cornerRadiusEnd=4, height=16, color=SERIE_1)
             .encode(
                 x=alt.X("score:Q", title="score"),
-                y=alt.Y("ticker:N", sort="-x", title=None),
+                y=alt.Y("ticker:N", sort="-x", title=None,
+                        axis=alt.Axis(labelOverlap=False)),
                 tooltip=[
                     alt.Tooltip("ticker:N", title="Symbole"),
                     alt.Tooltip("nom:N", title="Société"),
@@ -274,60 +390,55 @@ with onglets[1]:
                     alt.Tooltip("secteur:N", title="Secteur"),
                 ],
             )
-            .properties(height=max(220, 22 * len(tete))),
+            .properties(height=max(220, 24 * len(tete))),
             width="stretch",
         )
         st.dataframe(tete, width="stretch", hide_index=True)
+        _telecharger(classement, "classement.csv", "dl_classement")
 
 
 # --- Prédiction -----------------------------------------------------------
-with onglets[2]:
+with onglets[3]:
     st.caption(
         "Probabilité de **surperformer le marché sur trois mois** — pas de "
-        "prévoir un cours, pas de deviner si la place monte. La BRVM cote "
-        "par fixing, avec une limite de ±7,5 % et des lignes qui "
-        "s'échangent parfois quelques fois par semaine : un modèle entraîné "
-        "sur le lendemain apprend « demain ≈ aujourd'hui » et produit un "
-        "backtest brillant et inexécutable."
+        "prévoir un cours. La BRVM cote par fixing, avec une limite de "
+        "±7,5 % : un modèle entraîné sur le lendemain apprendrait "
+        "« demain ≈ aujourd'hui » et produirait un backtest inexécutable."
     )
+    validation = prediction.valider(cours_filtre, referentiel=referentiel_filtre)
 
-    validation = prediction.valider(cours)
     if validation["periodes"].empty:
         st.info(prediction.expliquer(validation))
     else:
         mesures = st.columns(3)
         mesures[0].metric("IC du modèle", f"{validation['ic']:+.3f}")
-        mesures[1].metric("IC du score composite",
-                          f"{validation['ic_composite']:+.3f}")
+        mesures[1].metric("IC du composite", f"{validation['ic_composite']:+.3f}")
         mesures[2].metric("Écart", f"{validation['ecart']:+.3f}")
 
         if validation["ecart"] <= 0:
             st.warning(
-                "**Le modèle ne bat pas le score composite.** C'est le cas "
-                "le plus fréquent sur ce marché, et ce n'est pas un défaut "
-                "du code : c'est le composite — onglet Classement — qui doit "
-                "partir en production. L'apprentissage n'ajouterait qu'un "
-                "risque de surajustement."
+                "**Le modèle ne bat pas le score composite.** C'est le cas le "
+                "plus fréquent sur ce marché : c'est le composite — onglet "
+                "Classement — qui doit partir en production."
             )
         elif validation["ic"] > 0.30:
             st.error(
                 f"**IC de {validation['ic']:.3f} — anormalement élevé.** "
-                "Sur ce type de problème, un IC exploitable vaut 0,02 à "
-                "0,05. Cherchez la fuite avant d'y croire."
+                "Un IC exploitable vaut 0,02 à 0,05. Cherchez la fuite."
             )
-
         st.dataframe(validation["periodes"], width="stretch", hide_index=True)
 
-        classement_ml = prediction.predire(cours)
-        if not classement_ml.empty:
-            classement_ml = classement_ml.merge(
-                referentiel[["ticker", "nom", "secteur"]], on="ticker",
-                how="left")
+        probable = prediction.predire(cours_filtre, referentiel=referentiel_filtre)
+        if not probable.empty:
+            probable = probable.merge(referentiel[["ticker", "nom", "secteur"]],
+                                      on="ticker", how="left")
+            tete = probable.head(15)
             st.altair_chart(
-                alt.Chart(classement_ml.head(15))
+                alt.Chart(tete)
                 .mark_bar(cornerRadiusEnd=4, height=16, color=SERIE_1)
                 .encode(
-                    x=alt.X("probabilite:Q", title="probabilité de surperformer",
+                    x=alt.X("probabilite:Q",
+                            title="probabilité de surperformer",
                             axis=alt.Axis(format=".0%")),
                     y=alt.Y("ticker:N", sort="-x", title=None,
                             axis=alt.Axis(labelOverlap=False)),
@@ -339,46 +450,54 @@ with onglets[2]:
                         alt.Tooltip("secteur:N", title="Secteur"),
                     ],
                 )
-                .properties(height=max(220, 22 * 15)),
+                .properties(height=max(220, 24 * len(tete))),
                 width="stretch",
             )
+            # Jumeau tabulaire : une infobulle ne doit jamais être le seul
+            # accès à une valeur.
+            st.dataframe(probable, width="stretch", hide_index=True)
+            _telecharger(probable, "prediction.csv", "dl_prediction")
 
-    st.warning(
-        "**Ce que ces chiffres ne disent pas.** " + " ; ".join(
-            validation["avertissements"]) + "."
-    )
+    st.warning("**Ce que ces chiffres ne disent pas.** "
+               + " ; ".join(validation["avertissements"]) + ".")
+
+    st.subheader("Rendement du dividende")
+    st.caption("Télécoms et services publics : retour à la moyenne du "
+               "rendement, sans apprentissage. Cinq valeurs ne font pas un "
+               "échantillon d'apprentissage.")
+    cibles = list(referentiel_filtre[
+        referentiel_filtre["secteur"].isin(
+            ["Télécommunications", "Services Publics"])]["ticker"])
+    st.code(dividende.expliquer(
+        dividende.signal(cours_filtre, dividendes, tickers=cibles)), language=None)
 
 
 # --- Backtest -------------------------------------------------------------
-with onglets[3]:
-    bt_1, bt_2, bt_3 = st.columns(3)
-    with bt_1:
-        positions = st.slider("Positions en portefeuille", 3, 20, 10)
-    with bt_2:
-        frais = st.number_input("Frais par passage (%)", 0.0, 5.0, 1.0, 0.1)
-    with bt_3:
-        impact = st.number_input("Impact de marché (%)", 0.0, 5.0, 0.5, 0.1)
+with onglets[4]:
+    bt = st.columns(3)
+    positions = bt[0].slider("Positions en portefeuille", 3, 20, 10)
+    frais = bt[1].number_input("Frais par passage (%)", 0.0, 5.0, 1.0, 0.1)
+    impact = bt[2].number_input("Impact de marché (%)", 0.0, 5.0, 0.5, 0.1)
 
-    reglages_bt = {
-        "analyse": DEFAUTS["analyse"],
-        "ponderations": DEFAUTS["ponderations"],
-        "backtest": {**DEFAUTS["backtest"], "positions": positions,
-                     "frais_pourcent": frais, "impact_pourcent": impact},
-    }
-    resultat = backtest.backtester(cours, referentiel, reglages_bt)
+    resultat = backtest.backtester(
+        cours_filtre, referentiel_filtre,
+        {"analyse": DEFAUTS["analyse"], "ponderations": DEFAUTS["ponderations"],
+         "backtest": {**DEFAUTS["backtest"], "positions": positions,
+                      "frais_pourcent": frais, "impact_pourcent": impact}},
+    )
 
     if resultat["etapes"].empty:
         st.info(backtest.expliquer(resultat))
     else:
-        mesures = st.columns(4)
-        mesures[0].metric("Stratégie", f"{resultat['rendement_total']:+.1%}")
-        mesures[1].metric("Référence", f"{resultat['reference_total']:+.1%}")
-        mesures[2].metric("Perte max.", f"{resultat['perte_max']:.1%}")
-        mesures[3].metric("Coût cumulé", f"{resultat['cout_cumule']:.1%}")
+        m = st.columns(4)
+        m[0].metric("Stratégie", f"{resultat['rendement_total']:+.1%}")
+        m[1].metric("Référence", f"{resultat['reference_total']:+.1%}")
+        m[2].metric("Perte max.", f"{resultat['perte_max']:.1%}")
+        m[3].metric("Coût cumulé", f"{resultat['cout_cumule']:.1%}")
 
         courbes = resultat["etapes"].melt(
             id_vars="date_sortie", value_vars=["valeur", "valeur_reference"],
-            var_name="serie", value_name="valeur_part",
+            var_name="serie", value_name="part",
         ).replace({"valeur": "Stratégie",
                    "valeur_reference": "Référence équipondérée"})
 
@@ -386,17 +505,12 @@ with onglets[3]:
             "serie:N", title=None,
             scale=alt.Scale(domain=["Stratégie", "Référence équipondérée"],
                             range=[SERIE_1, SERIE_2]),
-            # Légende en bas : à droite, elle occupait la marge où les
-            # étiquettes de bout de courbe viennent s'écrire, et les deux se
-            # superposaient en bouillie.
             legend=alt.Legend(orient="bottom", direction="horizontal"),
         )
         base = alt.Chart(courbes).encode(
-            # Format numérique : Vega libelle les dates en anglais par défaut
-            # (« Thu 15 »), ce qui jurerait dans une interface française.
             x=alt.X("date_sortie:T", title=None,
                     axis=alt.Axis(format="%d/%m/%y", tickCount=8)),
-            y=alt.Y("valeur_part:Q", title="valeur d'une part",
+            y=alt.Y("part:Q", title="valeur d'une part",
                     scale=alt.Scale(zero=False)),
             color=couleurs,
         )
@@ -404,54 +518,59 @@ with onglets[3]:
             tooltip=[
                 alt.Tooltip("date_sortie:T", title="Date", format="%d/%m/%Y"),
                 alt.Tooltip("serie:N", title="Série"),
-                alt.Tooltip("valeur_part:Q", title="Valeur", format=".3f"),
+                alt.Tooltip("part:Q", title="Valeur", format=".3f"),
             ],
         )
-        # Étiquettes directes en bout de courbe : la légende seule oblige à
-        # faire l'aller-retour entre le graphique et sa clé.
         derniers = courbes.loc[courbes.groupby("serie")["date_sortie"].idxmax()]
-        etiquettes = (
-            alt.Chart(derniers)
-            .mark_text(align="left", dx=6, fontSize=12)
-            .encode(x="date_sortie:T", y="valeur_part:Q", text="serie:N",
-                    color=couleurs)
-        )
+        # LE POINT PORTE LA COULEUR, LE TEXTE PORTE L'ENCRE. Colorer le texte
+        # confierait l'identité à un canal qu'il n'assume pas : une teinte
+        # claire est illisible en texte sur le fond. L'anneau de 2 px à la
+        # couleur du fond détache le point de la courbe.
+        points = (alt.Chart(derniers)
+                  .mark_point(size=90, filled=True, stroke=SURFACE, strokeWidth=2)
+                  .encode(x="date_sortie:T", y="part:Q", color=couleurs))
+        etiquettes = (alt.Chart(derniers)
+                      .mark_text(align="left", dx=12, fontSize=12,
+                                 color=ENCRE_DOUCE)
+                      .encode(x="date_sortie:T", y="part:Q", text="serie:N"))
+
         st.altair_chart(
-            # Marge droite réservée : « Référence équipondérée » est long, et
-            # sans elle l'étiquette sortirait du cadre.
-            (lignes + etiquettes)
-            .properties(height=360, padding={"right": 150, "left": 5,
-                                             "top": 5, "bottom": 5}),
+            (lignes + points + etiquettes).properties(
+                height=360,
+                padding={"right": 150, "left": 5, "top": 5, "bottom": 5}),
             width="stretch",
         )
-        st.caption("La référence est l'univers éligible équipondéré : "
-                   "c'est elle qu'il faut battre, pas zéro.")
+        st.caption("La référence est l'univers éligible équipondéré : c'est "
+                   "elle qu'il faut battre, pas zéro.")
+        st.dataframe(resultat["etapes"], width="stretch", hide_index=True)
+        _telecharger(resultat["etapes"], "backtest.csv", "dl_backtest")
 
-    st.warning(
-        "**Trois biais survivent à ce backtest et ne sont pas corrigeables "
-        "avec ces données :** "
-        + " ; ".join(resultat["avertissements"]) + "."
-    )
+    st.warning("**Trois biais survivent et ne sont pas corrigeables ici :** "
+               + " ; ".join(resultat["avertissements"]) + ".")
 
 
 # --- Données --------------------------------------------------------------
-with onglets[4]:
+with onglets[5]:
+    etat = st.columns(3)
+    etat[0].metric("Séances en base", f"{seances}")
+    etat[1].metric("Dividendes en base", f"{len(dividendes)}")
+    etat[2].metric("Sociétés au référentiel", f"{len(referentiel)}")
+
     st.subheader("Répartition sectorielle")
-    if not referentiel.empty and referentiel["secteur"].notna().any():
-        comptes = (referentiel.groupby("secteur").size()
+    if referentiel_filtre["secteur"].notna().any():
+        comptes = (referentiel_filtre.groupby("secteur").size()
                    .reset_index(name="sociétés"))
         st.altair_chart(
             alt.Chart(comptes)
             .mark_bar(cornerRadiusEnd=4, height=20, color=SERIE_1)
             .encode(
-                # `tickMinStep=1` : un décompte de sociétés n'a pas de
-                # demi-unité, et un axe qui en affiche invente une précision
-                # qui n'existe pas.
+                # tickMinStep=1 : un décompte de sociétés n'a pas de
+                # demi-unité, et un axe qui en affiche invente une précision.
                 x=alt.X("sociétés:Q", title="sociétés",
                         axis=alt.Axis(tickMinStep=1, format="d")),
-                # `labelLimit` relevé : par défaut Vega tronque à 180 px, ce
-                # qui réduisait « Consommation de Base » et « Consommation
-                # Discrétionnaire » au même « Consommation d… ».
+                # labelLimit relevé : par défaut Vega tronquait
+                # « Consommation de Base » et « Consommation Discrétionnaire »
+                # au même « Consommation d… ».
                 y=alt.Y("secteur:N", sort="-x", title=None,
                         axis=alt.Axis(labelLimit=220)),
                 tooltip=[alt.Tooltip("secteur:N", title="Secteur"),
@@ -460,8 +579,6 @@ with onglets[4]:
             .properties(height=260),
             width="stretch",
         )
-    else:
-        st.info("Référentiel vide ou sans secteur.")
 
     st.subheader("Couverture de l'archive")
     par_date = cours.groupby("date").size().reset_index(name="lignes")
@@ -469,6 +586,7 @@ with onglets[4]:
 
     st.caption(
         "Source : brvm.org, ingéré par l'action `ingestion.yml` et versionné "
-        "dans `data/cours.csv`. L'app ne lit que ce fichier — elle n'écrit "
-        "rien et ne conserve aucun état."
+        "dans `data/cours.csv`. L'app ne lit que ces fichiers — elle n'écrit "
+        "rien et ne conserve aucun état. Dividendes, fondamentaux et séries "
+        "de commodités se chargent par « brvm importer-* »."
     )

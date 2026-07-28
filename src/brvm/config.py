@@ -51,6 +51,9 @@ DEFAUTS: dict[str, dict] = {
         # par git, pas le binaire.
         "archive_cours": "data/cours.csv",
         "archive_referentiel": "data/referentiel.csv",
+        "archive_dividendes": "data/dividendes.csv",
+        "archive_fondamentaux": "data/fondamentaux.csv",
+        "archive_exogenes": "data/exogenes.csv",
     },
     "analyse": {
         # Seuil de liquidité, en FCFA de volume médian quotidien. Une
