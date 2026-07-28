@@ -20,6 +20,53 @@ heure_cloture_seance = "15:00"
 # Relatif à la racine du dépôt, ou absolu.
 chemin = "data/brvm.db"
 
+# Les archives CSV, source de vérité. La base SQLite s'en reconstruit ;
+# l'inverse n'est jamais vrai.
+archive_cours        = "data/cours.csv"
+archive_referentiel  = "data/referentiel.csv"
+archive_dividendes   = "data/dividendes.csv"
+archive_fondamentaux = "data/fondamentaux.csv"
+archive_exogenes     = "data/exogenes.csv"
+
+[analyse]
+# Un volume médian sous ce seuil écarte la valeur avant toute notation :
+# ce qui ne s'échange pas ne se revend pas non plus.
+volume_median_min_fcfa = 1000000
+
+# Momentum « 12-1 » : un an de recul, dernier mois sauté. Momentum long et
+# retournement court sont deux effets opposés ; mesurer jusqu'à aujourd'hui
+# achèterait les hausses les plus fraîches, donc les plus fragiles.
+fenetre_momentum = 250
+saut_momentum = 20
+fenetre_volatilite = 60
+fenetre_liquidite = 60
+moyenne_courte = 20
+moyenne_longue = 100
+
+# En deçà de ce nombre de membres, un secteur n'est pas neutralisé : la
+# valeur est notée face au marché entier.
+min_par_secteur = 5
+
+[ponderations]
+# CES POIDS N'ONT ÉTÉ CALIBRÉS SUR RIEN, et l'archive montre qu'aucun des
+# quatre traits ne se distingue du hasard sur 11,5 ans. Les modifier
+# change l'ordre du classement, pas sa valeur prédictive.
+momentum = 0.5
+tendance = 0.3
+volatilite = -0.2
+
+[backtest]
+positions = 10
+# En séances. 42 rééquilibrages trimestriels coûtent 51,8 % de frais
+# cumulés sur onze ans — plus que ce que la référence rapporte. Sur cette
+# place, l'espacement compte plus que le signal.
+pas_rebalancement = 60
+# Décider et acheter au même cours reviendrait à passer un ordre à un prix
+# déjà connu.
+delai_execution = 1
+frais_pourcent = 1.0
+impact_pourcent = 0.5
+
 [exogenes]
 # Variation mesurée sur ~3 mois, décalée de ~2 mois : une hausse du
 # caoutchouc n'atteint pas le cours de la SAPH le lendemain, elle passe

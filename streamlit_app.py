@@ -31,7 +31,8 @@ from brvm import (backtest, db, dividende, features, pedagogie, prediction,
 from brvm.config import DEFAUTS
 from brvm.ingestion import brvm_org
 
-st.set_page_config(page_title="BRVM", page_icon="📈", layout="wide")
+st.set_page_config(page_title="BRVM — cours et analyse",
+                   page_icon="📈", layout="wide")
 
 
 # --- Palette --------------------------------------------------------------

@@ -4,11 +4,14 @@
     python -m brvm verifier page.html    idem, sur une page enregistrée
     python -m brvm ingerer               enregistre la séance publiée
     python -m brvm referentiel           met à jour ticker / nom / secteur
-    python -m brvm sonder                un appel réel, pour trancher
+    python -m brvm sonder                un appel réel à l'API sikafinance
+    python -m brvm sonder-dividendes     ce que rendent les trois sources
     python -m brvm rapatrier             historique sikafinance → archive
+    python -m brvm dividendes            calendriers et historique → archive
     python -m brvm noter                 classe les valeurs
     python -m brvm rechercher            quel prédicteur marche, et où
-    python -m brvm dividendes            calendriers et historique → archive
+    python -m brvm predire               probabilité de surperformance
+    python -m brvm rendement             retour à la moyenne du rendement
     python -m brvm backtester            rejoue le classement dans le temps
     python -m brvm exporter              base → CSV versionnés
     python -m brvm importer              CSV versionnés → base
@@ -533,7 +536,10 @@ def _etat(args) -> int:
 
 def construire_analyseur() -> argparse.ArgumentParser:
     analyseur = argparse.ArgumentParser(
-        prog="brvm", description="Ingestion des cours de la BRVM."
+        prog="brvm",
+        description="Collecte, archivage et analyse des cours de la BRVM. "
+                    "L'archive CSV versionnée est la source de vérité ; la "
+                    "base SQLite s'en reconstruit."
     )
     commandes = analyseur.add_subparsers(dest="commande", required=True)
 
