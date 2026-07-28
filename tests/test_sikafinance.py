@@ -123,13 +123,43 @@ def test_le_volume_va_dans_la_colonne_que_la_sonde_a_designee():
     `None` écarte le volume plutôt que de le ranger au hasard."""
     retenu = sikafinance.retenir(_api())
     assert retenu["volume_titres"].iloc[0] == 8286
-    assert "volume_fcfa" not in retenu.columns
+    # Et les francs suivent, reconstitués — voir le test suivant.
+    assert retenu["volume_fcfa"].iloc[0] == 8286 * (1500 + 1515) / 2
 
     force = sikafinance.retenir(_api(), "volume_fcfa")
     assert force["volume_fcfa"].iloc[0] == 8286
 
     sans = sikafinance.retenir(_api(), None)
     assert "volume_titres" not in sans.columns and "volume" not in sans.columns
+
+
+def test_le_volume_en_francs_est_reconstitue_exactement():
+    """Le milieu de « bas » et « haut » est le prix moyen de la séance.
+
+    Vérifié au franc près sur les dix séances de SDSC dont les deux
+    volumes étaient connus indépendamment (capture de la page, mars 2026) :
+    dix correspondances exactes. Ni la clôture (-3,4 %) ni l'ouverture
+    (+3,4 %) n'y parviennent — c'est donc une reconstitution, pas une
+    estimation, et c'est ce qui permet au filtre de liquidité de
+    fonctionner alors que l'API ne rend que des titres.
+    """
+    connu = {  # date : volume en francs relevé sur la page
+        "2026-03-18": 23_599_475, "2026-03-19": 20_643_040,
+        "2026-03-20": 20_643_040, "2026-03-23": 7_590_750,
+        "2026-03-24": 28_840_040, "2026-03-25": 46_135_810,
+        "2026-03-26": 17_780_360, "2026-03-27": 18_722_568,
+        "2026-03-30": 5_211_908,  "2026-03-31": 8_970_665,
+    }
+    html = _table()  # la capture porte les deux volumes
+    for ligne in html.itertuples():
+        if ligne.date not in connu:
+            continue
+        assert ligne.volume_fcfa == connu[ligne.date], ligne.date
+
+    # Et la reconstitution retombe dessus depuis les seuls titres.
+    from_api = pd.DataFrame({
+        "volume_titres": [11_729.0], "bas": [1700.0], "haut": [1820.0]})
+    assert float(sikafinance.valoriser(from_api).iloc[0]) == 20_643_040
 
 
 def test_l_api_rend_un_ohlc_coherent():

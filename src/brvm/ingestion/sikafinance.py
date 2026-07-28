@@ -365,6 +365,27 @@ def seances_repetees(table: pd.DataFrame) -> list[str]:
     ]
 
 
+def valoriser(table: pd.DataFrame) -> pd.Series:
+    """Le volume en francs, reconstitué depuis les titres et le prix moyen.
+
+    L'API ne rend que le nombre de titres, et c'est en francs que se juge
+    la liquidité — un millier de titres à 500 F et un millier à 300 000 F
+    ne sont pas le même marché. Il faut donc un prix moyen de séance.
+
+    CE N'EST PAS UNE APPROXIMATION. Le milieu de `bas` et `haut` retombe
+    AU FRANC PRÈS sur les volumes en francs relevés indépendamment sur la
+    page HTML — dix séances de SDSC en mars 2026, dix correspondances
+    exactes. Ni la clôture (-3,4 %) ni l'ouverture (+3,4 %) n'y arrivent.
+
+    Ce que cela dit au passage, c'est que `bas` et `haut` ne sont pas tout
+    à fait un plus-bas et un plus-haut : leur milieu est le prix moyen
+    pondéré de la séance. Le nom vient du site, la propriété est mesurée.
+    """
+    if not {"volume_titres", "bas", "haut"}.issubset(table.columns):
+        return pd.Series(float("nan"), index=table.index)
+    return table["volume_titres"] * (table["bas"] + table["haut"]) / 2
+
+
 def retenir(table: pd.DataFrame,
             volume: str | None = VOLUME_API) -> pd.DataFrame:
     """Ne garde que ce que les contrôles autorisent à écrire.
@@ -382,6 +403,8 @@ def retenir(table: pd.DataFrame,
         if volume in ("volume_titres", "volume_fcfa"):
             lu[volume] = lu["volume"]
         lu = lu.drop(columns=["volume"])
+    if "volume_fcfa" not in lu.columns or lu["volume_fcfa"].isna().all():
+        lu["volume_fcfa"] = valoriser(lu)
     return lu[[c for c in RETENUES if c in lu.columns]].copy()
 
 
