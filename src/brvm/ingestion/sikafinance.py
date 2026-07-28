@@ -28,34 +28,38 @@ Lire l'API plutôt que la page vaut mieux sur trois plans : le JSON ne se
 décale pas quand la mise en page change, il évite d'analyser un document
 entier pour dix lignes, et il rend des nombres au lieu de « 20 643 040 ».
 
-CE QUI RESTE À VÉRIFIER, ET QUI NE PEUT L'ÊTRE D'ICI
-----------------------------------------------------
+CE QUE LA SONDE A TRANCHÉ, ET QUI NE POUVAIT L'ÊTRE AUTREMENT
+--------------------------------------------------------------
 L'accès sortant vers sikafinance est refusé depuis l'environnement de
-développement. Deux points restent donc ouverts, et `sonder` existe pour
-les trancher au premier appel réel plutôt que par hypothèse :
+développement. Deux questions sont donc restées ouvertes jusqu'au premier
+appel réel, exécuté par `brvm sonder` sur un runner GitHub le 28/07/2026.
+Elles ont toutes deux démenti ce que la page laissait croire — d'où
+l'insistance à ne rien écrire avant de les avoir posées.
 
-1. QUE MESURE `Volume` ? Le tableau HTML porte deux colonnes — Volume
-   Titres et Volume FCFA — là où l'API n'en rend qu'une. Une capture du
-   19/03/2026 sur SDSC donne 11 729 titres et 20 643 040 FCFA : le témoin
-   ci-dessous tranche d'un coup d'œil, sans avoir à deviner.
+1. `Volume` COMPTE DES TITRES, PAS DES FRANCS. Le tableau HTML porte deux
+   colonnes, l'API n'en rend qu'une, et son ordre de grandeur suggérait
+   les francs. Le témoin — SDSC au 19/03/2026, 11 729 titres et
+   20 643 040 FCFA, connus par ailleurs — a rendu 11 729. Parier aurait
+   rangé des nombres de titres dans une colonne de francs : un facteur
+   1 700 d'erreur, invisible jusqu'au jour où le filtre de liquidité
+   laisse tout passer.
 
-2. `Open`, `High` et `Low` SONT-ILS COHÉRENTS ? Dans le HTML, ils ne le
-   sont pas : sur huit des dix séances observées, « plus bas » dépasse la
-   clôture, ce qui est impossible. Si l'API dit la même chose, ces
-   colonnes restent hors de la base ; si elle est cohérente, c'est le
-   rendu du site qui déforme, et le projet gagne un vrai OHLC.
+2. L'API EST COHÉRENTE LÀ OÙ LA PAGE NE L'EST PAS. Dans le HTML,
+   « plus bas » dépasse la clôture huit fois sur dix, ce qui est
+   impossible. Sur les 64 séances rendues par l'API pour le premier
+   trimestre 2026, `bas <= clôture <= haut` tient partout. C'est donc le
+   rendu du site qui déforme, pas la donnée — et `ouverture`, `haut` et
+   `bas` entrent en base, où le schéma les attendait. Le projet y gagne un
+   vrai OHLC, donc une volatilité mesurée sur l'amplitude réelle des
+   séances plutôt que sur les seules clôtures.
 
-En attendant cette réponse, seules la date, la clôture et le volume
-partent en base — la clôture parce qu'elle est vérifiable, et elle l'est :
-sur les neuf transitions de la capture, la variation recalculée retombe au
-centième près sur celle qu'annonce la source.
-
-TROISIÈME PIÈGE, CELUI-LÀ CONFIRMÉ
-----------------------------------
-Les 19 et 20 mars 2026 portent le même volume au titre près avec des
-variations différentes. Sur un marché où une valeur peut ne pas coter de
-la journée, c'est la même transaction publiée deux fois. `seances_repetees`
-les signale : les ingérer doublerait le volume et fabriquerait une séance.
+TROISIÈME PIÈGE, CONFIRMÉ DES DEUX CÔTÉS
+----------------------------------------
+Des séances portent le même volume que la veille, au titre près. La
+capture en montrait une (19 et 20 mars) ; la sonde en a trouvé deux sur le
+seul premier trimestre 2026. Sur un marché où une valeur peut ne pas coter
+de la journée, c'est la même transaction republiée. `seances_repetees` les
+signale : les ingérer doublerait le volume et fabriquerait une séance.
 """
 
 from __future__ import annotations
@@ -90,8 +94,15 @@ PAS_JOURS = 89
 # option porte `value="SDSC.ci"`. `symboles()` va le chercher.
 SUFFIXE_DEFAUT = ".ci"
 
-# Ce qui part en base tant que le point 2 ci-dessus n'est pas tranché.
-RETENUES = ["date", "ticker", "cloture", "volume_titres", "volume_fcfa"]
+# Ce qui part en base. `ouverture`, `haut` et `bas` y figurent depuis que
+# la sonde a montré l'API cohérente — voir l'en-tête, point 2.
+RETENUES = ["date", "ticker", "ouverture", "haut", "bas", "cloture",
+            "volume_titres", "volume_fcfa"]
+
+# Ce que compte le champ `Volume` de l'API. Établi par le témoin, pas
+# supposé : la sonde du 28/07/2026 a rendu 11 729 pour la séance dont on
+# savait qu'elle valait 11 729 titres et 20 643 040 FCFA.
+VOLUME_API = "volume_titres"
 
 # Le témoin qui répond au point 1. Valeurs relevées sur une capture de la
 # page SDSC, séance du 19/03/2026. `sonder` compare ce que rend l'API à
@@ -354,15 +365,17 @@ def seances_repetees(table: pd.DataFrame) -> list[str]:
     ]
 
 
-def retenir(table: pd.DataFrame, volume: str | None = None) -> pd.DataFrame:
+def retenir(table: pd.DataFrame,
+            volume: str | None = VOLUME_API) -> pd.DataFrame:
     """Ne garde que ce que les contrôles autorisent à écrire.
 
-    `volume` dit dans quelle colonne verser le `Volume` de l'API — la
-    réponse tient en un mot, mais elle ne se devine pas, et se tromper
-    rangerait des francs dans une colonne de titres. C'est `sonder` qui la
-    donne. Sans elle, le volume est écarté plutôt qu'attribué au hasard :
-    une archive sans volume se complète, une archive au volume faux se
-    découvre le jour où le filtre de liquidité laisse passer n'importe quoi.
+    `volume` dit dans quelle colonne verser le `Volume` de l'API. La
+    réponse — des titres — vient du témoin et non d'une supposition ; le
+    paramètre reste pour qu'elle se corrige sans toucher au code le jour
+    où le service changerait d'avis. Passer `None` écarte le volume plutôt
+    que de le ranger au hasard : une archive sans volume se complète, une
+    archive au volume faux se découvre le jour où le filtre de liquidité
+    laisse passer n'importe quoi.
     """
     lu = table.copy()
     if "volume" in lu.columns:

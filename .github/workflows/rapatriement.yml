@@ -24,9 +24,9 @@ on:
         type: boolean
         default: true
       volume:
-        description: "Ce que compte le « Volume » de l'API (la sonde le dit)"
+        description: "Forcer l'unité du « Volume » (vide = titres, établi par la sonde)"
         type: choice
-        options: ["", "fcfa", "titres"]
+        options: ["", "titres", "fcfa"]
         default: ""
       tickers:
         description: "Valeurs à rapatrier (vide = tout le référentiel)"
@@ -73,22 +73,13 @@ jobs:
           python -m brvm sonder --ticker SDSC \
             --debut 2026-01-01 --fin 2026-03-31
 
-      - name: Refuser un rapatriement sans réponse de la sonde
-        if: ${{ !inputs.sonde && inputs.volume == '' }}
-        run: |
-          echo "::error::« volume » n'est pas renseigné. Lancez d'abord la"
-          echo "sonde : elle dit si le « Volume » de l'API compte des titres"
-          echo "ou des francs. Ranger les uns dans la colonne des autres ne"
-          echo "se verrait qu'au moment où le filtre de liquidité laisse"
-          echo "passer n'importe quoi."
-          exit 1
-
       - name: Rapatrier
         if: ${{ !inputs.sonde }}
         run: |
           python -m brvm rapatrier \
             --debut "${{ inputs.debut }}" --fin "${{ inputs.fin }}" \
-            --pause "${{ inputs.pause }}" --volume "${{ inputs.volume }}" \
+            --pause "${{ inputs.pause }}" \
+            ${{ inputs.volume != '' && format('--volume {0}', inputs.volume) || '' }} \
             ${{ inputs.tickers != '' && format('--tickers {0}', inputs.tickers) || '' }}
 
       # La base SQLite est un artefact dérivé ; l'archive CSV est la source

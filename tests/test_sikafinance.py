@@ -69,9 +69,10 @@ def test_la_reponse_de_l_api_se_lit_par_le_nom_des_champs():
     table = _api()
     assert {"date", "ticker", "cloture", "ouverture", "haut", "bas",
             "volume"} <= set(table.columns)
-    assert len(table) == 10
+    assert len(table) == 12
     assert table["date"].is_monotonic_increasing
-    assert table["date"].iloc[0] == "2026-03-18"
+    assert table["date"].iloc[0] == "2026-01-01"
+    assert table["cloture"].iloc[0] == 1515.0
 
 
 def test_une_reponse_vide_ne_leve_pas():
@@ -93,38 +94,65 @@ def test_une_reponse_aux_champs_inconnus_est_refusee():
 
 
 def test_le_temoin_tranche_ce_que_mesure_le_volume():
-    """L'API rend un seul « Volume », la page en affiche deux. Une séance
-    dont les deux nombres sont connus le dit sans qu'on ait à parier."""
-    assert "volume_fcfa" in sikafinance.temoin(_api())
+    """Le mécanisme qui a évité l'erreur d'un facteur 1 700.
+
+    L'API rend un seul « Volume » ; son ordre de grandeur suggérait des
+    francs. Le témoin — une séance dont les deux nombres sont connus par
+    ailleurs — a répondu « titres ». Sans lui, le pari le plus naturel
+    était le mauvais.
+    """
+    temoin = pd.DataFrame([{
+        "date": sikafinance.TEMOIN["date"], "ticker": "SDSC",
+        "cloture": 1700.0, "volume": 11_729.0,
+    }])
+    assert "volume_titres" in sikafinance.temoin(temoin)
 
 
 def test_le_temoin_le_dit_quand_il_ne_peut_pas_trancher():
-    table = _api().copy()
-    table["volume"] = 42.0
-    message = sikafinance.temoin(table)
-    assert "ne correspond" in message
+    """Ni l'un ni l'autre : il doit le dire, pas choisir le plus proche."""
+    egare = pd.DataFrame([{
+        "date": sikafinance.TEMOIN["date"], "ticker": "SDSC",
+        "cloture": 1700.0, "volume": 42.0,
+    }])
+    assert "ne correspond" in sikafinance.temoin(egare)
 
 
-def test_le_volume_n_est_pas_range_au_hasard():
-    """Sans réponse du témoin, mieux vaut une archive sans volume qu'une
-    archive au volume faux : la première se complète, la seconde se
-    découvre le jour où le filtre de liquidité laisse passer n'importe
-    quoi."""
-    sans = sikafinance.retenir(_api())
-    assert "volume_fcfa" not in sans.columns
-    assert "volume_titres" not in sans.columns
-    assert "volume" not in sans.columns
-    assert "cloture" in sans.columns
+def test_le_volume_va_dans_la_colonne_que_la_sonde_a_designee():
+    """Par défaut des titres — établi, pas supposé. Le paramètre reste
+    pour corriger sans toucher au code si le service changeait d'avis, et
+    `None` écarte le volume plutôt que de le ranger au hasard."""
+    retenu = sikafinance.retenir(_api())
+    assert retenu["volume_titres"].iloc[0] == 8286
+    assert "volume_fcfa" not in retenu.columns
 
-    avec = sikafinance.retenir(_api(), "volume_fcfa")
-    assert avec["volume_fcfa"].iloc[1] == 20_643_040
+    force = sikafinance.retenir(_api(), "volume_fcfa")
+    assert force["volume_fcfa"].iloc[0] == 8286
+
+    sans = sikafinance.retenir(_api(), None)
+    assert "volume_titres" not in sans.columns and "volume" not in sans.columns
 
 
-def test_l_ohlc_incoherent_est_signale():
-    """La question que la sonde doit trancher contre le vrai service : si
-    l'API reproduit l'incohérence du HTML, ces colonnes restent dehors."""
-    fautives = sikafinance.ohlc_incoherent(_api())
-    assert len(fautives) == 8
+def test_l_api_rend_un_ohlc_coherent():
+    """Le constat de la sonde, mis sous test : sur les séances réelles
+    rendues par l'API, « plus bas » <= clôture <= « plus haut » tient
+    partout, là où le HTML le viole huit fois sur dix. C'est ce qui
+    autorise ces colonnes à entrer en base."""
+    assert sikafinance.ohlc_incoherent(_api()) == []
+
+
+def test_l_ohlc_du_html_reste_signale_comme_faux():
+    """La protection doit rester capable de se déclencher : c'est le
+    tableau HTML qui déforme, et un retour à ce chemin ne doit pas faire
+    entrer ses colonnes en base sans qu'on le sache."""
+    assert len(sikafinance.ohlc_incoherent(_table())) == 8
+
+
+def test_l_ohlc_entre_en_base():
+    """Le schéma `cours` attendait ces colonnes ; elles ne servaient à
+    rien tant que la seule source connue les rendait fausses."""
+    retenu = sikafinance.retenir(_api())
+    for colonne in ("ouverture", "haut", "bas", "cloture"):
+        assert colonne in retenu.columns
 
 
 # --- Le menu des symboles -------------------------------------------------
@@ -237,15 +265,13 @@ def test_un_volume_nul_repete_n_est_pas_signale():
     assert sikafinance.seances_repetees(table) == []
 
 
-def test_seules_les_colonnes_verifiables_partent_en_base():
-    """« plus bas » dépasse la clôture sur huit séances des dix observées.
-    Une colonne dont on ne sait pas ce qu'elle mesure ne s'écrit pas :
-    elle serait indiscernable d'une vraie une fois en base."""
+def test_la_variation_ne_part_pas_en_base():
+    """Elle a servi à vérifier la clôture ; elle se recalcule à partir
+    d'elle. La stocker créerait deux vérités pour un seul fait, et rien ne
+    dirait laquelle croire le jour où elles divergeraient."""
     retenu = sikafinance.retenir(_table())
-    assert list(retenu.columns) == [
-        "date", "ticker", "cloture", "volume_titres", "volume_fcfa"]
-    for abandonnee in ("bas", "haut", "ouverture", "variation"):
-        assert abandonnee not in retenu.columns
+    assert "variation" not in retenu.columns
+    assert set(retenu.columns) <= set(sikafinance.RETENUES)
 
 
 def test_l_incoherence_du_plus_bas_est_bien_dans_la_source():

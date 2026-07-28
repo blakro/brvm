@@ -170,16 +170,11 @@ def _rapatrier(args) -> int:
                 f"{ticker} : {len(ecarts)} variations incohérentes, valeur "
                 f"écartée (première : {ecarts[0]})")
             continue
-        if "volume" in table.columns and args.volume is None:
-            print("l'API rend une colonne « Volume » unique, et rien ne dit "
-                  "si elle compte des titres ou des francs. Lancez "
-                  "« brvm sonder » puis relancez avec --volume titres ou "
-                  "--volume fcfa.", file=sys.stderr)
-            return 1
         signales += [f"{ticker} — {m}" for m in
                      sikafinance.seances_repetees(table)]
         recoltes.append(sikafinance.retenir(
-            table, f"volume_{args.volume}" if args.volume else None))
+            table,
+            f"volume_{args.volume}" if args.volume else sikafinance.VOLUME_API))
         print(f"  {ticker:<7} {len(table):>5} séances "
               f"{table['date'].min()} → {table['date'].max()}")
 
@@ -466,8 +461,9 @@ def construire_analyseur() -> argparse.ArgumentParser:
                            help="secondes entre deux requêtes (défaut 0,5)")
     rapatrier.add_argument("--volume", choices=["titres", "fcfa"],
                            default=None,
-                           help="ce que compte le « Volume » de l'API — "
-                                "« brvm sonder » le dit")
+                           help="forcer ce que compte le « Volume » de "
+                                "l'API ; par défaut des titres, ce que la "
+                                "sonde a établi")
     rapatrier.add_argument("--simulation", action="store_true",
                            help="compter sans écrire")
     rapatrier.set_defaults(fonction=_rapatrier)
