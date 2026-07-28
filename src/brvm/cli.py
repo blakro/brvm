@@ -8,6 +8,7 @@
     python -m brvm rapatrier             historique sikafinance → archive
     python -m brvm noter                 classe les valeurs
     python -m brvm rechercher            quel prédicteur marche, et où
+    python -m brvm dividendes            calendriers et historique → archive
     python -m brvm backtester            rejoue le classement dans le temps
     python -m brvm exporter              base → CSV versionnés
     python -m brvm importer              CSV versionnés → base
@@ -50,6 +51,52 @@ def _ingerer(args) -> int:
         print(f"ingestion refusée : {erreur}", file=sys.stderr)
         return 1
     print(f"{lignes} lignes de cote enregistrées")
+    return 0
+
+
+def _dividendes(args) -> int:
+    """Calendriers et historique des dividendes → archive.
+
+    Les lignes non appariées à un ticker sont ÉCRITES NULLE PART et
+    listées : un dividende attribué à la mauvaise société ne se verrait
+    jamais, aucun contrôle en aval n'étant capable de le rattraper.
+    """
+    referentiel = db.lire("referentiel")
+    if referentiel.empty:
+        print("référentiel vide — lancez « brvm referentiel » d'abord",
+              file=sys.stderr)
+        return 1
+
+    div, fonda, rapport = source_dividendes.collecter(referentiel)
+    for source, detail in rapport.items():
+        if source != "non_apparies":
+            print(f"  {source:<14} {detail}")
+
+    absents = rapport.get("non_apparies") or []
+    if absents:
+        print(f"\n{len(absents)} sociétés non appariées, donc non écrites :",
+              file=sys.stderr)
+        for nom in absents:
+            print(f"  {nom}", file=sys.stderr)
+
+    if div.empty and fonda.empty:
+        print("\nrien à écrire", file=sys.stderr)
+        return 1
+
+    if args.simulation:
+        print(f"\nsimulation : {len(div)} détachements et {len(fonda)} "
+              "mesures seraient enregistrés")
+        return 0
+
+    if not div.empty:
+        db.enregistrer(div, "dividendes")
+        db.exporter("dividendes")
+    if not fonda.empty:
+        db.enregistrer(fonda, "fondamentaux")
+        db.exporter("fondamentaux")
+    print(f"\n{len(div)} détachements, {len(fonda)} mesures pluriannuelles "
+          f"sur {div['ticker'].nunique() if not div.empty else 0} et "
+          f"{fonda['ticker'].nunique() if not fonda.empty else 0} sociétés")
     return 0
 
 
@@ -558,6 +605,17 @@ def construire_analyseur() -> argparse.ArgumentParser:
     sonder_div.add_argument("--date", default=None,
                             help="séance pour abourse (AAAA-MM-JJ)")
     sonder_div.set_defaults(fonction=_sonder_dividendes)
+
+    div = commandes.add_parser(
+        "dividendes",
+        help="calendriers et historique des dividendes → archive",
+        description="Lit brvm.org et sikafinance, apparie les noms aux "
+                    "tickers et écrit. Une société non appariée n'est pas "
+                    "écrite : elle est listée.",
+    )
+    div.add_argument("--simulation", action="store_true",
+                     help="compter sans écrire")
+    div.set_defaults(fonction=_dividendes)
 
     noter = commandes.add_parser(
         "noter", help="classer les valeurs (momentum filtré par liquidité)"
