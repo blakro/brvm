@@ -7,6 +7,7 @@
     python -m brvm sonder                un appel réel, pour trancher
     python -m brvm rapatrier             historique sikafinance → archive
     python -m brvm noter                 classe les valeurs
+    python -m brvm rechercher            quel prédicteur marche, et où
     python -m brvm backtester            rejoue le classement dans le temps
     python -m brvm exporter              base → CSV versionnés
     python -m brvm importer              CSV versionnés → base
@@ -27,7 +28,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from . import backtest, db, dividende, exogene, features, prediction, scoring
+from . import (backtest, db, dividende, exogene, features, prediction,
+               recherche, scoring)
 from .ingestion import brvm_org, sikafinance
 
 
@@ -124,6 +126,25 @@ def _sonder(args) -> int:
 
     print("\nSi ces trois réponses vous conviennent, relancez le "
           "rapatriement complet.")
+    return 0
+
+
+def _rechercher(args) -> int:
+    """Balayage prédicteurs × segments × horizons, correction comprise."""
+    cours = db.lire("cours")
+    if cours.empty:
+        print("aucun cours en base — lancez « brvm rapatrier »", file=sys.stderr)
+        return 1
+
+    table = recherche.balayer(cours, db.lire("referentiel"))
+    retour = recherche.retour_a_la_moyenne(cours) if args.valeurs else None
+    print(recherche.expliquer(table, retour))
+
+    if args.csv:
+        table.to_csv(args.csv, index=False)
+        print(f"\n{len(table)} lignes → {args.csv}")
+    # Rien de retenu n'est un échec de recherche, pas une panne : le code
+    # de sortie reste 0, et c'est le texte qui porte le verdict.
     return 0
 
 
@@ -467,6 +488,19 @@ def construire_analyseur() -> argparse.ArgumentParser:
     rapatrier.add_argument("--simulation", action="store_true",
                            help="compter sans écrire")
     rapatrier.set_defaults(fonction=_rapatrier)
+
+    rechercher = commandes.add_parser(
+        "rechercher",
+        help="quel prédicteur marche, sur quel segment, à quel horizon",
+        description="Balaie prédicteurs × segments × horizons et corrige "
+                    "le test multiple. Sans cette correction, la question "
+                    "« quel est le meilleur modèle ? » a toujours une "
+                    "réponse, y compris quand elle devrait être « aucun ».",
+    )
+    rechercher.add_argument("--valeurs", action="store_true",
+                            help="ajouter le retour à la moyenne valeur par valeur")
+    rechercher.add_argument("--csv", default=None, help="exporter la grille")
+    rechercher.set_defaults(fonction=_rechercher)
 
     sonder = commandes.add_parser(
         "sonder",
