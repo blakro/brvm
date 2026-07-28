@@ -28,7 +28,7 @@ os.environ.setdefault(
 
 import pandas as pd  # noqa: E402
 
-from brvm import features, scoring  # noqa: E402
+from brvm import db, features, scoring  # noqa: E402
 
 REGLAGES = {
     "analyse": {
@@ -420,6 +420,56 @@ def test_l_univers_eligible_ne_depend_pas_des_ponderations():
     # compris quand le momentum n'est pas noté.
     assert "C" not in univers[0]
     assert univers[0] == {"A", "B", "D"}
+
+
+def test_une_source_incomplete_n_efface_pas_ce_qu_elle_ignore():
+    """LE DÉFAUT CONSTATÉ SUR L'ARCHIVE, MIS SOUS TEST.
+
+    brvm.org fait autorité sur la clôture mais ne publie ni « haut », ni
+    « bas », ni le volume en francs. La règle précédente gardait sa ligne
+    entière : 47 lignes de l'archive ont perdu leur OHLC, et le cron
+    quotidien l'aurait reproduit chaque jour ouvré.
+    """
+    connu = pd.DataFrame([{
+        "date": "2026-07-27", "ticker": "SDSC", "ouverture": 2760.0,
+        "haut": float("nan"), "bas": float("nan"), "cloture": 2660.0,
+        "volume_titres": 8573.0, "volume_fcfa": float("nan"),
+    }])
+    nouveau = pd.DataFrame([{
+        "date": "2026-07-27", "ticker": "SDSC", "ouverture": 2765.0,
+        "haut": 2770.0, "bas": 2650.0, "cloture": 2665.0,
+        "volume_titres": 8573.0, "volume_fcfa": 23_236_395.0,
+    }])
+
+    fusion, comblees = db.fusionner_cours(connu, nouveau)
+    ligne = fusion.iloc[0]
+    # Ce que la source primaire sait dire reste sa vérité…
+    assert ligne["cloture"] == 2660.0
+    assert ligne["ouverture"] == 2760.0
+    # …et ce qu'elle ignore vient de l'autre, au lieu de disparaître.
+    assert ligne["haut"] == 2770.0
+    assert ligne["bas"] == 2650.0
+    assert ligne["volume_fcfa"] == 23_236_395.0
+    assert comblees == 3
+
+
+def test_la_fusion_ajoute_les_seances_absentes():
+    connu = pd.DataFrame([{"date": "2026-07-27", "ticker": "A",
+                           "cloture": 100.0}])
+    nouveau = pd.DataFrame([{"date": "2026-07-24", "ticker": "A",
+                             "cloture": 98.0}])
+    fusion, comblees = db.fusionner_cours(connu, nouveau)
+    assert list(fusion["date"]) == ["2026-07-24", "2026-07-27"]
+    assert comblees == 0
+
+
+def test_une_recolte_vide_laisse_l_archive_intacte():
+    """Un rapatriement qui ne ramène rien ne doit pas pouvoir vider
+    l'archive : c'est la garantie qui compte le plus ici."""
+    connu = pd.DataFrame([{"date": "2026-07-27", "ticker": "A",
+                           "cloture": 100.0}])
+    fusion, comblees = db.fusionner_cours(connu, pd.DataFrame())
+    assert fusion.equals(connu) and comblees == 0
 
 
 if __name__ == "__main__":

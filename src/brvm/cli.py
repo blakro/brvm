@@ -285,12 +285,7 @@ def _rapatrier(args) -> int:
         return 1
 
     nouveau = pd.concat(recoltes, ignore_index=True)
-    # La séance publiée par brvm.org fait foi sur les dates qu'elle
-    # couvre : elle vient de la source primaire. L'historique ne fait que
-    # combler ce qu'elle n'a pas encore vu.
-    fusion = (pd.concat([nouveau, connu], ignore_index=True)
-              .drop_duplicates(subset=["date", "ticker"], keep="last")
-              .sort_values(["date", "ticker"]))
+    fusion, comblees = db.fusionner_cours(connu, nouveau)
     ajoutees = len(fusion) - len(connu)
 
     if args.simulation:
@@ -302,6 +297,9 @@ def _rapatrier(args) -> int:
         fusion.to_csv(chemin, index=False)
         print(f"\n{ajoutees} lignes ajoutées ({len(connu)} → {len(fusion)}), "
               f"{fusion['date'].nunique()} séances en archive")
+        if comblees:
+            print(f"{comblees} valeurs manquantes comblées sur des lignes "
+                  "déjà présentes")
 
     if signales:
         print(f"\n{len(signales)} séances au volume identique à la veille — "
@@ -365,7 +363,8 @@ def _backtester(args) -> int:
         print("aucun cours en base — lancez « brvm ingerer »", file=sys.stderr)
         return 1
 
-    resultat = backtest.backtester(cours, db.lire("referentiel"))
+    resultat = backtest.backtester(cours, db.lire("referentiel"),
+                                   fondamentaux=db.lire("fondamentaux"))
     print(backtest.expliquer(resultat))
     if args.journal and not resultat["etapes"].empty:
         print("\nJournal des rééquilibrages :")
@@ -490,18 +489,33 @@ def _veille(args) -> int:
     return 0
 
 
-def _exporter(args) -> int:
-    for table in ("cours", "referentiel"):
-        lignes = db.exporter(table)
-        print(f"{lignes:>6} lignes → {db.chemin_archive(table)}")
+# TOUTES LES TABLES ARCHIVÉES, PAS DEUX. Le couple export/import ne
+# connaissait que `cours` et `referentiel` : les dividendes et les
+# fondamentaux étaient bien versionnés mais jamais rechargés, et le
+# backtest les trouvait vides tout en les ayant sur disque. Le symptôme
+# était muet — il rendait simplement les mêmes chiffres qu'avant.
+TABLES_ARCHIVEES = ("cours", "referentiel", "dividendes", "fondamentaux",
+                    "exogenes")
+
+
+def _transferer(sens: str) -> int:
+    operation = db.exporter if sens == "exporter" else db.importer
+    fleche = "→" if sens == "exporter" else "←"
+    for table in TABLES_ARCHIVEES:
+        chemin = db.chemin_archive(table)
+        if sens == "importer" and not chemin.exists():
+            continue
+        lignes = operation(table)
+        print(f"{lignes:>6} lignes {fleche} {chemin}")
     return 0
+
+
+def _exporter(args) -> int:
+    return _transferer("exporter")
 
 
 def _importer(args) -> int:
-    for table in ("cours", "referentiel"):
-        lignes = db.importer(table)
-        print(f"{lignes:>6} lignes ← {db.chemin_archive(table)}")
-    return 0
+    return _transferer("importer")
 
 
 def _etat(args) -> int:

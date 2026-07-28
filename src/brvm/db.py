@@ -297,6 +297,40 @@ def fusionner_referentiel(
     return fusion.reset_index()[colonnes], changements
 
 
+def fusionner_cours(connu: pd.DataFrame,
+                    nouveau: pd.DataFrame) -> tuple[pd.DataFrame, int]:
+    """Complète l'archive sans jamais l'appauvrir. Rend (archive, comblées).
+
+    LA PRIMAUTÉ SE JOUE COLONNE PAR COLONNE, PAS LIGNE PAR LIGNE.
+
+    L'archive fait foi pour ce qu'elle sait déjà — elle vient de la source
+    primaire, brvm.org, qui fait autorité sur la clôture. Mais brvm.org ne
+    publie ni « haut », ni « bas », ni le volume en francs, et garder sa
+    ligne entière ÉCRASAIT ces trois colonnes par des vides.
+
+    Le défaut a été constaté après coup : 47 lignes avaient perdu leur
+    OHLC, toutes sur la seule séance venue de brvm.org, et le cron
+    quotidien l'aurait reproduit chaque jour ouvré — la couverture OHLC,
+    complète sur 11,5 ans, se serait dégradée à partir de ce jour-là.
+
+    `combine_first` garde la valeur connue quand elle existe et va
+    chercher l'autre quand elle manque : une source ne peut plus effacer
+    ce qu'elle ne sait pas dire.
+    """
+    cle = ["date", "ticker"]
+    if nouveau.empty:
+        return connu, 0
+    ajout = nouveau.set_index(cle)
+    if connu.empty:
+        return ajout.reset_index().sort_values(cle), 0
+
+    base = connu.set_index(cle)
+    fusion = base.combine_first(ajout)
+    comblees = int(base.isna().sum().sum()
+                   - fusion.reindex(base.index).isna().sum().sum())
+    return fusion.reset_index().sort_values(cle), comblees
+
+
 def dater_depuis_les_cours(
     referentiel: pd.DataFrame, cours: pd.DataFrame
 ) -> pd.DataFrame:

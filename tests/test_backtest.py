@@ -25,7 +25,7 @@ os.environ.setdefault(
 
 import pandas as pd  # noqa: E402
 
-from brvm import backtest  # noqa: E402
+from brvm import backtest, dividende  # noqa: E402
 
 # Fenêtres raccourcies : le momentum réel demande 250 séances, ce qui
 # obligerait chaque test à fabriquer plusieurs années de cotation pour
@@ -204,6 +204,82 @@ def test_les_avertissements_accompagnent_tout_resultat():
     rendu = backtest.expliquer(resultat)
     assert "survivant" in rendu and "dividendes" in rendu
     assert "référence" in rendu.lower()
+
+
+def _marche_regulier(n=200):
+    """Quatre valeurs, dérives différentes : de quoi que le classement
+    ait quelque chose à ordonner."""
+    import numpy as np
+    return _cours({
+        f"V{i}": list(100 * np.exp(np.arange(n) * (0.0002 * (i + 1))))
+        for i in range(4)
+    })
+
+
+def _fondamentaux(tickers, annees, rendement=8.0):
+    """Un rendement annuel connu, en pourcentage, comme la source le publie."""
+    return pd.DataFrame([
+        {"ticker": t, "date": f"{a}-12-31", "indicateur": "rendement",
+         "valeur": rendement}
+        for t in tickers for a in annees
+    ])
+
+
+def test_le_dividende_s_accroit_sur_les_seances_de_son_exercice():
+    """Huit pour cent répartis sur l'année : la somme des accroissements
+    d'un exercice doit rendre exactement le rendement publié."""
+    cours = _marche_regulier()
+    tickers = sorted(cours["ticker"].unique())
+    annees = sorted({d[:4] for d in cours["date"]})
+    accru = dividende.accroissement(
+        cours, _fondamentaux(tickers, annees, rendement=8.0))
+
+    for annee in annees:
+        seances = [d for d in accru.index if d.startswith(annee)]
+        somme = accru.loc[seances, tickers[0]].sum()
+        assert abs(somme - 0.08) < 1e-9, (annee, somme)
+
+
+def test_un_exercice_inconnu_n_accroit_rien():
+    """Zéro et non NaN : une année sans dividende connu n'ajoute rien,
+    alors qu'un NaN effacerait aussi le rendement du cours."""
+    cours = _marche_regulier()
+    accru = dividende.accroissement(cours, pd.DataFrame())
+    assert (accru == 0).all().all()
+    assert accru.notna().all().all()
+
+
+def test_le_backtest_avec_dividendes_rend_plus_que_sans():
+    """Sur ce marché le dividende vaut 7 à 10 % l'an quand le cours en
+    rend 2,8 : l'ignorer ne biaise pas à la marge, cela change l'ordre de
+    grandeur."""
+    cours = _marche_regulier()
+    reglages = REGLAGES
+    tickers = sorted(cours["ticker"].unique())
+    annees = sorted({d[:4] for d in cours["date"]})
+
+    sans = backtest.backtester(cours, None, reglages)
+    avec = backtest.backtester(cours, None, reglages,
+                               fondamentaux=_fondamentaux(tickers, annees))
+    if sans["etapes"].empty:
+        return                                   # historique trop court
+    assert avec["rendement_total"] > sans["rendement_total"]
+    assert abs(avec["rendement_prix"] - sans["rendement_total"]) < 1e-9
+    assert avec["apport_dividende"] > 0
+
+
+def test_l_avertissement_change_de_nature_au_lieu_de_disparaitre():
+    """La correction est partielle et approximée. Remplacer « dividendes
+    non pris en compte » par le silence serait pire que l'aveu."""
+    cours = _marche_regulier()
+    tickers = sorted(cours["ticker"].unique())
+    annees = sorted({d[:4] for d in cours["date"]})
+    avec = backtest.backtester(cours, None, REGLAGES,
+                               fondamentaux=_fondamentaux(tickers, annees))
+    joint = " ; ".join(avec["avertissements"])
+    assert "date de détachement" in joint
+    assert "non pris en compte" not in joint
+    assert avec["couverture_dividende"]["part"] > 0
 
 
 if __name__ == "__main__":

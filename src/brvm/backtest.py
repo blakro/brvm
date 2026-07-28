@@ -37,7 +37,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from . import features, scoring
+from . import dividende, features, scoring
 from .config import charger
 
 AVERTISSEMENTS = (
@@ -46,8 +46,20 @@ AVERTISSEMENTS = (
     "frais et impact estimés, non relevés",
 )
 
+# Le même jeu, quand le dividende EST pris en compte. Le deuxième
+# avertissement change de nature plutôt que de disparaître : la
+# correction est partielle et approximée, et le taire serait pire que
+# l'ancien aveu d'ignorance.
+AVERTISSEMENTS_AVEC_DIVIDENDES = (
+    "univers restreint aux sociétés cotées aujourd'hui (biais du survivant)",
+    "dividende réparti sur l'exercice faute de date de détachement, et "
+    "connu sur une partie seulement de la période",
+    "frais et impact estimés, non relevés",
+)
+
 COLONNES = ["date_decision", "date_entree", "date_sortie", "positions",
-            "rendement", "rotation", "cout", "valeur", "valeur_reference"]
+            "rendement", "dividende", "rotation", "cout", "valeur",
+            "valeur_reference"]
 
 
 def _perte_max(valeurs: pd.Series) -> float:
@@ -74,6 +86,7 @@ def backtester(
     cours: pd.DataFrame,
     referentiel: pd.DataFrame | None = None,
     reglages: dict | None = None,
+    fondamentaux: pd.DataFrame | None = None,
 ) -> dict:
     """Rejoue le classement dans le temps. Renvoie mesures et journal.
 
@@ -92,13 +105,25 @@ def backtester(
 
     prix = features.serie(cours)
     dates = list(prix.index)
+    # Le dividende vaut 7 à 10 % l'an sur ce marché quand le cours en rend
+    # 2,8 : l'ignorer ne biaise pas le résultat à la marge, il en change
+    # l'ordre de grandeur. `accroissement` le répartit sur les séances de
+    # son exercice — voir `dividende` pour ce que cette convention
+    # approxime et ce qu'elle ne peut pas rendre.
+    accru = dividende.accroissement(cours, fondamentaux) \
+        if fondamentaux is not None and not fondamentaux.empty else None
+    couverture = dividende.couverture(cours, fondamentaux) \
+        if accru is not None else None
+    avertissements = (AVERTISSEMENTS_AVEC_DIVIDENDES if accru is not None
+                      else AVERTISSEMENTS)
     besoin = int(conf.get("analyse", {}).get("fenetre_momentum", 250)) + 1
 
     vide = {
         "etapes": pd.DataFrame(columns=COLONNES),
         "seances": len(dates),
         "seances_requises": besoin + delai + pas,
-        "avertissements": AVERTISSEMENTS,
+        "avertissements": avertissements,
+        "couverture_dividende": couverture,
     }
     if len(dates) < besoin + delai + pas:
         return vide
@@ -110,6 +135,7 @@ def backtester(
     etapes: list[dict] = []
     detenu: set[str] = set()
     valeur = 1.0
+    valeur_prix = 1.0
     valeur_reference = 1.0
 
     for i in range(besoin - 1, len(dates) - delai - 1, pas):
@@ -137,10 +163,24 @@ def backtester(
         arrivee = prix.iloc[sortie]
         rendements = (arrivee / depart - 1).replace([np.inf, -np.inf], np.nan)
 
-        gain = float(rendements.reindex(choisis).dropna().mean())
-        gain_reference = float(rendements.reindex(eligibles).dropna().mean())
-        if np.isnan(gain):
+        gain_prix = float(rendements.reindex(choisis).dropna().mean())
+        if np.isnan(gain_prix):
             continue
+
+        # Le dividende accru pendant la détention, de l'entrée à la sortie.
+        gain_dividende = 0.0
+        appoint_reference = 0.0
+        if accru is not None:
+            tranche = accru.iloc[entree:sortie]
+            gain_dividende = float(tranche[choisis].sum().mean())
+            appoint_reference = float(
+                tranche[[t for t in eligibles if t in tranche.columns]]
+                .sum().mean())
+        gain = gain_prix + gain_dividende
+
+        gain_reference = float(rendements.reindex(eligibles).dropna().mean())
+        if not np.isnan(gain_reference):
+            gain_reference += appoint_reference
 
         # Chaque ligne remplacée est vendue puis rachetée : deux passages
         # de frais sur la fraction renouvelée.
@@ -152,6 +192,7 @@ def backtester(
         detenu = nouveaux
 
         valeur *= 1 + gain - cout
+        valeur_prix *= 1 + gain_prix - cout
         valeur_reference *= 1 + (
             gain_reference if not np.isnan(gain_reference) else 0.0
         )
@@ -161,7 +202,8 @@ def backtester(
             "date_entree": dates[entree],
             "date_sortie": dates[sortie],
             "positions": ", ".join(choisis),
-            "rendement": gain,
+            "rendement": gain_prix,
+            "dividende": gain_dividende,
             "rotation": rotation,
             "cout": cout,
             "valeur": valeur,
@@ -179,13 +221,17 @@ def backtester(
         "rebalancements": len(journal),
         "rendement_total": valeur - 1,
         "rendement_annualise": _annualiser(valeur, seances),
+        "rendement_prix": valeur_prix - 1,
+        "rendement_prix_annualise": _annualiser(valeur_prix, seances),
+        "apport_dividende": valeur - valeur_prix,
         "reference_total": valeur_reference - 1,
         "reference_annualisee": _annualiser(valeur_reference, seances),
         "perte_max": _perte_max(journal["valeur"]),
         "perte_max_reference": _perte_max(journal["valeur_reference"]),
         "rotation_moyenne": float(journal["rotation"].mean()),
         "cout_cumule": float(journal["cout"].sum()),
-        "avertissements": AVERTISSEMENTS,
+        "avertissements": avertissements,
+        "couverture_dividende": couverture,
     }
 
 
@@ -204,6 +250,19 @@ def expliquer(resultat: dict) -> str:
         f"{resultat['rebalancements']} rééquilibrages sur "
         f"{resultat['seances']} séances",
         "",
+    ]
+    couverture = resultat.get("couverture_dividende")
+    if couverture:
+        lignes += [
+            f"Dividende compté sur {couverture['part']:.0%} des séances "
+            f"(exercices {', '.join(couverture['exercices'])}) ; il apporte "
+            f"{pct(resultat.get('apport_dividende'))} au total.",
+            f"Sans lui, la stratégie rendrait "
+            f"{pct(resultat.get('rendement_prix_annualise'))} l'an au lieu de "
+            f"{pct(resultat['rendement_annualise'])}.",
+            "",
+        ]
+    lignes += [
         f"{'':<22}{'stratégie':>12}{'référence':>12}",
         f"{'rendement total':<22}{pct(resultat['rendement_total']):>12}"
         f"{pct(resultat['reference_total']):>12}",

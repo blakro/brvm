@@ -45,6 +45,76 @@ COLONNES = ["ticker", "rendement", "equilibre", "ecart_normalise",
             "demi_vie", "exploitable"]
 
 
+def accroissement(cours: pd.DataFrame,
+                  fondamentaux: pd.DataFrame) -> pd.DataFrame:
+    """Rendement du dividende accru séance par séance, dates × tickers.
+
+    POURQUOI CETTE FONCTION, ET CE QU'ELLE APPROXIME
+    ------------------------------------------------
+    Le backtest travaillait sur cours nus. Or, sur les quatre exercices
+    connus, le dividende médian vaut 7 à 10 % PAR AN quand le cours va de
+    -1,6 % à +61,4 % : ignorer le dividende, c'est se tromper de plus que
+    tout ce qu'on cherche à mesurer, et se tromper systématiquement CONTRE
+    les valeurs de rendement — celles que le momentum délaisse déjà.
+
+    LA LIMITE, ET ELLE EST RÉELLE. Le tableau pluriannuel de sikafinance
+    donne un rendement par exercice, PAS une date de détachement. Le
+    dividende est donc réparti uniformément sur les séances de son
+    exercice au lieu d'être crédité le jour du détachement.
+
+    Sur une détention d'un trimestre ou plus — le pas le plus court du
+    backtest est de 20 séances — l'écart entre les deux conventions est
+    faible. Sur quelques jours, il ne l'est pas : un détachement fait
+    chuter le cours d'un coup, et l'étaler lisserait précisément ce qu'on
+    voudrait voir. Cette fonction n'est donc PAS un substitut à une série
+    de rendement total pour l'analyse à court terme ; elle corrige un
+    biais de niveau, pas un profil intra-période.
+
+    Les exercices sans donnée rendent zéro, pas NaN : une année sans
+    dividende connu n'ajoute rien au rendement, et propager un NaN
+    effacerait aussi le rendement du cours.
+    """
+    prix = features.serie(cours)
+    vide = pd.DataFrame(0.0, index=prix.index, columns=prix.columns)
+    if prix.empty or fondamentaux is None or fondamentaux.empty:
+        return vide
+
+    rendements = fondamentaux[fondamentaux["indicateur"] == "rendement"]
+    if rendements.empty:
+        return vide
+
+    accru = vide.copy()
+    annees = prix.index.to_series().str[:4]
+    for _, ligne in rendements.iterrows():
+        ticker, annee = str(ligne["ticker"]), str(ligne["date"])[:4]
+        if ticker not in accru.columns:
+            continue
+        seances = annees[annees == annee].index
+        if len(seances) == 0:
+            continue
+        # Le rendement est publié en pourcentage.
+        accru.loc[seances, ticker] = float(ligne["valeur"]) / 100 / len(seances)
+    return accru
+
+
+def couverture(cours: pd.DataFrame, fondamentaux: pd.DataFrame) -> dict:
+    """Sur quelle part de l'archive le dividende est-il connu ?
+
+    Un rendement total calculé sur 35 % des séances et présenté comme
+    total serait plus trompeur que le cours nu, qui au moins ne prétend
+    rien. Ce chiffre accompagne donc chaque résultat corrigé.
+    """
+    prix = features.serie(cours)
+    accru = accroissement(cours, fondamentaux)
+    if prix.empty:
+        return {"seances": 0, "part": 0.0, "exercices": []}
+    couvertes = (accru != 0).any(axis=1)
+    exercices = sorted({d[:4] for d in prix.index[couvertes]})
+    return {"seances": int(couvertes.sum()),
+            "part": float(couvertes.mean()),
+            "exercices": exercices}
+
+
 def rendement_courant(
     cours: pd.DataFrame, dividendes: pd.DataFrame, fenetre_jours: int = 365
 ) -> pd.DataFrame:

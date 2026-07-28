@@ -856,6 +856,7 @@ with onglets[4]:
         {"analyse": DEFAUTS["analyse"], "ponderations": DEFAUTS["ponderations"],
          "backtest": {**DEFAUTS["backtest"], "positions": positions,
                       "frais_pourcent": frais, "impact_pourcent": impact}},
+        fondamentaux=fondamentaux,
     )
 
     if resultat["etapes"].empty:
@@ -882,6 +883,24 @@ with onglets[4]:
         # question que pose cet onglet.
         etapes = resultat["etapes"]
         ecart = resultat["rendement_total"] - resultat["reference_total"]
+
+        # Le dividende n'est pas un détail sur ce marché : il vaut deux à
+        # trois fois le rendement du cours. Dire ce qu'il apporte, et sur
+        # quelle part de la période il est connu, doit précéder le reste.
+        couverture = resultat.get("couverture_dividende")
+        if couverture and couverture["part"] > 0:
+            st.info(
+                "**Dividende compté** sur "
+                f"{pedagogie.pourcentage(couverture['part'], signe=False)} "
+                f"des séances (exercices {', '.join(couverture['exercices'])}). "
+                f"Il apporte {pedagogie.pourcentage(resultat['apport_dividende'])} "
+                "au total : sans lui, la stratégie rendrait "
+                f"{pedagogie.pourcentage(resultat['rendement_prix_annualise'])} "
+                f"l'an au lieu de {pedagogie.pourcentage(resultat['rendement_annualise'])}. "
+                "Faute de date de détachement publiée, il est réparti sur "
+                "les séances de son exercice plutôt que crédité le jour "
+                "même — une correction de niveau, pas de profil."
+            )
         st.markdown(
             f"Sur {resultat['rebalancements']} rééquilibrages entre le "
             f"{pedagogie.jour(etapes['date_entree'].iloc[0])} et le "
@@ -956,7 +975,10 @@ with onglets[4]:
                 "date_sortie": st.column_config.TextColumn("Revendu le"),
                 "positions": st.column_config.TextColumn("Lignes détenues"),
                 "rendement": st.column_config.NumberColumn(
-                    "Rendement", format="percent"),
+                    "Cours", format="percent"),
+                "dividende": st.column_config.NumberColumn(
+                    "Dividende", format="percent",
+                    help="Accru pendant la détention."),
                 "rotation": st.column_config.NumberColumn(
                     "Rotation", format="percent",
                     help="Part du portefeuille remplacée — elle se paie deux "
