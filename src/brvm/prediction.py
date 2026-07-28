@@ -136,12 +136,18 @@ def construire_echantillon(
     if len(dates) < besoin + horizon + 1:
         return pd.DataFrame()
 
+    # Une seule passe glissante pour toutes les dates, au lieu d'un recalcul
+    # complet par date. La coupe temporelle reste stricte : chaque trait
+    # d'une date n'est fabriqué que de cours antérieurs ou égaux, par
+    # construction des fenêtres glissantes — voir features.traits_glissants.
+    matrices = features.traits_glissants(cours, conf)
+
     lignes = []
     for i in range(besoin - 1, len(dates) - horizon):
         date = dates[i]
-        # Coupe stricte : les traits de la date `i` ne voient rien après elle.
-        traits = features.calculer(cours[cours["date"] <= date], conf)
-        traits = traits.dropna(subset=["momentum", "tendance", "volatilite"])
+        traits = pd.DataFrame(
+            {nom: matrices[nom].loc[date] for nom in TRAITS}
+        ).dropna(subset=["momentum", "tendance", "volatilite"])
         if traits.empty:
             continue
 

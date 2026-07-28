@@ -1,0 +1,97 @@
+name: veille de l'archive
+
+on:
+  schedule:
+    # Lundi matin. Une panne survenue le mardi se voit donc au plus tard
+    # six jours après — assez tôt pour ne pas perdre un mois de cotation,
+    # assez rare pour que l'alerte reste une alerte.
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+
+# Nécessaire pour ouvrir l'issue d'alerte.
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  veille:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - run: python -m pip install --upgrade pip && pip install -e .
+
+      - name: L'archive avance-t-elle ?
+        id: controle
+        continue-on-error: true
+        run: |
+          python -m brvm veille --tolerance 5 | tee rapport.txt
+          echo "code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+      # Une seule issue ouverte à la fois : la rouvrir chaque semaine
+      # transformerait l'alerte en bruit, ce que ce contrôle existe
+      # justement pour éviter.
+      - name: Ouvrir une alerte si l'archive est figée
+        if: steps.controle.outputs.code != '0'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const rapport = fs.readFileSync('rapport.txt', 'utf8');
+            const titre = "Archive figée : l'ingestion n'avance plus";
+            const ouvertes = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: 'veille',
+            });
+            const corps = [
+              "Le contrôle hebdomadaire n'a vu aucune nouvelle séance.",
+              '', '```', rapport.trim(), '```', '',
+              "`ingestion.yml` ne rougit pas sur un échec isolé — jour férié,",
+              "séance non close et maintenance du site sont des cas normaux.",
+              "Cette issue est le contre-poids : elle ne se déclenche que",
+              "lorsque la donnée cesse d'avancer.",
+              '',
+              "Pour trancher : `python -m brvm verifier` dit si les sélecteurs",
+              "tiennent encore, et l'onglet Actions dit si le workflow s'exécute.",
+            ].join('\n');
+
+            if (ouvertes.data.length > 0) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: ouvertes.data[0].number, body: corps,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo,
+                title: titre, body: corps, labels: ['veille'],
+              });
+            }
+
+      # Le contrôle est vert : on referme l'alerte au lieu de la laisser
+      # traîner. Une issue ouverte sur un problème résolu use la confiance
+      # aussi sûrement qu'une alerte manquante.
+      - name: Refermer l'alerte si tout est reparti
+        if: steps.controle.outputs.code == '0'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const ouvertes = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: 'veille',
+            });
+            for (const issue of ouvertes.data) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: issue.number,
+                body: "L'archive avance de nouveau — fermeture automatique.",
+              });
+              await github.rest.issues.update({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: issue.number, state: 'closed',
+              });
+            }

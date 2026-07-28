@@ -103,6 +103,10 @@ def backtester(
     if len(dates) < besoin + delai + pas:
         return vide
 
+    # Une seule passe glissante, comme dans prediction : le backtest
+    # recalculait sinon tous les traits à chaque rééquilibrage.
+    matrices = features.traits_glissants(cours, conf)
+
     etapes: list[dict] = []
     detenu: set[str] = set()
     valeur = 1.0
@@ -114,12 +118,15 @@ def backtester(
         if sortie <= entree:
             break
 
-        # Décision : la tranche est coupée à la date `i`, donc rien de ce
-        # qui suit ne peut influencer le choix.
-        tranche = cours[cours["date"] <= dates[i]]
-        classement = scoring.noter(
-            features.calculer(tranche, conf), referentiel, conf
+        # Décision : les traits de la date `i` ne sont fabriqués que de
+        # cours antérieurs ou égaux, par construction des fenêtres
+        # glissantes. Rien de ce qui suit ne peut influencer le choix.
+        traits = pd.DataFrame(
+            {nom: matrices[nom].loc[dates[i]]
+             for nom in ["cloture", *features.TRAITS]}
         )
+        traits.index.name = "ticker"
+        classement = scoring.noter(traits, referentiel, conf)
         if classement.empty:
             continue
 

@@ -47,11 +47,23 @@ SCHEMAS: dict[str, str] = {
             PRIMARY KEY (date, ticker)
         )
     """,
+    # `premiere_vue` / `derniere_vue` datent l'appartenance à la cote.
+    #
+    # SANS ELLES, LE BIAIS DU SURVIVANT SE FABRIQUE À CHAQUE EXÉCUTION. Le
+    # référentiel était réécrit à partir de l'instantané du jour : le jour
+    # où une société est radiée, sa ligne disparaît — nom et secteur
+    # compris — y compris pour les années où elle cotait. Le passé simulé
+    # devient alors celui des seuls survivants, et il est plus beau que le
+    # vrai. Ces deux colonnes permettent de conserver la ligne et de savoir
+    # quand elle a quitté la cote ; elles ne se reconstituent jamais après
+    # coup.
     "referentiel": """
         CREATE TABLE IF NOT EXISTS referentiel (
-            ticker  TEXT PRIMARY KEY,
-            nom     TEXT NOT NULL,
-            secteur TEXT
+            ticker       TEXT PRIMARY KEY,
+            nom          TEXT NOT NULL,
+            secteur      TEXT,
+            premiere_vue TEXT,
+            derniere_vue TEXT
         )
     """,
     "dividendes": """
@@ -228,6 +240,89 @@ def chemin_archive(table: str) -> Path:
     brut = charger()["base"][cle]
     chemin = Path(brut).expanduser()
     return chemin if chemin.is_absolute() else RACINE / chemin
+
+
+def fusionner_referentiel(
+    connu: pd.DataFrame, nouveau: pd.DataFrame, date_seance: str
+) -> tuple[pd.DataFrame, list[str]]:
+    """Fusionne l'instantané du jour dans le référentiel historisé.
+
+    LA RÈGLE : ON N'EFFACE JAMAIS UNE LIGNE. Une société absente de
+    l'instantané n'est pas supprimée, elle garde simplement sa
+    `derniere_vue` — c'est ce qui distingue « radiée en mars » de « n'a
+    jamais existé », et c'est une information qu'on ne peut pas retrouver
+    plus tard.
+
+    Renvoie le référentiel fusionné et la liste des changements notables :
+    entrées, disparitions, reclassements sectoriels. Ces derniers comptent
+    autant que les autres — reclasser une valeur sans le dire réécrit
+    rétroactivement la composition des secteurs, donc la neutralisation
+    sectorielle de tout l'historique.
+    """
+    colonnes = ["ticker", "nom", "secteur", "premiere_vue", "derniere_vue"]
+    if connu is None or connu.empty:
+        connu = pd.DataFrame(columns=colonnes)
+    connu = connu.reindex(columns=colonnes).set_index("ticker")
+
+    changements: list[str] = []
+    fusion = connu.copy()
+
+    for ligne in nouveau.itertuples():
+        ticker = str(ligne.ticker)
+        nom = getattr(ligne, "nom", None)
+        secteur = getattr(ligne, "secteur", None)
+
+        if ticker not in fusion.index:
+            changements.append(f"entrée : {ticker} ({nom})")
+            fusion.loc[ticker] = [nom, secteur, date_seance, date_seance]
+            continue
+
+        ancien_secteur = fusion.at[ticker, "secteur"]
+        if pd.notna(secteur) and pd.notna(ancien_secteur) and secteur != ancien_secteur:
+            changements.append(
+                f"reclassement : {ticker} {ancien_secteur} → {secteur}")
+        if pd.notna(nom):
+            fusion.at[ticker, "nom"] = nom
+        if pd.notna(secteur):
+            fusion.at[ticker, "secteur"] = secteur
+        if pd.isna(fusion.at[ticker, "premiere_vue"]):
+            fusion.at[ticker, "premiere_vue"] = date_seance
+        fusion.at[ticker, "derniere_vue"] = date_seance
+
+    absents = set(connu.index) - set(nouveau["ticker"].astype(str))
+    for ticker in sorted(absents):
+        vue = fusion.at[ticker, "derniere_vue"]
+        changements.append(f"absente de la cote : {ticker} (vue le {vue})")
+
+    return fusion.reset_index()[colonnes], changements
+
+
+def dater_depuis_les_cours(
+    referentiel: pd.DataFrame, cours: pd.DataFrame
+) -> pd.DataFrame:
+    """Remplit les dates manquantes d'après l'historique des cours.
+
+    Migration d'un référentiel non daté : la première et la dernière séance
+    où un ticker apparaît dans `cours` sont une donnée réelle, meilleure que
+    la date du jour où l'on a commencé à dater. Ne touche pas aux lignes
+    déjà datées.
+    """
+    if referentiel.empty or cours.empty:
+        return referentiel
+
+    bornes = cours.groupby("ticker")["date"].agg(["min", "max"])
+    sortie = referentiel.copy()
+    for colonne in ("premiere_vue", "derniere_vue"):
+        if colonne not in sortie.columns:
+            sortie[colonne] = pd.NA
+
+    depuis = {"premiere_vue": "min", "derniere_vue": "max"}
+    for colonne, borne in depuis.items():
+        manquants = sortie[colonne].isna()
+        sortie.loc[manquants, colonne] = (
+            sortie.loc[manquants, "ticker"].map(bornes[borne])
+        )
+    return sortie
 
 
 def charger_archive(table: str = "cours") -> pd.DataFrame:

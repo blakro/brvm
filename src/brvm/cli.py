@@ -8,6 +8,7 @@
     python -m brvm backtester            rejoue le classement dans le temps
     python -m brvm exporter              base → CSV versionnés
     python -m brvm importer              CSV versionnés → base
+    python -m brvm veille                l'archive s'enrichit-elle encore ?
     python -m brvm etat                  ce que contient la base
 
 Chaque commande rend 0 en cas de succès et 1 en cas d'échec, pour qu'un
@@ -19,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -57,10 +59,21 @@ def _referentiel(args) -> int:
         print("référentiel introuvable, y compris l'amorce", file=sys.stderr)
         return 1
 
-    db.enregistrer(ref, "referentiel")
-    classees = int(ref["secteur"].notna().sum())
-    print(f"{len(ref)} sociétés enregistrées depuis {origine}, "
-          f"{classees} avec secteur")
+    cours = db.lire("cours")
+    date_seance = str(cours["date"].max()) if not cours.empty else args.date
+
+    # Fusion, jamais remplacement : une société radiée garde sa ligne et sa
+    # dernière date de présence. Sans cela, elle disparaîtrait du passé
+    # qu'elle a pourtant vécu.
+    connu = db.dater_depuis_les_cours(db.lire("referentiel"), cours)
+    fusion, changements = db.fusionner_referentiel(connu, ref, date_seance)
+    db.enregistrer(fusion, "referentiel")
+
+    classees = int(fusion["secteur"].notna().sum())
+    print(f"{len(fusion)} sociétés au référentiel ({len(ref)} vues aujourd'hui "
+          f"depuis {origine}), {classees} avec secteur")
+    for changement in changements:
+        print(f"  {changement}")
     return 0
 
 
@@ -165,6 +178,52 @@ def _rendement(args) -> int:
     return 0 if not tableau.empty else 1
 
 
+def _veille(args) -> int:
+    """L'archive s'est-elle enrichie récemment ? 0 si oui, 1 sinon.
+
+    `ingestion.yml` ne rougit pas quand une exécution échoue : jour férié,
+    séance non close, site en maintenance sont des cas normaux, et rougir
+    chaque jour chômé apprendrait à ignorer les alertes. Le revers de ce
+    choix est qu'une panne durable ne se voit pas non plus — le pipeline
+    peut être mort depuis trois semaines sans que rien ne le dise.
+
+    Cette commande est le complément manquant : elle ne regarde pas si la
+    dernière exécution a réussi, mais si la DONNÉE avance. C'est la seule
+    question qui compte, et elle a une réponse même quand personne n'a
+    regardé les journaux.
+    """
+    archive = db.charger_archive("cours")
+    if archive.empty:
+        print("archive vide : aucune séance n'a jamais été enregistrée",
+              file=sys.stderr)
+        return 1
+
+    derniere = str(archive["date"].max())
+    aujourdhui = datetime.now().date()
+    ecoules = len(pd.bdate_range(
+        pd.Timestamp(derniere).date() + pd.Timedelta(days=1), aujourdhui
+    ))
+
+    print(f"dernière séance en archive : {derniere}")
+    print(f"jours ouvrés écoulés depuis : {ecoules}")
+    print(f"séances au total : {archive['date'].nunique()}")
+
+    if ecoules > args.tolerance:
+        print(
+            f"\nARCHIVE FIGÉE : {ecoules} jours ouvrés sans nouvelle séance, "
+            f"seuil {args.tolerance}. Causes probables, par ordre de "
+            "fréquence : l'action ne s'exécute pas (branche par défaut, "
+            "workflow désactivé après 60 jours d'inactivité du dépôt), le "
+            "runner n'atteint pas brvm.org, ou les sélecteurs ont cassé — "
+            "lancez « brvm verifier » pour trancher entre les deux derniers.",
+            file=sys.stderr,
+        )
+        return 1
+
+    print("\nL'archive avance.")
+    return 0
+
+
 def _exporter(args) -> int:
     for table in ("cours", "referentiel"):
         lignes = db.exporter(table)
@@ -213,6 +272,10 @@ def construire_analyseur() -> argparse.ArgumentParser:
     referentiel = commandes.add_parser(
         "referentiel", help="mettre à jour la liste des sociétés cotées"
     )
+    referentiel.add_argument(
+        "--date", default=datetime.now().strftime("%Y-%m-%d"),
+        help="date de présence à enregistrer si la base n'a pas de cours",
+    )
     referentiel.set_defaults(fonction=_referentiel)
 
     noter = commandes.add_parser(
@@ -252,6 +315,15 @@ def construire_analyseur() -> argparse.ArgumentParser:
                            help="secteurs analysés (télécoms et services "
                                 "publics par défaut)")
     rendement.set_defaults(fonction=_rendement)
+
+    veille = commandes.add_parser(
+        "veille", help="l'archive s'enrichit-elle encore ?"
+    )
+    veille.add_argument(
+        "--tolerance", type=int, default=5,
+        help="jours ouvrés tolérés sans nouvelle séance (5 par défaut)",
+    )
+    veille.set_defaults(fonction=_veille)
 
     exporter = commandes.add_parser(
         "exporter", help="base → CSV versionnés de data/"

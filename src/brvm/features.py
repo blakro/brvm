@@ -96,33 +96,81 @@ def liquidite(cours: pd.DataFrame, fenetre: int) -> pd.Series:
     return volumes.iloc[-fenetre:].fillna(0).median()
 
 
-def calculer(cours: pd.DataFrame, reglages: dict | None = None) -> pd.DataFrame:
-    """Tous les traits, à la dernière date disponible, un ticker par ligne."""
-    conf = (reglages or charger()).get("analyse", {})
-    defauts = {
-        "fenetre_momentum": 250, "saut_momentum": 20,
-        "fenetre_volatilite": 60, "fenetre_liquidite": 60,
-        "moyenne_courte": 20, "moyenne_longue": 100,
-    }
-    lire = lambda cle: int(conf.get(cle, defauts[cle]))  # noqa: E731
+DEFAUTS_FENETRES = {
+    "fenetre_momentum": 250, "saut_momentum": 20,
+    "fenetre_volatilite": 60, "fenetre_liquidite": 60,
+    "moyenne_courte": 20, "moyenne_longue": 100,
+}
 
+TRAITS = ["momentum", "tendance", "volatilite", "liquidite"]
+
+
+def _fenetres(reglages: dict | None) -> dict[str, int]:
+    conf = (reglages or charger()).get("analyse", {})
+    return {cle: int(conf.get(cle, defaut))
+            for cle, defaut in DEFAUTS_FENETRES.items()}
+
+
+def traits_glissants(
+    cours: pd.DataFrame, reglages: dict | None = None
+) -> dict[str, pd.DataFrame]:
+    """Tous les traits, à TOUTES les dates : {trait: matrice dates × tickers}.
+
+    POURQUOI CETTE FONCTION EXISTE. Les traits étaient recalculés de zéro
+    pour chaque date, avec un pivot complet à chaque tour. Mesuré sur des
+    séries fabriquées : 0,96 s pour 150 séances, 4,37 s pour 250, 9,75 s
+    pour 400 — une croissance quadratique qui donnait plusieurs minutes sur
+    dix ans de cotation, à chaque chargement de l'onglet Prédiction et à
+    chaque mouvement de curseur. Le coût devenait prohibitif exactement au
+    moment où le projet réussit.
+
+    Les mêmes quantités se calculent ici en une passe glissante sur la
+    matrice entière. `calculer` n'est plus qu'une lecture de la dernière
+    ligne, ce qui garantit que les deux chemins ne peuvent pas diverger.
+    """
+    f = _fenetres(reglages)
     prix = serie(cours)
     if prix.empty:
-        return pd.DataFrame(
-            columns=["cloture", "momentum", "tendance", "volatilite", "liquidite"]
-        )
+        return {trait: pd.DataFrame() for trait in [*TRAITS, "cloture"]}
 
-    traits = pd.DataFrame(index=prix.columns)
+    # Momentum : cours en t-saut rapporté au cours en t-fenetre. `shift`
+    # décale d'autant de LIGNES, ce qui correspond aux séances puisque la
+    # matrice est indexée par date de cotation.
+    debut = prix.shift(f["fenetre_momentum"])
+    fin = prix.shift(f["saut_momentum"])
+    mom = (fin / debut - 1).where(debut > 0)
+
+    courte = prix.rolling(f["moyenne_courte"]).mean()
+    longue = prix.rolling(f["moyenne_longue"]).mean()
+    tend = (courte / longue - 1).where(longue > 0)
+
+    # `rolling(n).std()` sur les log-rendements porte sur n écarts, soit les
+    # n+1 cours de la version ponctuelle. Même estimateur (ddof=1).
+    rendements = np.log(prix).diff()
+    vol = rendements.rolling(f["fenetre_volatilite"]).std() * np.sqrt(SEANCES_PAR_AN)
+
+    # `min_periods=1` reproduit `iloc[-fenetre:]`, qui prenait ce qui
+    # existait quand l'historique était plus court que la fenêtre.
+    volumes = serie(cours, "volume_fcfa").reindex(
+        index=prix.index, columns=prix.columns
+    ).fillna(0)
+    liq = volumes.rolling(f["fenetre_liquidite"], min_periods=1).median()
+
+    return {"cloture": prix, "momentum": mom, "tendance": tend,
+            "volatilite": vol, "liquidite": liq}
+
+
+def calculer(cours: pd.DataFrame, reglages: dict | None = None) -> pd.DataFrame:
+    """Tous les traits, à la dernière date disponible, un ticker par ligne."""
+    matrices = traits_glissants(cours, reglages)
+    if matrices["cloture"].empty:
+        return pd.DataFrame(columns=["cloture", *TRAITS])
+
+    dates = matrices["cloture"].index
+    traits = pd.DataFrame(
+        {nom: matrice.iloc[-1] for nom, matrice in matrices.items()}
+    )
     traits.index.name = "ticker"
-    traits["cloture"] = prix.iloc[-1]
-    traits["momentum"] = momentum(
-        prix, lire("fenetre_momentum"), lire("saut_momentum")
-    )
-    traits["tendance"] = tendance(
-        prix, lire("moyenne_courte"), lire("moyenne_longue")
-    )
-    traits["volatilite"] = volatilite(prix, lire("fenetre_volatilite"))
-    traits["liquidite"] = liquidite(cours, lire("fenetre_liquidite"))
-    traits.attrs["date"] = str(prix.index[-1])
-    traits.attrs["seances"] = len(prix)
-    return traits
+    traits.attrs["date"] = str(dates[-1])
+    traits.attrs["seances"] = len(dates)
+    return traits[["cloture", *TRAITS]]

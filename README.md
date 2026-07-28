@@ -75,6 +75,7 @@ python -m brvm importer-fondamentaux fichier.csv
 python -m brvm backtester      # rejoue le classement dans le temps
 python -m brvm exporter        # base → CSV versionnés
 python -m brvm importer        # CSV versionnés → base
+python -m brvm veille          # l'archive s'enrichit-elle encore ?
 python -m brvm etat            # ce que contient la base
 ```
 
@@ -138,7 +139,7 @@ SQLite, `data/brvm.db` par défaut. Trois tables, déclarées dans
 | Table | Clé | Contenu |
 |---|---|---|
 | `cours` | (date, ticker) | ouverture, haut, bas, clôture, volumes |
-| `referentiel` | ticker | nom, secteur |
+| `referentiel` | ticker | nom, secteur, première et dernière présence |
 | `journal_ingestion` | — | trace de chaque exécution |
 
 Réenregistrer une séance déjà présente la corrige au lieu de la dupliquer.
@@ -166,8 +167,28 @@ tourne à 16 h UTC du lundi au vendredi, une heure après la clôture.
 Un refus d'ingestion n'y est pas traité comme une panne — jour férié,
 séance non close, site en maintenance sont des cas normaux. Marquer
 l'exécution en rouge chaque jour chômé apprendrait à ignorer les alertes.
-Ce qui est anormal, plusieurs jours sans nouvelle ligne, se voit dans
-l'historique du CSV.
+
+Le revers de ce choix est qu'une panne DURABLE ne se verrait pas non plus :
+le pipeline pourrait être mort depuis trois semaines sans que rien ne le
+dise. C'est ce que ferme `veille.yml`, qui tourne le lundi et ne regarde pas
+si la dernière exécution a réussi mais si **la donnée avance**. Au-delà de
+cinq jours ouvrés sans nouvelle séance, elle ouvre une issue — une seule,
+commentée les semaines suivantes plutôt que rouverte, et refermée
+automatiquement dès que l'archive repart.
+
+### Le référentiel est historisé, et ce n'est pas cosmétique
+
+`referentiel` porte `premiere_vue` et `derniere_vue`, et **aucune ligne
+n'est jamais effacée**. Le référentiel était auparavant réécrit depuis
+l'instantané du jour : une société radiée y perdait sa ligne, son nom et son
+secteur, y compris pour les années où elle cotait. Le passé simulé devenait
+celui des seuls survivants — le biais que `backtest.py` documente était en
+train de se fabriquer à chaque exécution.
+
+Les reclassements sectoriels sont signalés pour la même raison : reclasser
+une valeur sans le dire réécrit rétroactivement la composition des secteurs,
+donc la neutralisation sectorielle de tout l'historique, sans qu'aucun
+chiffre ne bouge visiblement.
 
 ## Analyse
 
@@ -283,7 +304,7 @@ données du projet. Ils accompagnent chaque résultat affiché :
 pytest -q                     # ou : python tests/test_brvm_org.py
 ```
 
-Cinquante-sept tests, tous hors ligne.
+Soixante et un tests, tous hors ligne.
 
 `test_brvm_org.py` travaille sur les captures réelles de `tests/donnees/`,
 y compris les pages pathologiques : la 404 habillée du thème complet, la

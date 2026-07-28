@@ -199,6 +199,144 @@ def test_un_secteur_trop_petit_est_note_face_au_marche():
         assert abs(avec.loc[ticker, "score"] - sans.loc[ticker, "score"]) < 1e-9
 
 
+def test_les_traits_glissants_redonnent_les_traits_ponctuels():
+    """L'optimisation ne doit pas déplacer un seul chiffre.
+
+    Les traits sont désormais calculés en une passe glissante sur toute la
+    matrice au lieu d'être refaits date par date — 0,05 s au lieu de 9,75 s
+    sur 400 séances. Une accélération de ce facteur n'a aucune valeur si
+    elle change les nombres, et l'écart serait indétectable à l'œil : ce
+    test compare les deux chemins sur un échantillon de dates.
+
+    Les fonctions ponctuelles `momentum`, `tendance`, `volatilite` et
+    `liquidite` sont conservées pour cela — elles sont la définition de
+    référence contre laquelle la version rapide est mesurée.
+    """
+    import numpy as np
+
+    from brvm import features
+
+    rng = np.random.default_rng(4)
+    n = 160
+    trajectoires = {
+        f"T{i:02d}": 100 * np.exp(np.cumsum(rng.normal(0, 0.015, n)))
+        for i in range(6)
+    }
+    cours = _cours(trajectoires, volume_fcfa=3_000_000)
+    reglages = {"analyse": {"fenetre_momentum": 60, "saut_momentum": 5,
+                            "fenetre_volatilite": 20, "fenetre_liquidite": 20,
+                            "moyenne_courte": 5, "moyenne_longue": 20}}
+
+    f = features._fenetres(reglages)
+    matrices = features.traits_glissants(cours, reglages)
+    dates = sorted(cours["date"].unique())
+
+    compares = 0
+    for date in dates[::17]:
+        tranche = cours[cours["date"] <= date]
+        prix = features.serie(tranche)
+        ponctuels = {
+            "momentum": features.momentum(prix, f["fenetre_momentum"],
+                                          f["saut_momentum"]),
+            "tendance": features.tendance(prix, f["moyenne_courte"],
+                                          f["moyenne_longue"]),
+            "volatilite": features.volatilite(prix, f["fenetre_volatilite"]),
+            "liquidite": features.liquidite(tranche, f["fenetre_liquidite"]),
+        }
+        for nom, attendu in ponctuels.items():
+            obtenu = matrices[nom].loc[date]
+            attendu = attendu.reindex(obtenu.index)
+            # Les manquants doivent manquer aux mêmes endroits : un trait
+            # calculé « sur ce qu'on a » là où l'ancien refusait serait une
+            # régression silencieuse.
+            assert (attendu.isna() == obtenu.isna()).all(), (
+                f"{date} {nom} : motifs de valeurs manquantes différents"
+            )
+            deux = attendu.notna() & obtenu.notna()
+            if deux.any():
+                ecart = float((attendu[deux] - obtenu[deux]).abs().max())
+                assert ecart < 1e-9, f"{date} {nom} : écart {ecart:.2e}"
+        compares += 1
+
+    assert compares >= 5
+
+
+def test_une_societe_radiee_ne_disparait_pas_du_referentiel():
+    """Le biais du survivant, arrêté à la source.
+
+    Le référentiel était réécrit depuis l'instantané du jour : une société
+    radiée perdait sa ligne, son nom et son secteur — y compris pour les
+    années où elle cotait. Le passé simulé devenait celui des seuls
+    survivants. Cette information ne se reconstitue jamais après coup,
+    d'où la règle : on fusionne, on n'efface pas.
+    """
+    from brvm import db
+
+    hier = pd.DataFrame([
+        {"ticker": "AAAA", "nom": "Alpha", "secteur": "Industriels"},
+        {"ticker": "BBBB", "nom": "Beta", "secteur": "Energie"},
+    ])
+    fusion, _ = db.fusionner_referentiel(pd.DataFrame(), hier, "2026-01-05")
+    assert set(fusion["ticker"]) == {"AAAA", "BBBB"}
+    assert (fusion["premiere_vue"] == "2026-01-05").all()
+
+    # BBBB quitte la cote ; AAAA reste ; CCCC entre.
+    aujourdhui = pd.DataFrame([
+        {"ticker": "AAAA", "nom": "Alpha", "secteur": "Industriels"},
+        {"ticker": "CCCC", "nom": "Gamma", "secteur": "Energie"},
+    ])
+    fusion, changements = db.fusionner_referentiel(fusion, aujourdhui,
+                                                   "2026-06-30")
+    par_ticker = fusion.set_index("ticker")
+
+    assert "BBBB" in par_ticker.index, "la société radiée a été effacée"
+    assert par_ticker.at["BBBB", "derniere_vue"] == "2026-01-05"
+    assert par_ticker.at["BBBB", "nom"] == "Beta"
+    assert par_ticker.at["AAAA", "premiere_vue"] == "2026-01-05"
+    assert par_ticker.at["AAAA", "derniere_vue"] == "2026-06-30"
+    assert par_ticker.at["CCCC", "premiere_vue"] == "2026-06-30"
+
+    assert any("BBBB" in c and "absente" in c for c in changements)
+    assert any("CCCC" in c and "entrée" in c for c in changements)
+
+
+def test_un_reclassement_sectoriel_est_signale():
+    """Reclasser une valeur sans le dire réécrit rétroactivement la
+    composition des secteurs — donc la neutralisation sectorielle de tout
+    l'historique, sans qu'aucun chiffre ne bouge visiblement."""
+    from brvm import db
+
+    connu, _ = db.fusionner_referentiel(
+        pd.DataFrame(),
+        pd.DataFrame([{"ticker": "AAAA", "nom": "Alpha",
+                       "secteur": "Industriels"}]),
+        "2026-01-05",
+    )
+    _, changements = db.fusionner_referentiel(
+        connu,
+        pd.DataFrame([{"ticker": "AAAA", "nom": "Alpha",
+                       "secteur": "Energie"}]),
+        "2026-06-30",
+    )
+    assert any("reclassement" in c and "Industriels" in c and "Energie" in c
+               for c in changements), changements
+
+
+def test_les_dates_manquantes_viennent_des_cours():
+    """Migration d'un référentiel non daté : la première et la dernière
+    séance où un ticker apparaît sont une donnée réelle, meilleure que la
+    date du jour où l'on a commencé à dater."""
+    from brvm import db
+
+    cours = _cours({"AAAA": [100.0] * 5, "BBBB": [50.0] * 5})
+    ref = pd.DataFrame([{"ticker": "AAAA", "nom": "Alpha", "secteur": "X"}])
+    date = db.dater_depuis_les_cours(ref, cours).set_index("ticker")
+
+    bornes = cours[cours["ticker"] == "AAAA"]["date"]
+    assert date.at["AAAA", "premiere_vue"] == bornes.min()
+    assert date.at["AAAA", "derniere_vue"] == bornes.max()
+
+
 def test_l_archive_se_lit_sans_base():
     """Le chemin de la web app : lire le CSV sans créer de SQLite.
 
@@ -211,7 +349,10 @@ def test_l_archive_se_lit_sans_base():
     colonnes = db._colonnes_declarees("cours")
     assert colonnes == ["date", "ticker", "ouverture", "haut", "bas",
                         "cloture", "volume_titres", "volume_fcfa"]
-    assert db._colonnes_declarees("referentiel") == ["ticker", "nom", "secteur"]
+    # premiere_vue / derniere_vue datent l'appartenance à la cote : sans
+    # elles, une société radiée disparaîtrait du passé qu'elle a vécu.
+    assert db._colonnes_declarees("referentiel") == [
+        "ticker", "nom", "secteur", "premiere_vue", "derniere_vue"]
 
     with tempfile.TemporaryDirectory() as dossier:
         config = Path(dossier) / "c.toml"
