@@ -91,6 +91,22 @@ jobs:
           # rien perdre ; au-delà, `veille` aura alerté depuis longtemps.
           retention-days: 30
 
+      # SECOND CHEMIN, POUR L'INCRÉMENT DU JOUR. L'artefact est hébergé
+      # hors de GitHub, sur un stockage que tous les environnements ne
+      # peuvent pas atteindre. L'incrément quotidien, lui, tient en une
+      # cinquantaine de lignes : les écrire dans le journal permet de les
+      # verser depuis n'importe quelle session capable de lire ce journal,
+      # sans dépendre d'un téléchargement.
+      #
+      # L'artefact reste la voie normale et complète ; ceci est le filet.
+      - name: Écrire l'incrément dans le journal
+        if: steps.neuf.outputs.present == 'oui'
+        run: |
+          echo "--- DÉBUT INCRÉMENT CSV ---"
+          git diff --unified=0 -- data/cours.csv \
+            | grep -E '^\+[0-9]{4}-' | sed 's/^+//'
+          echo "--- FIN INCRÉMENT CSV ---"
+
       - name: Résumé
         if: always()
         run: |

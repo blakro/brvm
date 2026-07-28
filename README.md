@@ -162,6 +162,13 @@ fait depuis une session, qui signe :
 2. décompresser dans `data/` ;
 3. `python -m brvm importer` puis `git add data/ && git commit`.
 
+Les artefacts sont hébergés hors de GitHub, sur un stockage que certains
+environnements d'exécution ne peuvent pas atteindre. `ingestion.yml`
+écrit donc aussi l'incrément du jour — une cinquantaine de lignes — dans
+son journal, entre `--- DÉBUT INCRÉMENT CSV ---` et `--- FIN INCRÉMENT
+CSV ---`. Il suffit alors de lire le journal pour verser la séance.
+L'artefact reste la voie normale et complète ; le journal est le filet.
+
 Le prix est réel et assumé : **l'archive n'avance plus toute seule**.
 C'est précisément ce que `veille.yml` surveille — elle ouvre une issue
 quand la donnée cesse de progresser, et son message distingue les deux
