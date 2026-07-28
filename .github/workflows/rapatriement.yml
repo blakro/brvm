@@ -117,8 +117,10 @@ jobs:
             echo "::notice::Archive inchangée — rien à committer."
             exit 0
           fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Même identité que le reste du dépôt : ces commits sont le
+          # produit du code de ce projet, déclenché depuis ce projet.
+          git config user.name  "Claude"
+          git config user.email "noreply@anthropic.com"
           git add data/
           git commit -m "Rapatrier l'historique du ${{ inputs.debut }} au ${{ inputs.fin }}"
           git push
