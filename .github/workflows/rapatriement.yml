@@ -37,8 +37,10 @@ on:
         required: false
         default: "0.5"
 
+# Lecture seule : l'action dépose un artefact, elle ne commite pas. Voir
+# `ingestion.yml` pour le raisonnement — un runner ne sait pas signer.
 permissions:
-  contents: write
+  contents: read
 
 # Deux rapatriements simultanés se marcheraient dessus sur data/cours.csv,
 # et le second effacerait ce que le premier vient d'ajouter.
@@ -110,17 +112,24 @@ jobs:
           python -m brvm importer
           python -m brvm etat
 
-      - name: Versionner l'archive élargie
+      - name: Déposer l'archive élargie
         if: ${{ !inputs.sonde }}
         run: |
           if git diff --quiet -- data/; then
-            echo "::notice::Archive inchangée — rien à committer."
-            exit 0
+            echo "::notice::Archive inchangée — rien à déposer."
+          else
+            {
+              echo "### Archive à verser"
+              echo '```'
+              git diff --stat -- data/
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
           fi
-          # Même identité que le reste du dépôt : ces commits sont le
-          # produit du code de ce projet, déclenché depuis ce projet.
-          git config user.name  "Claude"
-          git config user.email "noreply@anthropic.com"
-          git add data/
-          git commit -m "Rapatrier l'historique du ${{ inputs.debut }} au ${{ inputs.fin }}"
-          git push
+
+      - name: Publier l'artefact
+        if: ${{ !inputs.sonde }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: archive-${{ github.run_id }}
+          path: data/
+          retention-days: 30

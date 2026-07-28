@@ -10,9 +10,18 @@ on:
     - cron: "0 16 * * 1-5"
   workflow_dispatch:
 
-# Nécessaire pour reverser l'archive CSV dans le dépôt.
+# LECTURE SEULE, ET C'EST LE POINT. Un runner GitHub n'a pas de clé de
+# signature : tout commit qu'il produirait resterait non signé, et
+# l'historique du dépôt cesserait d'être intégralement vérifiable pour la
+# commodité d'un cron. L'action produit donc un ARTEFACT ; le commit se
+# fait depuis une session qui sait signer.
+#
+# Le prix est réel : l'archive n'avance plus toute seule. C'est
+# exactement ce que `veille.yml` surveille — elle ouvre une issue quand la
+# donnée cesse de progresser, et devient ici le rappel qu'un artefact
+# attend d'être versé.
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: ingestion
@@ -54,25 +63,33 @@ jobs:
       - name: Réécrire l'archive
         run: python -m brvm exporter
 
-      - name: Publier la journée
+      - name: Y a-t-il quelque chose de neuf ?
+        id: neuf
         run: |
           if git diff --quiet -- data/; then
+            echo "present=non" >> "$GITHUB_OUTPUT"
             echo "Aucune nouvelle donnée." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
+          else
+            echo "present=oui" >> "$GITHUB_OUTPUT"
+            {
+              echo "### Séance à verser"
+              echo '```'
+              git diff --stat -- data/
+              echo '```'
+              echo "Archive déposée en artefact : elle sera versée au dépôt"
+              echo "depuis une session, avec signature."
+            } >> "$GITHUB_STEP_SUMMARY"
           fi
-          # Même identité que le reste du dépôt : ces commits sont le
-          # produit du code de ce projet, déclenché depuis ce projet.
-          git config user.name  "Claude"
-          git config user.email "noreply@anthropic.com"
-          git add data/
-          git commit -m "Séance du $(date -u +%F)"
-          git push
-          {
-            echo "### Séance enregistrée"
-            echo '```'
-            git show --stat --oneline HEAD | head -5
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Déposer l'archive
+        if: steps.neuf.outputs.present == 'oui'
+        uses: actions/upload-artifact@v4
+        with:
+          name: archive-${{ github.run_id }}
+          path: data/
+          # Assez pour qu'une absence d'une quinzaine de jours ne fasse
+          # rien perdre ; au-delà, `veille` aura alerté depuis longtemps.
+          retention-days: 30
 
       - name: Résumé
         if: always()

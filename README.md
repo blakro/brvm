@@ -148,6 +148,25 @@ Réenregistrer une séance déjà présente la corrige au lieu de la dupliquer.
 référentiel échoue. Il a été constitué à partir des captures du 27/07/2026
 et couvre les 47 sociétés avec leur secteur.
 
+### Les actions ne committent pas, elles déposent
+
+Un runner GitHub n'a pas de clé de signature : tout commit qu'il produirait
+resterait non signé, et l'historique du dépôt cesserait d'être
+intégralement vérifiable pour la commodité d'un cron.
+
+`ingestion.yml` et `rapatriement.yml` sont donc en **lecture seule** et
+publient un artefact `archive-<run_id>` contenant `data/`. Le versement se
+fait depuis une session, qui signe :
+
+1. onglet **Actions** → l'exécution → télécharger l'artefact `archive-…` ;
+2. décompresser dans `data/` ;
+3. `python -m brvm importer` puis `git add data/ && git commit`.
+
+Le prix est réel et assumé : **l'archive n'avance plus toute seule**.
+C'est précisément ce que `veille.yml` surveille — elle ouvre une issue
+quand la donnée cesse de progresser, et son message distingue les deux
+causes possibles : des artefacts en attente, ou une collecte cassée.
+
 ### La source de vérité est le CSV, pas la base
 
 `data/cours.csv` et `data/referentiel.csv` sont versionnés ; `data/brvm.db`

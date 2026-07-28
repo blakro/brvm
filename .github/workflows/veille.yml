@@ -56,8 +56,18 @@ jobs:
               "Cette issue est le contre-poids : elle ne se déclenche que",
               "lorsque la donnée cesse d'avancer.",
               '',
-              "Pour trancher : `python -m brvm verifier` dit si les sélecteurs",
-              "tiennent encore, et l'onglet Actions dit si le workflow s'exécute.",
+              "DEUX CAUSES POSSIBLES, ET LA PREMIÈRE EST LA PLUS PROBABLE.",
+              '',
+              "1. Des artefacts attendent d'être versés. Depuis que les",
+              "   actions ne committent plus — un runner ne sait pas signer,",
+              "   et l'historique doit rester vérifiable — chaque séance est",
+              "   déposée en artefact et versée depuis une session. Regardez",
+              "   l'onglet Actions : si `ingestion quotidienne` réussit et",
+              "   publie des artefacts `archive-…`, il n'y a rien de cassé,",
+              "   seulement du travail en attente.",
+              '',
+              "2. La collecte elle-même échoue. `python -m brvm verifier` dit",
+              "   si les sélecteurs tiennent encore.",
             ].join('\n');
 
             if (ouvertes.data.length > 0) {
