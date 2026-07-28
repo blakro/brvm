@@ -245,6 +245,57 @@ def _ic_par_seance(bloc: pd.DataFrame, colonne: str) -> float:
     )
 
 
+def mesurer_ic(bloc: pd.DataFrame, colonne: str, horizon: int) -> dict:
+    """IC moyen ET l'incertitude qui va avec. Les deux, jamais l'un sans l'autre.
+
+    POURQUOI CETTE FONCTION EXISTE. Un IC moyenné sur toutes les dates
+    d'un historique quotidien paraît reposer sur des milliers
+    d'observations. Il n'en est rien : avec un horizon de 60 séances,
+    l'étiquette du lundi recouvre celle du mardi à 59/60. Deux dates
+    voisines racontent la même histoire.
+
+    Compter ces dates comme indépendantes multiplie le t par racine de
+    l'horizon — environ huit ici. C'est exactement l'erreur qui a fait
+    passer la volatilité pour un signal exploitable (t = -10,2) alors
+    qu'elle ne se distingue pas du hasard (t = -1,4).
+
+    L'erreur-type est donc calculée sur le nombre de périodes RÉELLEMENT
+    disjointes, `dates / horizon`. C'est conservateur — le recouvrement
+    n'annule pas toute l'information d'une date sur l'autre — et c'est le
+    bon côté duquel se tromper quand on cherche un signal qui n'existe
+    probablement pas.
+    """
+    par_date = bloc.groupby("date").apply(
+        lambda g: _ic(g[colonne], g["rendement_futur"]),
+        include_groups=False,
+    ).dropna()
+
+    vide = {"ic": float("nan"), "erreur_type": float("nan"),
+            "t": float("nan"), "dates": 0, "dates_independantes": 0,
+            "significatif": False}
+    if par_date.empty:
+        return vide
+
+    moyenne = float(par_date.mean())
+    independantes = max(1, int(np.ceil(len(par_date) / max(1, horizon))))
+    if len(par_date) < 2 or independantes < 2:
+        return {**vide, "ic": moyenne, "dates": len(par_date),
+                "dates_independantes": independantes}
+
+    erreur = float(par_date.std(ddof=1) / np.sqrt(independantes))
+    t = moyenne / erreur if erreur else float("nan")
+    return {
+        "ic": moyenne,
+        "erreur_type": erreur,
+        "t": t,
+        "dates": len(par_date),
+        "dates_independantes": independantes,
+        # Deux erreurs-types : le seuil usuel, et il n'est pas atteint par
+        # grand-chose sur ce marché.
+        "significatif": bool(abs(t) > 2) if erreur else False,
+    }
+
+
 def _valider_composite(echantillon: pd.DataFrame, poids: dict) -> float:
     """IC du composite sur tout l'échantillon, sans découpe ni purge.
 
@@ -317,6 +368,7 @@ def valider(
 
     frontieres = np.array_split(np.array(dates), decoupes + 1)
     resultats = []
+    tests: list[pd.DataFrame] = []
     for rang in range(1, len(frontieres)):
         test_dates = set(frontieres[rang])
         debut_test = min(frontieres[rang])
@@ -343,6 +395,7 @@ def valider(
         ic_modele = _ic_par_seance(test, "score_modele")
         ic_composite = _ic_par_seance(test, "score_composite")
 
+        tests.append(test)
         prevu = (test["score_modele"] >= 0.5).astype(int)
         resultats.append({
             "periode": f"{min(frontieres[rang])} → {max(frontieres[rang])}",
@@ -359,6 +412,13 @@ def valider(
     periodes = pd.DataFrame(resultats)
     ic = float(periodes["ic_modele"].mean())
     ic_composite = float(periodes["ic_composite"].mean())
+
+    # L'incertitude se mesure sur l'ensemble des périodes de test réunies :
+    # la moyenne de quatre moyennes ne dit rien de sa propre précision.
+    tout = pd.concat(tests, ignore_index=True)
+    mesure_modele = mesurer_ic(tout, "score_modele", horizon)
+    mesure_composite = mesurer_ic(tout, "score_composite", horizon)
+
     return {
         "periodes": periodes,
         "traits": traits,
@@ -368,6 +428,14 @@ def valider(
         "ic_composite": ic_composite,
         "ecart": ic - ic_composite,
         "precision": float(periodes["precision"].mean()),
+        "mesure": mesure_modele,
+        "mesure_composite": mesure_composite,
+        # Les traits un par un : c'est là qu'on voit sur quoi le composite
+        # repose réellement, et le constat est sévère.
+        "traits_mesures": {
+            trait: mesurer_ic(tout, trait, horizon)
+            for trait in traits if trait in tout.columns
+        },
         "avertissements": AVERTISSEMENTS,
     }
 
@@ -420,6 +488,19 @@ def predire(
     return resultat.sort_values("probabilite", ascending=False).reset_index(drop=True)
 
 
+def _avec_incertitude(mesure: dict) -> str:
+    """« +0,006 ± 0,043 (t=+0,3, non significatif) ».
+
+    Un IC nu se retient et se cite ; son incertitude, non. Les coller
+    ensemble est le seul moyen d'empêcher le premier de voyager seul.
+    """
+    if mesure["dates"] == 0 or mesure["erreur_type"] != mesure["erreur_type"]:
+        return f"{mesure['ic']:+.3f} (incertitude non calculable)"
+    verdict = "significatif" if mesure["significatif"] else "non significatif"
+    return (f"{mesure['ic']:+.3f} ± {2 * mesure['erreur_type']:.3f} "
+            f"(t={mesure['t']:+.1f}, {verdict})")
+
+
 def expliquer(validation: dict) -> str:
     """Rendu texte. La référence n'est jamais séparée de la précision."""
     if validation.get("motif"):
@@ -445,17 +526,38 @@ def expliquer(validation: dict) -> str:
             "calculable — le momentum se mesure sur cette durée."
         )
 
+    m, c = validation["mesure"], validation["mesure_composite"]
     lignes = [
         f"Horizon : {validation['horizon']} séances (~"
         f"{validation['horizon'] // 20} mois). {validation['lignes']} "
         f"observations, {len(validation['periodes'])} périodes de test.",
         "",
-        f"  IC du modèle           {validation['ic']:+.3f}",
-        f"  IC du score composite  {validation['ic_composite']:+.3f}",
+        f"  IC du modèle           {_avec_incertitude(m)}",
+        f"  IC du score composite  {_avec_incertitude(c)}",
         f"  écart                  {validation['ecart']:+.3f}",
         f"  (précision binaire     {validation['precision']:.1%})",
         "",
+        f"L'intervalle couvre deux erreurs-types, calculées sur "
+        f"{m['dates_independantes']} périodes disjointes et non sur les "
+        f"{m['dates']} dates de test : avec un horizon de "
+        f"{validation['horizon']} séances, deux dates voisines racontent "
+        "la même histoire.",
+        "",
     ]
+
+    mesures = validation.get("traits_mesures") or {}
+    if mesures:
+        lignes.append("Ce que vaut chaque trait, pris séparément :")
+        for trait, mes in mesures.items():
+            lignes.append(f"  {trait:<12} {_avec_incertitude(mes)}")
+        if not any(mes["significatif"] for mes in mesures.values()):
+            lignes += [
+                "",
+                "AUCUN TRAIT NE SE DISTINGUE DU HASARD. Le classement reste "
+                "une description du marché — qui a monté, qui s'échange — "
+                "mais rien ici n'autorise à en attendre un rendement.",
+            ]
+        lignes.append("")
     if validation["ecart"] <= 0:
         lignes.append(
             "LE MODÈLE NE BAT PAS LE SCORE COMPOSITE. C'est le cas le plus "

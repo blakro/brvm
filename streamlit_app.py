@@ -616,10 +616,59 @@ with onglets[3]:
             unite="observation",
         )
     else:
+        # L'IC se cite de mémoire, son incertitude non : la tuile porte
+        # donc l'intervalle en légende, là où le chiffre ne peut pas
+        # partir sans lui.
+        m, c = validation["mesure"], validation["mesure_composite"]
+        # L'intervalle passe en légende et non en `delta` : Streamlit dessine
+        # une flèche devant un delta, et une incertitude n'a pas de sens de
+        # variation — « ↑ ± 0,117 » se lit comme une hausse.
         mesures = st.columns(3)
         mesures[0].metric("IC du modèle", f"{validation['ic']:+.3f}")
+        mesures[0].caption(f"± {2 * m['erreur_type']:.3f}  ·  t = {m['t']:+.1f}")
         mesures[1].metric("IC du composite", f"{validation['ic_composite']:+.3f}")
+        mesures[1].caption(f"± {2 * c['erreur_type']:.3f}  ·  t = {c['t']:+.1f}")
         mesures[2].metric("Écart", f"{validation['ecart']:+.3f}")
+        st.caption(
+            f"L'intervalle couvre deux erreurs-types, calculées sur "
+            f"{m['dates_independantes']} périodes **disjointes** et non sur "
+            f"les {m['dates']} dates de test : avec un horizon de "
+            f"{validation['horizon']} séances, deux dates voisines "
+            "racontent la même histoire. Les compter comme indépendantes "
+            "multiplie la certitude apparente par huit."
+        )
+
+        # Le constat le plus important de l'onglet, et il ne tient pas
+        # dans une tuile : sur quoi le classement repose-t-il vraiment ?
+        traits_mesures = validation.get("traits_mesures") or {}
+        if traits_mesures:
+            table = pd.DataFrame([
+                {"trait": pedagogie.LIBELLES.get(t, t), "IC": mes["ic"],
+                 "± 2 erreurs-types": 2 * mes["erreur_type"],
+                 "t": mes["t"],
+                 "verdict": "significatif" if mes["significatif"]
+                            else "indiscernable du hasard"}
+                for t, mes in traits_mesures.items()
+            ])
+            if not table.empty and not table["verdict"].eq("significatif").any():
+                st.error(
+                    "**Aucun trait ne se distingue du hasard.** Le "
+                    "classement reste une description du marché — qui a "
+                    "monté, qui s'échange — mais rien ici n'autorise à en "
+                    "attendre un rendement."
+                )
+            with st.expander("Ce que vaut chaque trait, pris séparément"):
+                st.dataframe(
+                    table, width="stretch", hide_index=True,
+                    column_config={
+                        "trait": st.column_config.TextColumn("Trait"),
+                        "IC": st.column_config.NumberColumn(format="%+.3f"),
+                        "± 2 erreurs-types":
+                            st.column_config.NumberColumn(format="%.3f"),
+                        "t": st.column_config.NumberColumn(format="%+.1f"),
+                        "verdict": st.column_config.TextColumn("Verdict"),
+                    },
+                )
 
         if validation["ecart"] <= 0:
             st.warning(

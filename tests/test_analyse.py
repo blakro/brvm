@@ -389,6 +389,39 @@ def test_sortie_lisible_quand_rien_n_est_classable():
     assert "historique trop court" in message and "brvm etat" in message
 
 
+def test_l_univers_eligible_ne_depend_pas_des_ponderations():
+    """Deux pondérations doivent classer LES MÊMES valeurs, dans un ordre
+    différent.
+
+    L'éligibilité se jugeait auparavant sur les seuls traits notés :
+    changer un poids changeait donc l'univers, et deux jeux de poids
+    n'étaient plus comparables. Le symptôme était visible sans être lu —
+    la référence équipondérée du backtest, censée être la même pour
+    toutes, variait de 0,9 % à 5,1 % l'an selon la pondération.
+    """
+    traits = pd.DataFrame({
+        "cloture": [100.0, 200.0, 300.0, 400.0],
+        "momentum": [0.1, 0.2, float("nan"), 0.4],
+        "tendance": [0.01, 0.02, 0.03, 0.04],
+        "volatilite": [0.2, 0.3, 0.25, 0.35],
+        "liquidite": [1e7, 2e7, 3e7, 4e7],
+    }, index=["A", "B", "C", "D"])
+    traits.index.name = "ticker"
+    base = {"analyse": {"volume_median_min_fcfa": 0, "min_par_secteur": 99}}
+
+    univers = []
+    for poids in ({"momentum": 1.0}, {"volatilite": -1.0},
+                  {"tendance": 0.5, "liquidite": 0.5}):
+        classement = scoring.noter(traits, None, {**base, "ponderations": poids})
+        univers.append(set(classement["ticker"]))
+
+    assert univers[0] == univers[1] == univers[2], univers
+    # C, dont le momentum manque, est écartée pour tout le monde — y
+    # compris quand le momentum n'est pas noté.
+    assert "C" not in univers[0]
+    assert univers[0] == {"A", "B", "D"}
+
+
 if __name__ == "__main__":
     echecs = 0
     for nom, fonction in sorted(globals().items()):

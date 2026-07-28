@@ -286,6 +286,56 @@ def test_le_module_s_importe_sans_scikit_learn():
     assert "importé" in fini.stdout
 
 
+def test_l_incertitude_ne_compte_pas_deux_fois_la_meme_journee():
+    """Le piège qui a fait passer un bruit pour un signal exploitable.
+
+    Avec un horizon de 60 séances, l'étiquette du lundi recouvre celle du
+    mardi à 59/60. Compter chaque date comme une observation indépendante
+    multiplie le t par racine de l'horizon — c'est ainsi qu'un IC de
+    -0,07 s'était présenté avec un t de -10,2 alors qu'il vaut -1,4.
+
+    Le test fabrique des IC purement aléatoires : quel que soit le hasard
+    du tirage, l'erreur-type honnête doit dépasser largement la naïve.
+    """
+    rng = np.random.default_rng(11)
+    horizon = 60
+    dates = [f"2024-{1 + i // 28:02d}-{1 + i % 28:02d}" for i in range(600)]
+    bloc = pd.DataFrame({
+        "date": np.repeat(dates, 20),
+        "score": rng.normal(size=600 * 20),
+        "rendement_futur": rng.normal(size=600 * 20),
+    })
+
+    mesure = prediction.mesurer_ic(bloc, "score", horizon)
+    assert mesure["dates"] == 600
+    assert mesure["dates_independantes"] == 10, mesure
+    # L'erreur-type honnête est racine(60/10) ≈ 2,4 fois la naïve.
+    naive = mesure["erreur_type"] * np.sqrt(mesure["dates_independantes"]
+                                            / mesure["dates"])
+    assert mesure["erreur_type"] > naive * 5
+    # Sur du bruit pur, rien ne doit être déclaré significatif.
+    assert not mesure["significatif"], mesure
+
+
+def test_l_ic_ne_circule_jamais_sans_son_incertitude():
+    """Un IC nu se retient et se cite ; son intervalle, non. Les coller
+    ensemble est le seul moyen d'empêcher le premier de voyager seul."""
+    resultat = prediction.valider(_marche_aleatoire(graine=4), REGLAGES)
+    rendu = prediction.expliquer(resultat)
+    assert "±" in rendu and "t=" in rendu
+    assert "significatif" in rendu
+    assert "périodes disjointes" in rendu
+
+
+def test_chaque_trait_est_mesure_separement():
+    """C'est là qu'on voit sur quoi le composite repose réellement."""
+    resultat = prediction.valider(_marche_aleatoire(graine=6), REGLAGES)
+    mesures = resultat["traits_mesures"]
+    assert set(prediction.TRAITS) <= set(mesures)
+    for trait, mesure in mesures.items():
+        assert {"ic", "erreur_type", "t", "significatif"} <= set(mesure), trait
+
+
 if __name__ == "__main__":
     echecs = 0
     for nom, fonction in sorted(globals().items()):

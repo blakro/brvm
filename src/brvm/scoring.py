@@ -35,6 +35,8 @@ from __future__ import annotations
 
 import pandas as pd
 
+from . import features
+
 from .config import charger
 
 COLONNES = ["ticker", "nom", "secteur", "cloture", "momentum", "tendance",
@@ -78,8 +80,19 @@ def noter(
 
     # 2. Un trait manquant est éliminatoire : mieux vaut ne pas classer une
     #    valeur que la classer sur la moitié des critères.
+    #
+    #    L'ÉLIGIBILITÉ NE DÉPEND PAS DES PONDÉRATIONS, et c'est un défaut
+    #    corrigé. Elle se jugeait auparavant sur les seuls traits notés :
+    #    changer un poids changeait donc l'univers, et deux pondérations
+    #    n'étaient plus comparables. Le symptôme était visible sans être
+    #    lu — la référence équipondérée, censée être la même pour toutes,
+    #    variait de 0,9 % à 5,1 % l'an d'une pondération à l'autre.
+    #
+    #    Une valeur est classable si elle est MESURABLE, pas si le jeu de
+    #    poids du moment touche par hasard les colonnes qu'elle a.
+    mesurables = [t for t in features.TRAITS if t in univers.columns]
+    univers = univers.dropna(subset=mesurables)
     traits_notes = [t for t in poids if t in univers.columns]
-    univers = univers.dropna(subset=traits_notes)
     if univers.empty:
         return pd.DataFrame(columns=COLONNES)
 
