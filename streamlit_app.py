@@ -26,7 +26,8 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from brvm import backtest, db, dividende, features, prediction, scoring
+from brvm import (backtest, db, dividende, features, pedagogie, prediction,
+                  scoring)
 from brvm.config import DEFAUTS
 from brvm.ingestion import brvm_org
 
@@ -88,6 +89,30 @@ def _telecharger(donnees: pd.DataFrame, nom: str, cle: str) -> None:
     )
 
 
+def _glossaire(*termes: str) -> None:
+    """Les mots de l'onglet, en bas de l'onglet.
+
+    Un glossaire relégué dans une page à part n'est ouvert par personne :
+    il faut quitter ce qu'on lisait pour aller chercher le mot, et revenir.
+    Chaque onglet porte donc les siens, et eux seuls.
+    """
+    with st.expander("Les mots de cet onglet"):
+        st.markdown(pedagogie.glossaire(*termes))
+
+
+def _attente(titre: str, disponible: int, requis: int, pourquoi: str,
+             unite: str = "séance") -> None:
+    """Un refus affiché comme un compteur qui avance, pas comme une panne.
+
+    « Aucune valeur classée » se lit comme un bug. Une barre au dixième,
+    assortie du mois où le premier résultat tombera, se lit pour ce qu'elle
+    est : l'archive n'a pas encore l'âge requis, et elle vieillit.
+    """
+    etat = pedagogie.attente(disponible, requis, derniere, unite)
+    st.progress(etat["part"], text=f"**{titre}** — {etat['phrase']}")
+    st.caption(pourquoi)
+
+
 # --- Données --------------------------------------------------------------
 
 @st.cache_data(ttl=900)
@@ -116,6 +141,51 @@ if referentiel.empty:
     referentiel = brvm_org.referentiel_amorce()
 
 st.title("Bourse Régionale des Valeurs Mobilières")
+
+# L'avertissement est ici, au-dessus de tout, et non en légende sous le
+# classement. Un tableau ordonné de valeurs se lit comme une liste d'achat
+# si rien ne dit le contraire assez tôt — et « assez tôt » veut dire avant
+# de l'avoir vu, pas après.
+st.caption(
+    "Les cours des 47 sociétés cotées à Abidjan, et de quoi les lire. "
+    "**Ce n'est pas un conseil d'investissement** : rien ici n'a été "
+    "calibré sur quoi que ce soit, et aucun classement affiché n'est un "
+    "signal validé."
+)
+
+# Replié par défaut, et ce n'est pas un détail : changer d'onglet ne relance
+# pas le script côté Streamlit, donc un dépliant ouvert le reste sur les six
+# onglets et leur mange le premier écran. L'avertissement ci-dessus, lui,
+# reste visible en permanence — c'est le seul qui doive l'être.
+with st.expander("Première visite ? Comment lire cette app, et trois choses "
+                 "à savoir sur la BRVM"):
+    st.markdown(
+        """
+**Ce que fait cette app.** Elle lit chaque jour la cote publiée par
+brvm.org, la conserve, et propose quelques lectures de cet historique.
+Elle n'exécute aucun ordre et ne vous connaît pas.
+
+**Par où commencer.**
+
+1. **Marché** — ce qui s'est passé à la dernière séance : qui monte, qui
+   baisse, combien s'est échangé.
+2. **Valeur** — la fiche d'une société : son cours, son historique, ses
+   dividendes. Le plus utile si vous avez déjà un nom en tête.
+3. **Classement**, **Prédiction**, **Backtest** — des lectures outillées de
+   l'historique. Elles demandent des années de cotation et refusent de
+   répondre tant qu'elles ne les ont pas : ce refus est le fonctionnement
+   normal, pas une panne.
+
+**Trois choses à savoir sur ce marché avant de lire le reste.**
+
+- La BRVM ne cote pas en continu. Les ordres sont regroupés et **un seul
+  cours est fixé par séance**.
+- Un cours ne peut ni monter ni baisser de **plus de 7,5 % par séance**.
+- Acheter puis revendre coûte **2,5 à 3,5 %** entre courtage, commissions
+  et taxes, et passe obligatoirement par une SGI. Un écart de performance
+  inférieur à ce montant ne se récupère pas.
+"""
+    )
 
 direct, echec = (None, None)
 if cours.empty:
@@ -202,9 +272,10 @@ with onglets[0]:
     connues = jour["variation"].dropna()
 
     tuiles = st.columns(4)
-    tuiles[0].metric("Séance", derniere)
+    tuiles[0].metric("Séance", pedagogie.jour(derniere))
     tuiles[1].metric("Variation médiane",
-                     "—" if connues.empty else f"{connues.median():+.2%}")
+                     pedagogie.pourcentage(
+                         None if connues.empty else connues.median()))
     # Largeur du marché : une médiane positive portée par trois valeurs ne
     # dit pas la même chose qu'une hausse partagée.
     tuiles[2].metric(
@@ -216,8 +287,31 @@ with onglets[0]:
                      delta=(None if len(retenus) == len(referentiel)
                             else f"{len(retenus) - len(referentiel)} filtrées"))
 
+    # Les quatre tuiles ci-dessus disent la même chose, mais il faut les
+    # lire ensemble pour l'entendre. La phrase le fait à la place du lecteur.
+    echange = jour["volume_fcfa"].sum(skipna=True)
+    if connues.empty:
+        st.markdown(
+            f"À la séance du **{pedagogie.jour(derniere)}**, "
+            f"{jour['ticker'].nunique()} valeurs sont cotées et il s'est "
+            f"échangé {pedagogie.montant(echange)}. Aucune variation n'est "
+            "calculable : il n'y a qu'une séance en archive, donc rien à "
+            "quoi comparer. La deuxième suffira."
+        )
+    else:
+        hausses, baisses = int((connues > 0).sum()), int((connues < 0).sum())
+        stables = len(connues) - hausses - baisses
+        st.markdown(
+            f"À la séance du **{pedagogie.jour(derniere)}**, sur "
+            f"{len(connues)} valeurs : **{hausses} montent**, "
+            f"**{baisses} baissent**, "
+            + (f"{stables} sont inchangées" if stables != 1
+               else "1 est inchangée")
+            + f". Il s'est échangé {pedagogie.montant(echange)} en tout."
+        )
+
     if not connues.empty:
-        st.subheader(f"Variation de la séance du {derniere}")
+        st.subheader(f"Variation de la séance du {pedagogie.jour(derniere)}")
         classees = jour.dropna(subset=["variation"]).sort_values("variation")
         st.altair_chart(
             alt.Chart(classees)
@@ -244,9 +338,6 @@ with onglets[0]:
             .properties(height=max(280, 22 * len(classees))),
             width="stretch",
         )
-    else:
-        st.info("Une seule séance en base : aucune variation calculable.")
-
     colonnes = ["ticker", "nom", "secteur", "cloture"]
     if not connues.empty:
         colonnes.append("variation")
@@ -257,13 +348,24 @@ with onglets[0]:
             "ticker": st.column_config.TextColumn("Symbole"),
             "nom": st.column_config.TextColumn("Société"),
             "secteur": st.column_config.TextColumn("Secteur"),
-            "cloture": st.column_config.NumberColumn("Clôture", format="%.0f"),
-            "variation": st.column_config.NumberColumn("Var.", format="%+.2f%%"),
-            "volume_titres": st.column_config.NumberColumn("Titres", format="%.0f"),
-            "volume_fcfa": st.column_config.NumberColumn("FCFA", format="%.0f"),
+            # `format="percent"` et non « %+.2f%% » : le format printf ne
+            # multiplie pas par cent, et affichait « -0,02 % » là où la
+            # valeur baissait de 2 %. Cent fois trop petit, sans rien qui
+            # le signale — le graphique juste au-dessus disait autre chose.
+            "cloture": st.column_config.NumberColumn("Clôture",
+                                                     format="localized"),
+            "variation": st.column_config.NumberColumn("Var.",
+                                                       format="percent"),
+            # « localized » suit la locale du lecteur : un francophone lit
+            # « 1 042 625 » et non « 1,042,625 ».
+            "volume_titres": st.column_config.NumberColumn("Titres",
+                                                           format="localized"),
+            "volume_fcfa": st.column_config.NumberColumn("FCFA",
+                                                         format="localized"),
         },
     )
     _telecharger(jour[colonnes], f"brvm_{derniere}.csv", "dl_marche")
+    _glossaire("fixing", "limite", "liquidite")
 
 
 # --- Valeur ---------------------------------------------------------------
@@ -295,12 +397,41 @@ with onglets[1]:
         delta=(f"{serie['cloture'].iloc[-1] / serie['cloture'].iloc[-2] - 1:+.2%}"
                if len(serie) >= 2 else None),
     )
-    faits[1].metric(
-        "Volume (FCFA)",
-        f"{dernier['volume_fcfa']:,.0f}".replace(",", " ")
-        if pd.notna(dernier["volume_fcfa"]) else "—",
-    )
+    # Même arrondi que la phrase juste en dessous : deux écritures du même
+    # montant à trois lignes d'écart donnent à croire à deux montants.
+    faits[1].metric("Volume échangé", pedagogie.montant(dernier["volume_fcfa"]))
     faits[2].metric("Dividendes connus", f"{len(div_valeur)}")
+
+    # La même information en toutes lettres. Trois tuiles se lisent vite
+    # quand on sait quoi y chercher ; sinon ce sont trois nombres nus.
+    morceaux = [
+        f"**{fiche['nom'].iloc[0] if not fiche.empty else choix}** vaut "
+        f"{pedagogie.montant(dernier['cloture'])} à la clôture du "
+        f"{pedagogie.jour(derniere)}"
+    ]
+    if len(serie) >= 2:
+        veille = serie["cloture"].iloc[-2]
+        if pd.notna(veille) and veille > 0:
+            morceaux.append(
+                "soit "
+                + pedagogie.pourcentage(dernier["cloture"] / veille - 1)
+                + " sur la séance"
+            )
+    # Reculs en séances : un mois, un trimestre, un an de cotation.
+    for pas, mot in [(21, "un mois"), (63, "trois mois"), (250, "un an")]:
+        if len(serie) > pas:
+            passe = serie["cloture"].iloc[-1 - pas]
+            if pd.notna(passe) and passe > 0:
+                morceaux.append(
+                    pedagogie.pourcentage(dernier["cloture"] / passe - 1)
+                    + f" sur {mot}"
+                )
+    volume = dernier["volume_fcfa"]
+    morceaux.append(
+        "aucun échange lors de cette séance" if pd.isna(volume) or volume == 0
+        else f"{pedagogie.montant(volume)} échangés dans la séance"
+    )
+    st.markdown(", ".join(morceaux) + ".")
 
     if len(serie) >= 2:
         st.altair_chart(
@@ -335,6 +466,7 @@ with onglets[1]:
                      width="stretch", hide_index=True)
 
     _telecharger(serie, f"{choix}.csv", "dl_valeur")
+    _glossaire("dividende", "rendement", "liquidite", "sgi")
 
 
 # --- Classement -----------------------------------------------------------
@@ -344,20 +476,28 @@ with onglets[2]:
         "**Les pondérations n'ont été calibrées sur rien** : une liste de "
         "valeurs à examiner, pas un signal validé."
     )
-    reg_1, reg_2 = st.columns([1, 2])
-    with reg_1:
-        seuil = st.number_input(
-            "Volume médian minimal (FCFA)", min_value=0, step=100_000,
-            value=int(DEFAUTS["analyse"]["volume_median_min_fcfa"]),
-            help="Une valeur qui ne s'échange pas ne se vend pas non plus.",
-        )
-        combien = st.slider("Lignes affichées", 5, 47, 15)
-    with reg_2:
-        poids = {
-            "momentum": st.slider("Poids du momentum", -1.0, 1.0, 0.5, 0.05),
-            "tendance": st.slider("Poids de la tendance", -1.0, 1.0, 0.3, 0.05),
-            "volatilite": st.slider("Poids de la volatilité", -1.0, 1.0, -0.2, 0.05),
-        }
+    # Repliés : six curseurs en tête d'onglet, c'est un pupitre dont un
+    # lecteur qui découvre le sujet ne peut pas connaître les bons réglages,
+    # et qui modifient silencieusement le classement affiché en dessous. Les
+    # valeurs par défaut sont celles de la configuration du projet.
+    with st.expander("Réglages avancés"):
+        reg_1, reg_2 = st.columns([1, 2])
+        with reg_1:
+            seuil = st.number_input(
+                "Volume médian minimal (FCFA)", min_value=0, step=100_000,
+                value=int(DEFAUTS["analyse"]["volume_median_min_fcfa"]),
+                help="Une valeur qui ne s'échange pas ne se vend pas non plus.",
+            )
+            combien = st.slider("Lignes affichées", 5, 47, 15)
+        with reg_2:
+            poids = {
+                "momentum":
+                    st.slider("Poids du momentum", -1.0, 1.0, 0.5, 0.05),
+                "tendance":
+                    st.slider("Poids de la tendance", -1.0, 1.0, 0.3, 0.05),
+                "volatilite":
+                    st.slider("Poids de la volatilité", -1.0, 1.0, -0.2, 0.05),
+            }
 
     reglages = {"analyse": {**DEFAUTS["analyse"],
                             "volume_median_min_fcfa": seuil},
@@ -366,15 +506,32 @@ with onglets[2]:
                                referentiel_filtre, reglages)
 
     if classement.empty:
-        st.info(
-            f"Aucune valeur classée. {seances} séance"
-            f"{'s' if seances > 1 else ''} en base ; le momentum en demande "
-            f"{reglages['analyse']['fenetre_momentum'] + 1}. Un momentum "
-            "calculé sur moins aurait l'apparence d'un momentum sans rien "
-            "mesurer — d'où le refus plutôt qu'une approximation."
+        _attente(
+            "Classement",
+            seances, reglages["analyse"]["fenetre_momentum"] + 1,
+            "Le momentum se mesure sur un an de cotation. Calculé sur moins, "
+            "il aurait toutes les apparences d'un momentum sans rien "
+            "mesurer — d'où le refus plutôt qu'une approximation. "
+            "L'archive gagne une séance par jour ouvré.",
         )
     else:
+        # Le rang est ce qui se comprend sans rien savoir ; le score n'a pas
+        # d'unité et ne se compare pas d'un jour à l'autre. `scoring` le
+        # calcule déjà — il suffit de le mettre en tête de tableau.
+        classement = classement[
+            ["rang"] + [c for c in classement.columns if c != "rang"]
+        ]
         tete = classement.head(combien)
+        total = len(classement)
+        st.markdown(
+            f"{total} valeurs passent le filtre de liquidité et sont "
+            f"classées. En tête : "
+            + ", ".join(
+                f"**{ligne.ticker}** ({pedagogie.ordinal(ligne.rang)})"
+                for ligne in tete.head(3).itertuples()
+            )
+            + f" sur {total}. Le score n'a pas d'unité — seul l'ordre compte."
+        )
         st.altair_chart(
             alt.Chart(tete)
             .mark_bar(cornerRadiusEnd=4, height=16, color=SERIE_1)
@@ -383,6 +540,7 @@ with onglets[2]:
                 y=alt.Y("ticker:N", sort="-x", title=None,
                         axis=alt.Axis(labelOverlap=False)),
                 tooltip=[
+                    alt.Tooltip("rang:Q", title="Rang"),
                     alt.Tooltip("ticker:N", title="Symbole"),
                     alt.Tooltip("nom:N", title="Société"),
                     alt.Tooltip("score:Q", title="Score", format=".1f"),
@@ -393,8 +551,39 @@ with onglets[2]:
             .properties(height=max(220, 24 * len(tete))),
             width="stretch",
         )
-        st.dataframe(tete, width="stretch", hide_index=True)
+        st.dataframe(
+            tete, width="stretch", hide_index=True,
+            column_config={
+                "rang": st.column_config.NumberColumn(
+                    "Rang", format="%d", help=f"Sur {total} valeurs classées."),
+                "ticker": st.column_config.TextColumn("Symbole"),
+                "nom": st.column_config.TextColumn("Société"),
+                "secteur": st.column_config.TextColumn("Secteur"),
+                "cloture": st.column_config.NumberColumn(
+                    "Clôture", format="%.0f", help="En FCFA."),
+                # Les traits sont des proportions : les afficher en 0,5733
+                # oblige le lecteur à faire la conversion de tête.
+                "momentum": st.column_config.NumberColumn(
+                    "Momentum", format="percent",
+                    help="Hausse accumulée sur l'année, dernier mois exclu."),
+                "tendance": st.column_config.NumberColumn(
+                    "Tendance", format="percent",
+                    help="Écart entre moyenne courte et moyenne longue."),
+                "volatilite": st.column_config.NumberColumn(
+                    "Volatilité", format="percent",
+                    help="Ampleur habituelle des écarts, en rythme annuel."),
+                "liquidite": st.column_config.NumberColumn(
+                    "Liquidité", format="localized",
+                    help="Montant médian échangé par séance, en FCFA."),
+                "score": st.column_config.NumberColumn(
+                    "Score", format="%.1f",
+                    help="Sans unité : seul l'ordre qu'il produit compte."),
+            },
+        )
         _telecharger(classement, "classement.csv", "dl_classement")
+
+    _glossaire("momentum", "tendance", "volatilite", "liquidite", "score",
+               "rang", "frais")
 
 
 # --- Prédiction -----------------------------------------------------------
@@ -417,7 +606,15 @@ with onglets[3]:
             "modèle appris ne le devance pas."
         )
     elif validation["periodes"].empty:
-        st.info(prediction.expliquer(validation))
+        _attente(
+            "Prédiction",
+            validation["lignes"], validation["lignes_minimum"],
+            "Une observation, c'est une valeur à une date, avec son sort "
+            "connu trois mois plus tard. Chaque séance en apporte une "
+            "quarantaine — mais il faut d'abord un an de cotation avant que "
+            "la première soit calculable.",
+            unite="observation",
+        )
     else:
         mesures = st.columns(3)
         mesures[0].metric("IC du modèle", f"{validation['ic']:+.3f}")
@@ -435,7 +632,26 @@ with onglets[3]:
                 f"**IC de {validation['ic']:.3f} — anormalement élevé.** "
                 "Un IC exploitable vaut 0,02 à 0,05. Cherchez la fuite."
             )
-        st.dataframe(validation["periodes"], width="stretch", hide_index=True)
+        st.dataframe(
+            validation["periodes"], width="stretch", hide_index=True,
+            column_config={
+                "periode": st.column_config.TextColumn("Période de test"),
+                "lignes_entrainement": st.column_config.NumberColumn(
+                    "Appris sur", format="localized",
+                    help="Observations d'entraînement, étiquettes "
+                         "recouvrantes purgées."),
+                "lignes_test": st.column_config.NumberColumn(
+                    "Testé sur", format="localized"),
+                "ic_modele": st.column_config.NumberColumn(
+                    "IC du modèle", format="%+.3f"),
+                "ic_composite": st.column_config.NumberColumn(
+                    "IC du composite", format="%+.3f"),
+                "precision": st.column_config.NumberColumn(
+                    "Précision", format="percent",
+                    help="Part des paris justes. Trompeuse seule : "
+                         "c'est l'IC qui compte."),
+            },
+        )
 
         probable = prediction.predire(cours_filtre, referentiel=referentiel_filtre)
         if not probable.empty:
@@ -480,13 +696,21 @@ with onglets[3]:
     st.code(dividende.expliquer(
         dividende.signal(cours_filtre, dividendes, tickers=cibles)), language=None)
 
+    _glossaire("ic", "score", "rendement", "frais")
+
 
 # --- Backtest -------------------------------------------------------------
 with onglets[4]:
-    bt = st.columns(3)
-    positions = bt[0].slider("Positions en portefeuille", 3, 20, 10)
-    frais = bt[1].number_input("Frais par passage (%)", 0.0, 5.0, 1.0, 0.1)
-    impact = bt[2].number_input("Impact de marché (%)", 0.0, 5.0, 0.5, 0.1)
+    st.caption(
+        "Ce qu'aurait donné le classement s'il avait été suivi dans le "
+        "passé — frais compris. Un bon résultat ici ne promet rien : il dit "
+        "seulement que la règle n'était pas absurde."
+    )
+    with st.expander("Réglages avancés"):
+        bt = st.columns(3)
+        positions = bt[0].slider("Positions en portefeuille", 3, 20, 10)
+        frais = bt[1].number_input("Frais par passage (%)", 0.0, 5.0, 1.0, 0.1)
+        impact = bt[2].number_input("Impact de marché (%)", 0.0, 5.0, 0.5, 0.1)
 
     resultat = backtest.backtester(
         cours_filtre, referentiel_filtre,
@@ -496,13 +720,41 @@ with onglets[4]:
     )
 
     if resultat["etapes"].empty:
-        st.info(backtest.expliquer(resultat))
+        _attente(
+            "Backtest",
+            resultat["seances"], resultat["seances_requises"],
+            "Il faut un an de cotation avant la première décision, puis une "
+            "période à mesurer ensuite. Un backtest plus court ne mesurerait "
+            "que le hasard de sa fenêtre.",
+        )
     else:
         m = st.columns(4)
-        m[0].metric("Stratégie", f"{resultat['rendement_total']:+.1%}")
-        m[1].metric("Référence", f"{resultat['reference_total']:+.1%}")
-        m[2].metric("Perte max.", f"{resultat['perte_max']:.1%}")
-        m[3].metric("Coût cumulé", f"{resultat['cout_cumule']:.1%}")
+        m[0].metric("Stratégie",
+                    pedagogie.pourcentage(resultat["rendement_total"]))
+        m[1].metric("Référence",
+                    pedagogie.pourcentage(resultat["reference_total"]))
+        m[2].metric("Perte max.",
+                    pedagogie.pourcentage(resultat["perte_max"], signe=False))
+        m[3].metric("Coût cumulé",
+                    pedagogie.pourcentage(resultat["cout_cumule"], signe=False))
+
+        # Le verdict en toutes lettres : quatre tuiles ne disent pas d'
+        # elles-mêmes laquelle des deux courbes gagne, et c'est la seule
+        # question que pose cet onglet.
+        etapes = resultat["etapes"]
+        ecart = resultat["rendement_total"] - resultat["reference_total"]
+        st.markdown(
+            f"Sur {resultat['rebalancements']} rééquilibrages entre le "
+            f"{pedagogie.jour(etapes['date_entree'].iloc[0])} et le "
+            f"{pedagogie.jour(etapes['date_sortie'].iloc[-1])}, la stratégie "
+            f"rapporte {pedagogie.pourcentage(resultat['rendement_total'])} "
+            f"contre {pedagogie.pourcentage(resultat['reference_total'])} "
+            "pour la référence — "
+            + ("**elle la bat** de " if ecart > 0 else "**elle perd** de ")
+            + f"{pedagogie.pourcentage(abs(ecart), signe=False)}. Les frais "
+            f"ont coûté {pedagogie.pourcentage(resultat['cout_cumule'], signe=False)} "
+            "en cumul."
+        )
 
         courbes = resultat["etapes"].melt(
             id_vars="date_sortie", value_vars=["valeur", "valeur_reference"],
@@ -551,11 +803,38 @@ with onglets[4]:
         )
         st.caption("La référence est l'univers éligible équipondéré : c'est "
                    "elle qu'il faut battre, pas zéro.")
-        st.dataframe(resultat["etapes"], width="stretch", hide_index=True)
+        st.dataframe(
+            etapes, width="stretch", hide_index=True,
+            column_config={
+                "date_decision": st.column_config.TextColumn(
+                    "Décidé le",
+                    help="Sur la clôture de cette séance, et rien après."),
+                "date_entree": st.column_config.TextColumn(
+                    "Acheté le",
+                    help="Une séance plus tard : décider et exécuter au même "
+                         "cours reviendrait à passer un ordre à un prix déjà "
+                         "connu."),
+                "date_sortie": st.column_config.TextColumn("Revendu le"),
+                "positions": st.column_config.TextColumn("Lignes détenues"),
+                "rendement": st.column_config.NumberColumn(
+                    "Rendement", format="percent"),
+                "rotation": st.column_config.NumberColumn(
+                    "Rotation", format="percent",
+                    help="Part du portefeuille remplacée — elle se paie deux "
+                         "fois, à la vente et au rachat."),
+                "cout": st.column_config.NumberColumn("Coût", format="percent"),
+                "valeur": st.column_config.NumberColumn(
+                    "Part stratégie", format="%.3f"),
+                "valeur_reference": st.column_config.NumberColumn(
+                    "Part référence", format="%.3f"),
+            },
+        )
         _telecharger(resultat["etapes"], "backtest.csv", "dl_backtest")
 
     st.warning("**Trois biais survivent et ne sont pas corrigeables ici :** "
                + " ; ".join(resultat["avertissements"]) + ".")
+    _glossaire("backtest", "reference", "perte_max", "rotation", "frais",
+               "survivant")
 
 
 # --- Données --------------------------------------------------------------
