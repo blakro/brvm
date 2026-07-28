@@ -239,7 +239,9 @@ def test_page_de_cloture_ingerable():
     assert r["heure_mise_a_jour"] == "15:15"
     assert r["lignes_exploitables"] == 47
 
-    with _telechargement(lambda url: PAGE_CLOTURE.read_text(encoding="utf-8", errors="replace")):
+    with _horloge("2026-07-27"), _telechargement(
+        lambda url: PAGE_CLOTURE.read_text(encoding="utf-8", errors="replace")
+    ):
         assert brvm_org.ingerer_jour() == 47
 
 
@@ -261,7 +263,7 @@ def test_refus_pendant_la_seance():
     """Séance ouverte, « Cours Clôture » porte le dernier cours traité.
     L'enregistrer figerait un provisoire que rien ne viendrait corriger."""
     page = PAGE.read_text(encoding="utf-8", errors="replace")
-    with _telechargement(lambda url: page):
+    with _horloge("2026-07-27"), _telechargement(lambda url: page):
         try:
             brvm_org.ingerer_jour()
         except brvm_org.SourceIllisible as erreur:
@@ -521,6 +523,36 @@ def test_referentiel_degrade_sans_planter():
 
 
 # --- Outils communs -------------------------------------------------------
+
+
+class _horloge:
+    """Fige la date du jour vue par `brvm_org`, le temps d'un test.
+
+    Le garde-fou de `ingerer_jour` ne se déclenche que si la page porte la
+    date du jour : une séance de la veille est close, donc ingérable. Un
+    test qui l'éprouve doit donc se placer le jour du témoin — sans quoi il
+    passe le 27/07/2026 et échoue le 28, ce qui est exactement ce qui est
+    arrivé. Rien à voir avec le code, tout à voir avec le calendrier.
+    """
+
+    def __init__(self, jour: str):
+        self.jour = jour
+
+    def __enter__(self):
+        self.origine = brvm_org.datetime
+        jour = self.jour
+
+        class Fige(self.origine):
+            @classmethod
+            def now(cls, tz=None):
+                return cls.strptime(jour, "%Y-%m-%d")
+
+        brvm_org.datetime = Fige
+        return self
+
+    def __exit__(self, *_):
+        brvm_org.datetime = self.origine
+        return False
 
 
 class _telechargement:
