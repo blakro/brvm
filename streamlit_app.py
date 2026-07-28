@@ -407,7 +407,16 @@ with onglets[3]:
     )
     validation = prediction.valider(cours_filtre, referentiel=referentiel_filtre)
 
-    if validation["periodes"].empty:
+    if validation.get("motif"):
+        # L'apprentissage manque, le reste de l'app tient debout. On le dit
+        # sans dramatiser : le composite est la référence, et elle est là.
+        st.warning(prediction.expliquer(validation))
+        st.caption(
+            "Le classement composite reste disponible dans l'onglet "
+            "**Classement** — c'est lui qui part en production quand le "
+            "modèle appris ne le devance pas."
+        )
+    elif validation["periodes"].empty:
         st.info(prediction.expliquer(validation))
     else:
         mesures = st.columns(3)
@@ -555,6 +564,17 @@ with onglets[5]:
     etat[0].metric("Séances en base", f"{seances}")
     etat[1].metric("Dividendes en base", f"{len(dividendes)}")
     etat[2].metric("Sociétés au référentiel", f"{len(referentiel)}")
+
+    # Visible sans avoir à ouvrir les journaux de l'hébergeur : un onglet
+    # bridé s'explique ici plutôt que de laisser croire à un bug.
+    st.caption(
+        "Modèle appris : "
+        + ("**disponible** (scikit-learn installé)."
+           if prediction.APPRENTISSAGE_DISPONIBLE else
+           "**indisponible** — scikit-learn absent de l'environnement. "
+           "Le score composite, lui, ne dépend d'aucune bibliothèque "
+           "d'apprentissage et reste calculé.")
+    )
 
     st.subheader("Répartition sectorielle")
     if referentiel_filtre["secteur"].notna().any():

@@ -60,12 +60,39 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-from sklearn.linear_model import LogisticRegression
-from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import StandardScaler
 
 from . import exogene, features
 from .config import charger
+
+# scikit-learn est la SEULE dépendance lourde du projet, et elle ne sert
+# qu'ici, dans `_modele`. Tout le reste du module — l'échantillon, la purge,
+# l'IC, le score composite — est du pandas.
+#
+# L'importer au niveau du module la rendait obligatoire pour tout le monde :
+# une absence dans l'environnement d'hébergement faisait tomber les six
+# onglets du tableau de bord, dont cinq n'en ont aucun besoin. Elle est donc
+# optionnelle, et son absence ne coûte que l'apprentissage — pas le score
+# composite, qui est de toute façon la référence à battre.
+try:
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.pipeline import make_pipeline
+    from sklearn.preprocessing import StandardScaler
+
+    APPRENTISSAGE_DISPONIBLE = True
+except ImportError:  # pragma: no cover — dépend de l'environnement
+    APPRENTISSAGE_DISPONIBLE = False
+
+MOTIF_INDISPONIBLE = (
+    "scikit-learn n'est pas installé dans cet environnement : le modèle "
+    "appris est indisponible. Le score composite, lui, se calcule sans "
+    "apprentissage — c'est la référence que le modèle doit battre, et il y "
+    "parvient rarement sur ce marché. Pour rétablir l'apprentissage : "
+    "`pip install scikit-learn`."
+)
+
+
+class ApprentissageIndisponible(RuntimeError):
+    """Levée quand on demande un modèle sans que scikit-learn soit là."""
 
 # Traits utilisés. Volontairement peu nombreux et déjà éprouvés ailleurs
 # dans le projet : multiplier les entrées sur 47 valeurs est le moyen le
@@ -204,6 +231,33 @@ def _score_composite(bloc: pd.DataFrame, poids: dict) -> pd.Series:
     return sum(p * bloc[t] for t, p in utiles.items()) / total
 
 
+def _ic_par_seance(bloc: pd.DataFrame, colonne: str) -> float:
+    """IC moyen d'un score, mesuré dans chaque séance puis moyenné.
+
+    Agrégé d'un coup sur toutes les dates, il mélangerait les écarts entre
+    dates avec les écarts entre valeurs — et mesurerait surtout le marché.
+    """
+    return float(
+        bloc.groupby("date")
+        .apply(lambda g: _ic(g[colonne], g["rendement_futur"]),
+               include_groups=False)
+        .mean()
+    )
+
+
+def _valider_composite(echantillon: pd.DataFrame, poids: dict) -> float:
+    """IC du composite sur tout l'échantillon, sans découpe ni purge.
+
+    Le composite n'apprend rien : ses poids sont fixés à la main dans la
+    configuration. Il n'y a donc pas d'entraînement dont une étiquette
+    pourrait déborder, et le découpage glissant n'aurait ici aucun objet —
+    il ne ferait que rétrécir l'échantillon sans rien protéger.
+    """
+    bloc = echantillon.copy()
+    bloc["score_composite"] = _score_composite(bloc, poids)
+    return _ic_par_seance(bloc, "score_composite")
+
+
 def _modele():
     """Régression logistique standardisée, volontairement bridée.
 
@@ -212,6 +266,8 @@ def _modele():
     bruit et le restitue comme un signal. La régularisation est laissée
     forte (C petit) pour la même raison.
     """
+    if not APPRENTISSAGE_DISPONIBLE:
+        raise ApprentissageIndisponible(MOTIF_INDISPONIBLE)
     return make_pipeline(
         StandardScaler(),
         LogisticRegression(C=0.1, max_iter=1000),
@@ -241,6 +297,7 @@ def valider(
         "lignes": len(echantillon),
         "lignes_minimum": minimum,
         "horizon": horizon,
+        "motif": None,
         "avertissements": AVERTISSEMENTS,
     }
     if len(echantillon) < minimum:
@@ -249,6 +306,14 @@ def valider(
     dates = sorted(echantillon["date"].unique())
     if len(dates) < decoupes + 2:
         return vide
+
+    # Sans scikit-learn il n'y a pas de modèle à valider, mais il reste la
+    # référence — et c'est elle qui part en production quand le modèle ne la
+    # bat pas, c'est-à-dire presque toujours ici. La renvoyer seule vaut
+    # mieux que ne rien renvoyer.
+    if not APPRENTISSAGE_DISPONIBLE:
+        return {**vide, "motif": MOTIF_INDISPONIBLE,
+                "ic_composite": _valider_composite(echantillon, poids)}
 
     frontieres = np.array_split(np.array(dates), decoupes + 1)
     resultats = []
@@ -275,18 +340,8 @@ def valider(
         test["score_modele"] = modele.predict_proba(test[traits])[:, 1]
         test["score_composite"] = _score_composite(test, poids)
 
-        # L'IC se calcule séance par séance puis se moyenne : agrégé d'un
-        # coup, il mélangerait les écarts entre dates avec les écarts entre
-        # valeurs, et mesurerait surtout le marché.
-        par_seance = test.groupby("date")
-        ic_modele = par_seance.apply(
-            lambda g: _ic(g["score_modele"], g["rendement_futur"]),
-            include_groups=False,
-        ).mean()
-        ic_composite = par_seance.apply(
-            lambda g: _ic(g["score_composite"], g["rendement_futur"]),
-            include_groups=False,
-        ).mean()
+        ic_modele = _ic_par_seance(test, "score_modele")
+        ic_composite = _ic_par_seance(test, "score_composite")
 
         prevu = (test["score_modele"] >= 0.5).astype(int)
         resultats.append({
@@ -333,6 +388,9 @@ def predire(
     pred = conf.get("prediction", {})
     minimum = int(pred.get("lignes_minimum", 400))
 
+    if not APPRENTISSAGE_DISPONIBLE:
+        return pd.DataFrame(columns=["ticker", "probabilite"])
+
     echantillon = construire_echantillon(cours, conf)
     echantillon, exo = _joindre_exogenes(echantillon, exogenes, referentiel, conf)
     traits_utiles = TRAITS + exo
@@ -364,6 +422,20 @@ def predire(
 
 def expliquer(validation: dict) -> str:
     """Rendu texte. La référence n'est jamais séparée de la précision."""
+    if validation.get("motif"):
+        lignes = [validation["motif"]]
+        if "ic_composite" in validation:
+            lignes += [
+                "",
+                f"  IC du score composite  {validation['ic_composite']:+.3f}",
+                f"  ({validation['lignes']} observations, horizon "
+                f"{validation['horizon']} séances)",
+                "",
+                "Un IC exploitable se situe entre 0,02 et 0,05 ; au-delà de "
+                "0,30, cherchez une fuite avant d'y croire.",
+            ]
+        return "\n".join(lignes)
+
     if validation["periodes"].empty:
         return (
             f"Pas assez de données pour valider : {validation['lignes']} "

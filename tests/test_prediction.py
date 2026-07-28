@@ -20,6 +20,7 @@ réelles, où personne ne connaît la bonne réponse.
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -206,6 +207,83 @@ def test_le_rendu_ne_montre_jamais_la_precision_seule():
     rendu = prediction.expliquer(resultat)
     assert "IC du modèle" in rendu and "IC du score composite" in rendu
     assert "écart" in rendu
+
+
+class _sans_apprentissage:
+    """Simule l'absence de scikit-learn sans avoir à la désinstaller."""
+
+    def __enter__(self):
+        self.avant = prediction.APPRENTISSAGE_DISPONIBLE
+        prediction.APPRENTISSAGE_DISPONIBLE = False
+
+    def __exit__(self, *_):
+        prediction.APPRENTISSAGE_DISPONIBLE = self.avant
+
+
+def test_sans_scikit_learn_le_composite_repond_encore():
+    """L'apprentissage est la seule chose que l'absence doit coûter.
+
+    Le score composite ne s'apprend pas : ses poids sont écrits dans la
+    configuration. Il reste donc calculable, et c'est celui-là même qui part
+    en production quand le modèle ne le devance pas.
+    """
+    cours = _marche_aleatoire(graine=7)
+    # Les pondérations sont ce qui fait exister le composite : sans elles le
+    # score est constant, et l'IC d'une constante n'est pas défini.
+    reglages = {**REGLAGES,
+                "ponderations": {"momentum": 0.5, "tendance": 0.3,
+                                 "volatilite": -0.2}}
+
+    with _sans_apprentissage():
+        validation = prediction.valider(cours, reglages)
+        rendu = prediction.expliquer(validation)
+        vide = prediction.predire(cours, reglages)
+
+        try:
+            prediction._modele()
+        except prediction.ApprentissageIndisponible:
+            pass
+        else:
+            raise AssertionError("_modele doit refuser, pas renvoyer un objet")
+
+    assert "scikit-learn" in validation["motif"]
+    assert np.isfinite(validation["ic_composite"])
+    assert "scikit-learn" in rendu and "composite" in rendu
+    # Vide, et non une colonne de probabilités fabriquée : un rang composite
+    # n'est pas une probabilité, et le présenter comme telle serait pire que
+    # de ne rien présenter.
+    assert vide.empty and list(vide.columns) == ["ticker", "probabilite"]
+
+
+def test_le_module_s_importe_sans_scikit_learn():
+    """La régression qui a mis le tableau de bord à terre.
+
+    scikit-learn importée en tête de module la rendait obligatoire pour
+    quiconque importe `brvm.prediction` — donc pour les six onglets, dont
+    cinq n'en font rien. Une absence dans l'environnement d'hébergement
+    n'avait plus à être une panne : elle l'était. Le test bloque l'import
+    dans un sous-processus, seul moyen de reproduire l'environnement
+    amputé depuis un environnement où la bibliothèque est installée.
+    """
+    programme = (
+        "import sys\n"
+        "class Bloqueur:\n"
+        "    def find_spec(self, nom, chemin=None, cible=None):\n"
+        "        if nom == 'sklearn' or nom.startswith('sklearn.'):\n"
+        "            raise ImportError('absente, pour le test')\n"
+        "        return None\n"
+        "sys.meta_path.insert(0, Bloqueur())\n"
+        f"sys.path.insert(0, {str(RACINE / 'src')!r})\n"
+        "from brvm import prediction\n"
+        "assert prediction.APPRENTISSAGE_DISPONIBLE is False\n"
+        "print('importé')\n"
+    )
+    fini = subprocess.run(
+        [sys.executable, "-c", programme],
+        capture_output=True, text=True,
+    )
+    assert fini.returncode == 0, fini.stderr
+    assert "importé" in fini.stdout
 
 
 if __name__ == "__main__":
