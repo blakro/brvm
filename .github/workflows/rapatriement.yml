@@ -1,0 +1,98 @@
+name: rapatrier l'historique
+
+# Déclenchement à la main uniquement. Ce n'est pas une ingestion : c'est un
+# rapatriement ponctuel de plusieurs centaines de requêtes vers un site
+# tiers, et cela ne s'exécute pas tout seul toutes les nuits.
+#
+# L'accès sortant étant refusé depuis l'environnement de développement,
+# c'est ici — et seulement ici — que le lecteur rencontre la vraie mise en
+# page de sikafinance. D'où la sonde : le premier passage se fait sur une
+# valeur, sans rien écrire, et son journal dit si les sélecteurs tiennent.
+on:
+  workflow_dispatch:
+    inputs:
+      debut:
+        description: "Première séance (AAAA-MM-JJ)"
+        required: true
+        default: "2020-01-01"
+      fin:
+        description: "Dernière séance (AAAA-MM-JJ)"
+        required: true
+        default: "2026-07-27"
+      sonde:
+        description: "Sonder une seule valeur sans rien écrire"
+        type: boolean
+        default: true
+      tickers:
+        description: "Valeurs à rapatrier (vide = tout le référentiel)"
+        required: false
+        default: ""
+      pause:
+        description: "Secondes entre deux requêtes"
+        required: false
+        default: "1.5"
+
+permissions:
+  contents: write
+
+# Deux rapatriements simultanés se marcheraient dessus sur data/cours.csv,
+# et le second effacerait ce que le premier vient d'ajouter.
+concurrency:
+  group: rapatriement
+  cancel-in-progress: false
+
+jobs:
+  rapatrier:
+    runs-on: ubuntu-latest
+    # 47 valeurs × 6 ans = ~1 100 requêtes espacées de 1,5 s, soit une
+    # demi-heure de réseau. La marge couvre les reprises.
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - run: python -m pip install --upgrade pip && pip install -e .
+
+      - name: Sonder une valeur
+        if: inputs.sonde
+        run: |
+          echo "::notice::Sonde sur SDSC, du ${{ inputs.debut }} au ${{ inputs.fin }}."
+          echo "Rien ne sera écrit. Relire le tableau ci-dessous avant"
+          echo "de relancer avec « sonder » décoché."
+          python -m brvm rapatrier \
+            --debut "${{ inputs.debut }}" --fin "${{ inputs.fin }}" \
+            --tickers SDSC --pause "${{ inputs.pause }}" --simulation
+
+      - name: Rapatrier
+        if: ${{ !inputs.sonde }}
+        run: |
+          python -m brvm rapatrier \
+            --debut "${{ inputs.debut }}" --fin "${{ inputs.fin }}" \
+            --pause "${{ inputs.pause }}" \
+            ${{ inputs.tickers != '' && format('--tickers {0}', inputs.tickers) || '' }}
+
+      # La base SQLite est un artefact dérivé ; l'archive CSV est la source
+      # de vérité. On reconstruit la première depuis la seconde pour que
+      # `etat` dise la même chose que le fichier versionné.
+      - name: Recharger la base et rendre compte
+        if: ${{ !inputs.sonde }}
+        run: |
+          python -m brvm importer
+          python -m brvm etat
+
+      - name: Versionner l'archive élargie
+        if: ${{ !inputs.sonde }}
+        run: |
+          if git diff --quiet -- data/; then
+            echo "::notice::Archive inchangée — rien à committer."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/
+          git commit -m "Rapatrier l'historique du ${{ inputs.debut }} au ${{ inputs.fin }}"
+          git push

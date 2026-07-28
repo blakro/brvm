@@ -4,6 +4,7 @@
     python -m brvm verifier page.html    idem, sur une page enregistrée
     python -m brvm ingerer               enregistre la séance publiée
     python -m brvm referentiel           met à jour ticker / nom / secteur
+    python -m brvm rapatrier             historique sikafinance → archive
     python -m brvm noter                 classe les valeurs
     python -m brvm backtester            rejoue le classement dans le temps
     python -m brvm exporter              base → CSV versionnés
@@ -26,7 +27,7 @@ from pathlib import Path
 import pandas as pd
 
 from . import backtest, db, dividende, exogene, features, prediction, scoring
-from .ingestion import brvm_org
+from .ingestion import brvm_org, sikafinance
 
 
 def _verifier(args) -> int:
@@ -46,6 +47,82 @@ def _ingerer(args) -> int:
         print(f"ingestion refusée : {erreur}", file=sys.stderr)
         return 1
     print(f"{lignes} lignes de cote enregistrées")
+    return 0
+
+
+def _rapatrier(args) -> int:
+    """Historique sikafinance → archive des cours.
+
+    Trois refus explicites plutôt qu'un rapatriement à moitié bon :
+    une incohérence de colonnes rejette la valeur concernée, pas tout le
+    lot ; une valeur injoignable est signalée et le reste continue ; et
+    rien n'est écrit tant qu'une valeur au moins n'a rien donné de
+    contrôlé. Un millier de requêtes ne se relance pas à la légère.
+    """
+    referentiel = db.charger_archive("referentiel")
+    demandes = args.tickers or sorted(referentiel["ticker"].dropna().unique())
+    if not demandes:
+        print("aucun ticker : renseignez le référentiel d'abord",
+              file=sys.stderr)
+        return 1
+
+    connu = db.charger_archive("cours")
+    recoltes, refus, signales = [], [], []
+    for ticker in demandes:
+        try:
+            table = sikafinance.historique(
+                ticker, args.debut, args.fin, source=args.source,
+                pause=args.pause)
+        except Exception as erreur:  # noqa: BLE001 — réseau, HTML, tout
+            refus.append(f"{ticker} : {type(erreur).__name__} — {erreur}")
+            continue
+
+        ecarts = sikafinance.coherence(table)
+        if ecarts:
+            refus.append(
+                f"{ticker} : {len(ecarts)} variations incohérentes, valeur "
+                f"écartée (première : {ecarts[0]})")
+            continue
+        signales += [f"{ticker} — {m}" for m in
+                     sikafinance.seances_repetees(table)]
+        recoltes.append(sikafinance.retenir(table))
+        print(f"  {ticker:<7} {len(table):>5} séances "
+              f"{table['date'].min()} → {table['date'].max()}")
+
+    if not recoltes:
+        print("rien de contrôlé : archive inchangée", file=sys.stderr)
+        for ligne in refus:
+            print(f"  {ligne}", file=sys.stderr)
+        return 1
+
+    nouveau = pd.concat(recoltes, ignore_index=True)
+    # La séance publiée par brvm.org fait foi sur les dates qu'elle
+    # couvre : elle vient de la source primaire. L'historique ne fait que
+    # combler ce qu'elle n'a pas encore vu.
+    fusion = (pd.concat([nouveau, connu], ignore_index=True)
+              .drop_duplicates(subset=["date", "ticker"], keep="last")
+              .sort_values(["date", "ticker"]))
+    ajoutees = len(fusion) - len(connu)
+
+    if args.simulation:
+        print(f"\nsimulation : {ajoutees} lignes seraient ajoutées "
+              f"({len(connu)} → {len(fusion)})")
+    else:
+        chemin = db.chemin_archive("cours")
+        chemin.parent.mkdir(parents=True, exist_ok=True)
+        fusion.to_csv(chemin, index=False)
+        print(f"\n{ajoutees} lignes ajoutées ({len(connu)} → {len(fusion)}), "
+              f"{fusion['date'].nunique()} séances en archive")
+
+    if signales:
+        print(f"\n{len(signales)} séances au volume identique à la veille — "
+              "vraisemblablement republiées, à examiner :", file=sys.stderr)
+        for ligne in signales[:20]:
+            print(f"  {ligne}", file=sys.stderr)
+    if refus:
+        print(f"\n{len(refus)} valeurs écartées :", file=sys.stderr)
+        for ligne in refus:
+            print(f"  {ligne}", file=sys.stderr)
     return 0
 
 
@@ -277,6 +354,25 @@ def construire_analyseur() -> argparse.ArgumentParser:
         help="date de présence à enregistrer si la base n'a pas de cours",
     )
     referentiel.set_defaults(fonction=_referentiel)
+
+    rapatrier = commandes.add_parser(
+        "rapatrier",
+        help="historique sikafinance → archive des cours",
+        description="Rapatrie l'historique séance par séance. Le site ne "
+                    "sert que trois mois à la fois : la période demandée "
+                    "est découpée, une pause sépare les requêtes.",
+    )
+    rapatrier.add_argument("--debut", required=True, help="AAAA-MM-JJ")
+    rapatrier.add_argument("--fin", required=True, help="AAAA-MM-JJ")
+    rapatrier.add_argument("--tickers", nargs="*", default=None,
+                           help="par défaut, tout le référentiel")
+    rapatrier.add_argument("--source", default=None,
+                           help="page enregistrée, au lieu du réseau")
+    rapatrier.add_argument("--pause", type=float, default=1.5,
+                           help="secondes entre deux requêtes (défaut 1,5)")
+    rapatrier.add_argument("--simulation", action="store_true",
+                           help="compter sans écrire")
+    rapatrier.set_defaults(fonction=_rapatrier)
 
     noter = commandes.add_parser(
         "noter", help="classer les valeurs (momentum filtré par liquidité)"
