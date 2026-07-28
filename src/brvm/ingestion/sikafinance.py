@@ -1,142 +1,186 @@
-"""Rapatriement de l'historique depuis sikafinance.com.
+"""Rapatriement de l'historique depuis sikafinance.
 
 POURQUOI UNE DEUXIÈME SOURCE
 ----------------------------
 brvm.org publie la cote du jour, pas son passé. L'archive ne pouvait donc
 grandir qu'au rythme d'une séance par jour ouvré : le premier classement
 tombait vers juillet 2027, le premier backtest vers octobre. sikafinance
-publie l'historique séance par séance, ce qui ramène cette attente à la
-durée d'un rapatriement.
+publie l'historique séance par séance.
 
-    https://www.sikafinance.com/marches/historiques/SDSC.ci
+PAS DU HTML — UNE API JSON
+--------------------------
+La page `/marches/historiques/SDSC.ci` n'est qu'une vitrine ; le tableau
+est rempli par un appel que le navigateur fait derrière :
 
-CE QUE CETTE SOURCE DONNE, ET CE QU'ON EN GARDE
------------------------------------------------
-Le tableau porte huit colonnes : Date, Clôture, Plus bas, Plus haut,
-Ouverture, Volume Titres, Volume FCFA, Variation %. On n'en écrit que
-quatre en base, et ce tri n'est pas de la prudence de principe — il vient
-d'un contrôle sur dix séances consécutives d'AFRICA GLOBAL LOGISTICS
-(SDSC), mars 2026 :
+    POST https://www.sikafinance.com/api/general/GetHistos
+    {"ticker": "SDSC.ci", "datedeb": "2026-01-01",
+     "datefin": "2026-03-31", "xperiod": "0"}
+    → {"lst": [{"Date": "31/03/2026", "Open": …, "High": …,
+                "Low": …, "Close": …, "Volume": …}, …]}
 
-  - LA CLÔTURE EST FIABLE. Sur les neuf transitions vérifiables, la
-    variation recalculée depuis la colonne Clôture retombe au centième
-    près sur la variation annoncée. Deux colonnes indépendantes qui
-    concordent neuf fois de suite ne concordent pas par hasard.
+Ce protocole vient du paquet R `BRVM` de Koffi Fredy Sessie (MIT,
+github.com/Koffi-Fredysessie/BRVM), qui l'exerce contre le site depuis
+2023. Aucune ligne de son code n'est reprise : ce qui est repris, c'est
+l'adresse, la forme du corps et le pas de 89 jours — des faits sur le
+site, que personne ne possède. Le mérite de les avoir établis lui revient.
 
-  - PLUS BAS, PLUS HAUT ET OUVERTURE NE LE SONT PAS. Sur huit des dix
-    séances, « plus bas » dépasse la clôture — ce qui est impossible par
-    définition. L'anomalie ne frappe que les séances de baisse ; les
-    séances de hausse sont cohérentes. Aucune règle simple ne relie ces
-    colonnes à la clôture de la veille, et une hypothèse inventée depuis
-    dix lignes serait invérifiable une fois la base remplie. Elles sont
-    donc lues, contrôlées, et NON écrites. Le schéma `cours` a les
-    colonnes prêtes le jour où la règle sera comprise.
+Lire l'API plutôt que la page vaut mieux sur trois plans : le JSON ne se
+décale pas quand la mise en page change, il évite d'analyser un document
+entier pour dix lignes, et il rend des nombres au lieu de « 20 643 040 ».
 
-  - LES SÉANCES SE RÉPÈTENT. Les 19 et 20 mars portent le même volume au
-    titre près (11 729 titres, 20 643 040 FCFA) avec des variations
-    différentes. Un volume rigoureusement identique deux séances de suite
-    n'est pas une coïncidence de marché : c'est la même transaction
-    publiée deux fois, sur un marché où une valeur peut ne pas coter. Les
-    ingérer telles quelles doublerait le volume et fabriquerait une séance
-    qui n'a pas eu lieu. `seances_repetees` les signale.
+CE QUI RESTE À VÉRIFIER, ET QUI NE PEUT L'ÊTRE D'ICI
+----------------------------------------------------
+L'accès sortant vers sikafinance est refusé depuis l'environnement de
+développement. Deux points restent donc ouverts, et `sonder` existe pour
+les trancher au premier appel réel plutôt que par hypothèse :
 
-LA CONTRAINTE DES TROIS MOIS
-----------------------------
-Le sélecteur de période refuse plus d'un trimestre. Six ans d'historique
-pour 47 valeurs font donc un bon millier de requêtes : `fenetres` découpe,
-et l'appelant tempère. C'est un travail de rapatriement ponctuel, pas une
-ingestion quotidienne — il a sa place dans une action déclenchée à la
-main, pas dans le cron.
+1. QUE MESURE `Volume` ? Le tableau HTML porte deux colonnes — Volume
+   Titres et Volume FCFA — là où l'API n'en rend qu'une. Une capture du
+   19/03/2026 sur SDSC donne 11 729 titres et 20 643 040 FCFA : le témoin
+   ci-dessous tranche d'un coup d'œil, sans avoir à deviner.
+
+2. `Open`, `High` et `Low` SONT-ILS COHÉRENTS ? Dans le HTML, ils ne le
+   sont pas : sur huit des dix séances observées, « plus bas » dépasse la
+   clôture, ce qui est impossible. Si l'API dit la même chose, ces
+   colonnes restent hors de la base ; si elle est cohérente, c'est le
+   rendu du site qui déforme, et le projet gagne un vrai OHLC.
+
+En attendant cette réponse, seules la date, la clôture et le volume
+partent en base — la clôture parce qu'elle est vérifiable, et elle l'est :
+sur les neuf transitions de la capture, la variation recalculée retombe au
+centième près sur celle qu'annonce la source.
+
+TROISIÈME PIÈGE, CELUI-LÀ CONFIRMÉ
+----------------------------------
+Les 19 et 20 mars 2026 portent le même volume au titre près avec des
+variations différentes. Sur un marché où une valeur peut ne pas coter de
+la journée, c'est la même transaction publiée deux fois. `seances_repetees`
+les signale : les ingérer doublerait le volume et fabriquerait une séance.
 """
 
 from __future__ import annotations
 
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup
 
-from .brvm_org import (SourceIllisible, _en_dataframe, _nombre, _normaliser)
 from ..config import charger
+from .brvm_org import SourceIllisible, _en_dataframe, _nombre, _normaliser
 
-URL = "https://www.sikafinance.com/marches/historiques/{symbole}"
+API = "https://www.sikafinance.com/api/general/GetHistos"
+ACCUEIL = "https://www.sikafinance.com/"
+PAGE = "https://www.sikafinance.com/marches/historiques/{symbole}"
 
-# Le symbole du site suffixe le ticker BRVM du pays de cotation. Toutes les
-# valeurs observées jusqu'ici sont en « .ci » — y compris, à vérifier au
-# premier rapatriement, celles dont l'émetteur est sénégalais ou béninois.
-# La correspondance est explicite plutôt que devinée : une exception se
-# corrige ici en une ligne, sans toucher au reste.
+# `xperiod` : 0 journalier, 7 hebdomadaire, 30 mensuel, 91 trimestriel,
+# 365 annuel. Le projet ne travaille qu'en séances.
+PERIODE_JOURNALIERE = "0"
+
+# Le site refuse plus d'un trimestre par appel. 89 jours est le pas retenu
+# par le paquet R, éprouvé contre l'API — préféré à « trois mois
+# calendaires », qui peut faire 92 jours d'août à octobre.
+PAS_JOURS = 89
+
+# Le suffixe pays fait partie de l'identifiant : SDSC.ci, et pas SDSC. Il
+# ne se devine pas — la BRVM cote des émetteurs de huit pays — il se lit
+# dans le menu déroulant de l'accueil (`select#dpShares`), où chaque
+# option porte `value="SDSC.ci"`. `symboles()` va le chercher.
 SUFFIXE_DEFAUT = ".ci"
-SUFFIXES: dict[str, str] = {}
 
-# Reconnaissance par l'intitulé, jamais par la position : une colonne
-# insérée en tête décalerait tout un rapatriement sans rien déclencher.
-ALIAS = {
-    "date": ("date",),
-    "cloture": ("cloture", "clot"),
-    "bas": ("plus bas",),
-    "haut": ("plus haut",),
-    "ouverture": ("ouverture",),
-    "volume_titres": ("volume titres", "titres"),
-    "volume_fcfa": ("volume fcfa", "fcfa"),
-    "variation": ("variation",),
+# Ce qui part en base tant que le point 2 ci-dessus n'est pas tranché.
+RETENUES = ["date", "ticker", "cloture", "volume_titres", "volume_fcfa"]
+
+# Le témoin qui répond au point 1. Valeurs relevées sur une capture de la
+# page SDSC, séance du 19/03/2026. `sonder` compare ce que rend l'API à
+# ces deux nombres : l'un d'eux tombera juste.
+TEMOIN = {
+    "ticker": "SDSC",
+    "date": "2026-03-19",
+    "cloture": 1700.0,
+    "volume_titres": 11_729.0,
+    "volume_fcfa": 20_643_040.0,
 }
 
-# Ce qui part en base. Le reste est lu pour être contrôlé, puis abandonné.
-RETENUES = ["date", "ticker", "cloture", "volume_titres", "volume_fcfa"]
+ALIAS = {
+    "date": ("date",),
+    "cloture": ("close", "cloture", "clot"),
+    "ouverture": ("open", "ouverture"),
+    "haut": ("high", "plus haut"),
+    "bas": ("low", "plus bas"),
+    # L'ORDRE COMPTE, ET C'EST LE SEUL ENDROIT OÙ IL COMPTE. `_correspondance`
+    # attribue chaque colonne d'origine une seule fois, en parcourant ce
+    # dictionnaire dans l'ordre : le générique « volume » placé avant les
+    # deux spécifiques avalait « Volume Titres » du tableau HTML, qui se
+    # retrouvait alors sans volume en titres.
+    "volume_titres": ("volume titres", "titres"),
+    "volume_fcfa": ("volume fcfa", "fcfa"),
+    "volume": ("volume",),
+    "variation": ("variation",),
+}
 
 TOLERANCE_VARIATION = 0.02  # points de pourcentage
 
 
-def symbole(ticker: str) -> str:
-    """Ticker BRVM → identifiant sikafinance."""
-    return f"{ticker}{SUFFIXES.get(ticker, SUFFIXE_DEFAUT)}"
+# --- Identifiants ---------------------------------------------------------
 
+def symbole(ticker: str, suffixes: dict[str, str] | None = None) -> str:
+    """Ticker BRVM → identifiant sikafinance, suffixe pays compris."""
+    return f"{ticker}{(suffixes or {}).get(ticker, SUFFIXE_DEFAUT)}"
+
+
+def lire_symboles(html: str) -> dict[str, str]:
+    """{ticker: suffixe} depuis le menu « Choisir une valeur » de l'accueil.
+
+    Les indices (BRVM10, BRVMC…) et les séries maison (SIKA…) sont écartés :
+    ce ne sont pas des sociétés, et les demander à l'API d'historique des
+    actions ne rendrait rien d'exploitable.
+    """
+    soupe = BeautifulSoup(html, "html.parser")
+    menu = soupe.select_one("#dpShares")
+    if menu is None:
+        raise SourceIllisible(
+            "menu « select#dpShares » introuvable sur l'accueil : "
+            "les suffixes pays ne peuvent pas être lus"
+        )
+    trouves: dict[str, str] = {}
+    for option in menu.select("option"):
+        valeur = (option.get("value") or "").strip()
+        if "." not in valeur:  # indices et entrée vide
+            continue
+        ticker, _, pays = valeur.partition(".")
+        if ticker.startswith(("BRVM", "SIKA")):
+            continue
+        trouves[ticker] = f".{pays}"
+    if not trouves:
+        raise SourceIllisible("menu trouvé mais aucune action dedans")
+    return trouves
+
+
+# --- Découpage ------------------------------------------------------------
 
 def fenetres(debut: str | date, fin: str | date,
-             mois: int = 3) -> list[tuple[str, str]]:
-    """Découpe une période en tranches que le site accepte.
+             jours: int = PAS_JOURS) -> list[tuple[str, str]]:
+    """Découpe une période en tranches que l'API accepte.
 
-    Les bornes sont incluses et les tranches jointives : une tranche qui
-    reprendrait à la date de fin de la précédente ferait ingérer deux fois
-    la même séance, et une tranche qui sauterait un jour créerait un trou
-    invisible au milieu de l'historique.
+    Bornes incluses, tranches jointives et disjointes : un recouvrement
+    ferait ingérer deux fois la même séance, un trou créerait un vide au
+    milieu de l'historique qui ne se verrait qu'au premier momentum tombant
+    dedans.
     """
-    d = _en_date(debut)
-    f = _en_date(fin)
+    d, f = _en_date(debut), _en_date(fin)
     if d > f:
         raise ValueError(f"période à l'envers : {d} → {f}")
 
     tranches: list[tuple[str, str]] = []
     courant = d
     while courant <= f:
-        mois_total = courant.month - 1 + mois
-        an = courant.year + mois_total // 12
-        mois_fin = mois_total % 12 + 1
-        # Le jour d'avant, le même quantième : trois mois pleins, sans
-        # recouvrement avec la tranche suivante.
-        suivant = date(an, mois_fin, min(courant.day, _jours(an, mois_fin)))
-        borne = min(_veille(suivant), f)
+        borne = min(courant + timedelta(days=jours - 1), f)
         tranches.append((courant.isoformat(), borne.isoformat()))
-        courant = _lendemain(borne)
+        courant = borne + timedelta(days=1)
     return tranches
-
-
-def _jours(an: int, mois: int) -> int:
-    if mois == 12:
-        return 31
-    return (date(an, mois + 1, 1) - date(an, mois, 1)).days
-
-
-def _veille(jour: date) -> date:
-    return date.fromordinal(jour.toordinal() - 1)
-
-
-def _lendemain(jour: date) -> date:
-    return date.fromordinal(jour.toordinal() + 1)
 
 
 def _en_date(valeur: str | date) -> date:
@@ -148,12 +192,12 @@ def _en_date(valeur: str | date) -> date:
 def _date_fr(valeur: object) -> str:
     """« 31/03/2026 » → « 2026-03-31 ». Chaîne vide si illisible.
 
-    Le format ISO est celui de toute la base : mélanger les deux ferait
-    trier « 31/03 » après « 01/04 », et le désordre ne se verrait qu'au
-    moment de calculer un momentum.
+    Tout le reste de la base est en ISO. Mélanger les deux ferait trier
+    « 31/03 » après « 01/04 », et le désordre ne se verrait qu'au moment de
+    calculer un momentum — c'est-à-dire trop tard.
     """
     texte = str(valeur).strip()
-    for forme in ("%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d"):
+    for forme in ("%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d", "%d/%m/%y"):
         try:
             return datetime.strptime(texte, forme).date().isoformat()
         except ValueError:
@@ -161,31 +205,64 @@ def _date_fr(valeur: object) -> str:
     return ""
 
 
-def _correspondance(entete: list[str]) -> dict[str, str]:
-    """{nom interne: intitulé d'origine}, une colonne attribuée une fois."""
-    normalises = {colonne: _normaliser(colonne) for colonne in entete}
+def _correspondance(champs) -> dict[str, str]:
+    """{nom interne: nom d'origine}, une origine attribuée une seule fois."""
+    normalises = {c: _normaliser(c) for c in champs}
     trouve: dict[str, str] = {}
     pris: set[str] = set()
     for interne, motifs in ALIAS.items():
         for motif in motifs:
-            for colonne, norme in normalises.items():
-                if colonne in pris:
+            for origine, norme in normalises.items():
+                if origine in pris:
                     continue
                 if norme == motif or motif in norme:
-                    trouve[interne] = colonne
-                    pris.add(colonne)
+                    trouve[interne] = origine
+                    pris.add(origine)
                     break
             if interne in trouve:
                 break
     return trouve
 
 
-def lire_tableau(html: str, ticker: str) -> pd.DataFrame:
-    """Le tableau d'historique d'une page, en colonnes internes.
+# --- Lecture --------------------------------------------------------------
 
-    Renvoie toutes les colonnes reconnues, y compris celles qu'on n'écrira
-    pas : `coherence` a besoin de la variation annoncée pour vérifier la
-    clôture, et le tri se fait après le contrôle, pas avant.
+def lire_json(charge: dict | list, ticker: str) -> pd.DataFrame:
+    """La réponse de l'API en colonnes internes, du plus ancien au plus récent.
+
+    Les champs sont reconnus par leur nom, jamais par leur position : une
+    clé ajoutée en tête décalerait un rapatriement entier sans que rien ne
+    le signale.
+    """
+    lignes = charge.get("lst") if isinstance(charge, dict) else charge
+    if not lignes:
+        return pd.DataFrame(columns=["date", "ticker"])
+
+    brut = pd.DataFrame(lignes)
+    corr = _correspondance(list(brut.columns))
+    if "date" not in corr or "cloture" not in corr:
+        raise SourceIllisible(
+            f"réponse inattendue pour {ticker} : champs "
+            f"{sorted(brut.columns)} — « Date » et « Close » sont attendus"
+        )
+
+    lu = pd.DataFrame({interne: brut[origine] for interne, origine in corr.items()})
+    lu["date"] = lu["date"].map(_date_fr)
+    for colonne in lu.columns:
+        if colonne != "date":
+            lu[colonne] = lu[colonne].map(_nombre)
+    lu = lu[lu["date"] != ""]
+    if lu.empty:
+        return pd.DataFrame(columns=["date", "ticker"])
+
+    lu.insert(1, "ticker", ticker)
+    return lu.sort_values("date").reset_index(drop=True)
+
+
+def lire_tableau(html: str, ticker: str) -> pd.DataFrame:
+    """Le tableau HTML de la page, au cas où l'API disparaîtrait.
+
+    Conservé comme second chemin : une API non documentée peut fermer du
+    jour au lendemain, et la page publique lui survivra probablement.
     """
     soupe = BeautifulSoup(html, "html.parser")
     for balise in soupe.find_all("table"):
@@ -195,9 +272,7 @@ def lire_tableau(html: str, ticker: str) -> pd.DataFrame:
         corr = _correspondance(list(tableau.columns))
         if "date" not in corr or "cloture" not in corr:
             continue
-
-        lu = pd.DataFrame({interne: tableau[origine]
-                           for interne, origine in corr.items()})
+        lu = pd.DataFrame({i: tableau[o] for i, o in corr.items()})
         lu["date"] = lu["date"].map(_date_fr)
         for colonne in lu.columns:
             if colonne != "date":
@@ -206,8 +281,6 @@ def lire_tableau(html: str, ticker: str) -> pd.DataFrame:
         if lu.empty:
             continue
         lu.insert(1, "ticker", ticker)
-        # Du plus ancien au plus récent : le site publie l'inverse, et
-        # tout le reste du projet suppose l'ordre chronologique.
         return lu.sort_values("date").reset_index(drop=True)
 
     raise SourceIllisible(
@@ -216,76 +289,148 @@ def lire_tableau(html: str, ticker: str) -> pd.DataFrame:
     )
 
 
+# --- Contrôles ------------------------------------------------------------
+
 def coherence(table: pd.DataFrame) -> list[str]:
     """Compare la variation annoncée à celle que donne la clôture.
 
-    C'est le contrôle qui autorise à faire confiance à la colonne Clôture,
-    et le seul dont on dispose : deux colonnes produites indépendamment
-    par la source qui concordent sur des dizaines de séances ne concordent
-    pas par accident. Un écart signale un décalage de colonnes — donc un
-    rapatriement à jeter, pas à corriger.
+    Le seul contrôle dont on dispose, et il suffit : deux colonnes
+    produites indépendamment par la source qui retombent l'une sur l'autre
+    des dizaines de fois ne le font pas par accident. Un écart signale un
+    décalage de colonnes — un lot à jeter, pas à rattraper.
+
+    Ne s'applique qu'au HTML : l'API ne rend pas la variation.
     """
     if "variation" not in table.columns or len(table) < 2:
         return []
     calcul = table["cloture"] / table["cloture"].shift(1) - 1
     ecart = (calcul * 100 - table["variation"]).abs()
-    fautives = table.loc[ecart > TOLERANCE_VARIATION]
     return [
         f"{ligne.date} : variation annoncée {ligne.variation:+.2f} %, "
         f"clôture {ligne.cloture:.0f} → {calcul.loc[ligne.Index] * 100:+.2f} %"
-        for ligne in fautives.itertuples()
+        for ligne in table.loc[ecart > TOLERANCE_VARIATION].itertuples()
         if pd.notna(calcul.loc[ligne.Index])
     ]
 
 
-def seances_repetees(table: pd.DataFrame) -> list[str]:
-    """Séances au volume rigoureusement identique à la précédente.
+def ohlc_incoherent(table: pd.DataFrame) -> list[str]:
+    """Séances où « plus bas » ≤ clôture ≤ « plus haut » est violé.
 
-    Observé les 19 et 20 mars 2026 sur SDSC : 11 729 titres et 20 643 040
-    FCFA deux jours de suite. Sur un marché où une valeur peut ne pas
-    coter de la journée, c'est la même transaction republiée — pas deux
-    échanges du même montant au franc près.
+    C'est ce contrôle qui décidera du sort d'`Open`, `High` et `Low` : le
+    HTML les rend faux huit fois sur dix, et il faut savoir si l'API fait
+    de même avant d'écrire quoi que ce soit en base.
     """
-    if not {"volume_titres", "volume_fcfa"}.issubset(table.columns):
+    if not {"bas", "haut", "cloture"}.issubset(table.columns):
         return []
-    memes = (
-        (table["volume_titres"] == table["volume_titres"].shift(1))
-        & (table["volume_fcfa"] == table["volume_fcfa"].shift(1))
-        & table["volume_fcfa"].notna()
-        & (table["volume_fcfa"] > 0)
-    )
+    faux = table[
+        (table["bas"] > table["cloture"]) | (table["cloture"] > table["haut"])
+    ]
     return [
-        f"{ligne.date} : même volume que la veille "
-        f"({ligne.volume_titres:.0f} titres, {ligne.volume_fcfa:.0f} FCFA)"
-        for ligne in table.loc[memes].itertuples()
+        f"{ligne.date} : bas {ligne.bas:.0f} / clôture {ligne.cloture:.0f} "
+        f"/ haut {ligne.haut:.0f}"
+        for ligne in faux.itertuples()
     ]
 
 
-def retenir(table: pd.DataFrame) -> pd.DataFrame:
-    """Ne garde que ce que le contrôle autorise à écrire."""
-    return table[[c for c in RETENUES if c in table.columns]].copy()
+def seances_repetees(table: pd.DataFrame) -> list[str]:
+    """Séances au volume rigoureusement identique à la veille.
+
+    Observé les 19 et 20 mars 2026 sur SDSC : 11 729 titres et 20 643 040
+    FCFA deux jours de suite. Deux échanges égaux au franc près n'existent
+    pas — c'est la même transaction republiée. Les volumes nuls, eux, se
+    répètent normalement sur ce marché et ne sont pas signalés.
+    """
+    colonnes = [c for c in ("volume_titres", "volume_fcfa", "volume")
+                if c in table.columns]
+    if not colonnes:
+        return []
+    memes = pd.Series(True, index=table.index)
+    for colonne in colonnes:
+        memes &= (table[colonne] == table[colonne].shift(1)) & (table[colonne] > 0)
+    return [
+        f"{ligne.date} : même volume que la veille "
+        f"({getattr(ligne, colonnes[0]):.0f})"
+        for ligne in table.loc[memes.fillna(False)].itertuples()
+    ]
+
+
+def retenir(table: pd.DataFrame, volume: str | None = None) -> pd.DataFrame:
+    """Ne garde que ce que les contrôles autorisent à écrire.
+
+    `volume` dit dans quelle colonne verser le `Volume` de l'API — la
+    réponse tient en un mot, mais elle ne se devine pas, et se tromper
+    rangerait des francs dans une colonne de titres. C'est `sonder` qui la
+    donne. Sans elle, le volume est écarté plutôt qu'attribué au hasard :
+    une archive sans volume se complète, une archive au volume faux se
+    découvre le jour où le filtre de liquidité laisse passer n'importe quoi.
+    """
+    lu = table.copy()
+    if "volume" in lu.columns:
+        if volume in ("volume_titres", "volume_fcfa"):
+            lu[volume] = lu["volume"]
+        lu = lu.drop(columns=["volume"])
+    return lu[[c for c in RETENUES if c in lu.columns]].copy()
+
+
+def temoin(table: pd.DataFrame) -> str:
+    """Ce que mesure la colonne `Volume`, tranché par une valeur connue.
+
+    L'API rend un seul volume, la page en affiche deux. Plutôt que de
+    parier, on compare à une séance dont les deux nombres sont connus.
+    """
+    ligne = table[table["date"] == TEMOIN["date"]]
+    if ligne.empty or "volume" not in table.columns:
+        return (f"témoin indisponible : séance du {TEMOIN['date']} absente "
+                "de la réponse, ou colonne « Volume » manquante")
+    valeur = float(ligne["volume"].iloc[0])
+    for nom in ("volume_titres", "volume_fcfa"):
+        if abs(valeur - TEMOIN[nom]) < 1:
+            return f"« Volume » = {nom} ({valeur:,.0f})".replace(",", " ")
+    return (f"« Volume » = {valeur:,.0f}, ne correspond ni aux "
+            f"{TEMOIN['volume_titres']:,.0f} titres ni aux "
+            f"{TEMOIN['volume_fcfa']:,.0f} FCFA connus".replace(",", " "))
 
 
 # --- Accès réseau ---------------------------------------------------------
 #
-# Cette couche est la seule partie du module qui n'a pas pu être vérifiée
-# contre le site : l'accès sortant y est refusé depuis l'environnement de
-# développement. Elle est donc réduite au minimum et isolée — tout ce qui
-# précède se teste sur une page enregistrée, et se testera de la même
-# façon le jour où la mise en page changera.
+# Seule partie du module non vérifiable depuis l'environnement de
+# développement, l'accès sortant y étant refusé. Elle est donc réduite au
+# strict nécessaire : tout ce qui précède se teste sur réponse enregistrée.
 
-def _page(symbole_site: str, debut: str, fin: str,
-          session: requests.Session | None = None) -> str:
+def _session(session: requests.Session | None = None) -> requests.Session:
+    s = session or requests.Session()
     conf = charger().get("ingestion", {})
-    appelant = session or requests
-    reponse = appelant.get(
-        URL.format(symbole=symbole_site),
-        params={"debut": debut, "fin": fin, "per": "Journaliere"},
-        headers={"User-Agent": conf.get("agent", "brvm/0.1")},
+    s.headers.update({
+        "User-Agent": conf.get("agent", "brvm/0.1"),
+        "Accept": "*/*",
+        "Origin": "https://www.sikafinance.com",
+    })
+    return s
+
+
+def _appeler(symbole_site: str, debut: str, fin: str,
+             session: requests.Session | None = None) -> dict:
+    s = _session(session)
+    conf = charger().get("ingestion", {})
+    reponse = s.post(
+        API,
+        json={"ticker": symbole_site, "datedeb": debut, "datefin": fin,
+              "xperiod": PERIODE_JOURNALIERE},
+        # Le Referer désigne la page dont l'appel est censé venir. Sans lui
+        # l'API peut répondre vide sans le dire.
+        headers={"Referer": PAGE.format(symbole=symbole_site)},
         timeout=int(conf.get("delai_secondes", 30)),
     )
     reponse.raise_for_status()
-    return reponse.text
+    return reponse.json()
+
+
+def symboles(session: requests.Session | None = None) -> dict[str, str]:
+    """Les suffixes pays, lus sur l'accueil plutôt que devinés."""
+    s = _session(session)
+    reponse = s.get(ACCUEIL, timeout=30)
+    reponse.raise_for_status()
+    return lire_symboles(reponse.text)
 
 
 def historique(
@@ -294,27 +439,35 @@ def historique(
     fin: str | date,
     source: str | Path | None = None,
     session: requests.Session | None = None,
-    pause: float = 1.5,
+    suffixes: dict[str, str] | None = None,
+    pause: float = 0.5,
 ) -> pd.DataFrame:
     """L'historique d'une valeur, fenêtre par fenêtre.
 
-    `source` court-circuite le réseau avec une page enregistrée : c'est le
-    chemin par lequel le module est testé, et celui qu'emprunte un
-    rapatriement fait à la main depuis des captures.
+    `source` court-circuite le réseau avec une réponse enregistrée — JSON
+    ou page HTML selon l'extension. C'est le chemin par lequel le module
+    est testé, et celui qu'emprunte un rapatriement fait depuis des
+    captures.
     """
     if source is not None:
-        html = Path(source).read_text(encoding="utf-8", errors="replace")
-        return lire_tableau(html, ticker)
+        chemin = Path(source)
+        texte = chemin.read_text(encoding="utf-8", errors="replace")
+        if chemin.suffix.lower() == ".json":
+            import json
+            return lire_json(json.loads(texte), ticker)
+        return lire_tableau(texte, ticker)
 
+    identifiant = symbole(ticker, suffixes)
     morceaux = []
     for i, (d, f) in enumerate(fenetres(debut, fin)):
         if i:
-            # Un millier de requêtes sur un site qui n'a rien demandé :
-            # la pause n'est pas une précaution technique, c'est la
-            # condition pour que la source reste disponible.
+            # Un millier d'appels à un service qui n'a rien demandé : la
+            # pause n'est pas une précaution technique, c'est la condition
+            # pour que la source reste disponible.
             time.sleep(pause)
-        morceaux.append(lire_tableau(_page(symbole(ticker), d, f, session),
-                                     ticker))
+        morceaux.append(lire_json(_appeler(identifiant, d, f, session), ticker))
+
+    morceaux = [m for m in morceaux if not m.empty]
     if not morceaux:
         return pd.DataFrame(columns=RETENUES)
     tout = pd.concat(morceaux, ignore_index=True)

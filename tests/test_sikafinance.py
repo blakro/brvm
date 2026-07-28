@@ -2,23 +2,26 @@
 
 CE QUE CES TESTS COUVRENT, ET CE QU'ILS NE COUVRENT PAS
 -------------------------------------------------------
-La fixture reprend les VALEURS d'une capture réelle de SDSC (mars 2026) ;
-son BALISAGE est reconstruit, le site n'étant pas joignable depuis
-l'environnement de développement. Ces tests valident donc le lecteur — la
-reconnaissance des colonnes par leur intitulé, la conversion des nombres
-et des dates, l'ordre chronologique, les deux contrôles de qualité — et
-non la mise en page du site, qui devra être confrontée à une vraie page
-avant le premier rapatriement.
+Deux chemins sont testés : l'API JSON, qui est le chemin principal, et le
+tableau HTML, gardé au cas où une API non documentée fermerait.
 
-C'est une limite réelle, et c'est aussi la raison pour laquelle la couche
-réseau tient en une fonction : quand la mise en page démentira la
-fixture, il n'y aura qu'un endroit à corriger.
+Les VALEURS des fixtures viennent d'une capture réelle de SDSC (mars
+2026) ; leur FORME est reconstruite, le service n'étant joignable ni
+depuis l'environnement de développement ni depuis les tests. Ces tests
+valident donc le lecteur — reconnaissance des champs par leur nom,
+conversion des nombres et des dates, ordre chronologique, découpage en
+fenêtres, contrôles de qualité — et non la forme réelle des réponses.
 
-Les deux contrôles de qualité valent d'être relus, parce qu'ils viennent
-de la donnée et non d'une précaution générale :
+C'est une limite réelle, et c'est la raison d'être de `brvm sonder` :
+un appel, et deux questions tranchées pour de bon.
+
+Trois contrôles valent d'être relus, parce qu'ils viennent de la donnée
+et non d'une précaution générale :
 
   - la clôture est vérifiée contre la variation annoncée par la source,
     deux colonnes indépendantes qui doivent retomber l'une sur l'autre ;
+  - « plus bas » <= clôture <= « plus haut » est violé huit fois sur dix
+    dans le HTML. La sonde dira si l'API fait de même ;
   - une séance dont le volume est rigoureusement identique à celui de la
     veille est signalée. Observé les 19 et 20 mars 2026 : la même
     transaction publiée deux fois.
@@ -37,15 +40,122 @@ sys.path.insert(0, str(RACINE / "src"))
 
 import pandas as pd  # noqa: E402
 
+import json  # noqa: E402
+
 from brvm.ingestion import sikafinance  # noqa: E402
 from brvm.ingestion.brvm_org import SourceIllisible  # noqa: E402
 
-CAPTURE = RACINE / "tests" / "donnees" / "sikafinance_sdsc.html"
+DONNEES = RACINE / "tests" / "donnees"
+CAPTURE = DONNEES / "sikafinance_sdsc.html"
+REPONSE = DONNEES / "sikafinance_sdsc.json"
+MENU = DONNEES / "sikafinance_menu.html"
 
 
 def _table() -> pd.DataFrame:
     return sikafinance.lire_tableau(
         CAPTURE.read_text(encoding="utf-8"), "SDSC")
+
+
+def _api() -> pd.DataFrame:
+    return sikafinance.lire_json(
+        json.loads(REPONSE.read_text(encoding="utf-8")), "SDSC")
+
+
+# --- L'API JSON, chemin principal -----------------------------------------
+
+def test_la_reponse_de_l_api_se_lit_par_le_nom_des_champs():
+    """Jamais par leur position : une clé ajoutée en tête décalerait un
+    rapatriement entier sans que rien ne le signale."""
+    table = _api()
+    assert {"date", "ticker", "cloture", "ouverture", "haut", "bas",
+            "volume"} <= set(table.columns)
+    assert len(table) == 10
+    assert table["date"].is_monotonic_increasing
+    assert table["date"].iloc[0] == "2026-03-18"
+
+
+def test_une_reponse_vide_ne_leve_pas():
+    """Une valeur qui n'a pas coté du trimestre est un cas normal, pas une
+    panne : elle doit rendre vide sans interrompre les 46 autres."""
+    assert sikafinance.lire_json({"lst": []}, "X").empty
+    assert sikafinance.lire_json({}, "X").empty
+
+
+def test_une_reponse_aux_champs_inconnus_est_refusee():
+    """Le silence serait pire : zéro ligne sans explication se confond avec
+    une valeur qui n'a pas coté."""
+    try:
+        sikafinance.lire_json({"lst": [{"machin": 1, "truc": 2}]}, "X")
+    except SourceIllisible as erreur:
+        assert "Date" in str(erreur)
+    else:
+        raise AssertionError("des champs inconnus doivent lever")
+
+
+def test_le_temoin_tranche_ce_que_mesure_le_volume():
+    """L'API rend un seul « Volume », la page en affiche deux. Une séance
+    dont les deux nombres sont connus le dit sans qu'on ait à parier."""
+    assert "volume_fcfa" in sikafinance.temoin(_api())
+
+
+def test_le_temoin_le_dit_quand_il_ne_peut_pas_trancher():
+    table = _api().copy()
+    table["volume"] = 42.0
+    message = sikafinance.temoin(table)
+    assert "ne correspond" in message
+
+
+def test_le_volume_n_est_pas_range_au_hasard():
+    """Sans réponse du témoin, mieux vaut une archive sans volume qu'une
+    archive au volume faux : la première se complète, la seconde se
+    découvre le jour où le filtre de liquidité laisse passer n'importe
+    quoi."""
+    sans = sikafinance.retenir(_api())
+    assert "volume_fcfa" not in sans.columns
+    assert "volume_titres" not in sans.columns
+    assert "volume" not in sans.columns
+    assert "cloture" in sans.columns
+
+    avec = sikafinance.retenir(_api(), "volume_fcfa")
+    assert avec["volume_fcfa"].iloc[1] == 20_643_040
+
+
+def test_l_ohlc_incoherent_est_signale():
+    """La question que la sonde doit trancher contre le vrai service : si
+    l'API reproduit l'incohérence du HTML, ces colonnes restent dehors."""
+    fautives = sikafinance.ohlc_incoherent(_api())
+    assert len(fautives) == 8
+
+
+# --- Le menu des symboles -------------------------------------------------
+
+def test_les_suffixes_pays_se_lisent_dans_le_menu():
+    """La BRVM cote des émetteurs de plusieurs pays : SONATEL est
+    sénégalaise, ONATEL burkinabè. Supposer « .ci » partout ferait échouer
+    ces valeurs-là sans qu'on sache pourquoi."""
+    suffixes = sikafinance.lire_symboles(MENU.read_text(encoding="utf-8"))
+    assert suffixes["SDSC"] == ".ci"
+    assert suffixes["SNTS"] == ".sn"
+    assert suffixes["BOAB"] == ".bj"
+    assert suffixes["ONTBF"] == ".bf"
+    assert sikafinance.symbole("SNTS", suffixes) == "SNTS.sn"
+
+
+def test_les_indices_ne_sont_pas_pris_pour_des_actions():
+    """BRVMC et SIKAAG sont des indices : les demander à l'API
+    d'historique des actions ne rendrait rien d'exploitable."""
+    suffixes = sikafinance.lire_symboles(MENU.read_text(encoding="utf-8"))
+    assert not any(t.startswith(("BRVM", "SIKA")) for t in suffixes)
+    assert len(suffixes) == 5
+
+
+def test_un_menu_absent_est_refuse():
+    try:
+        sikafinance.lire_symboles("<html><body>rien</body></html>")
+    except SourceIllisible as erreur:
+        assert "dpShares" in str(erreur)
+    else:
+        raise AssertionError("un menu absent doit lever")
 
 
 # --- Lecture --------------------------------------------------------------
@@ -160,18 +270,24 @@ def test_les_fenetres_couvrent_sans_trou_ni_recouvrement():
         assert veille.date().isoformat() == fin
 
 
-def test_aucune_fenetre_ne_depasse_trois_mois():
-    """La contrainte du site. La dépasser rendrait des pages tronquées
-    sans que rien ne le dise."""
+def test_aucune_fenetre_ne_depasse_le_pas_admis():
+    """La contrainte du service. La dépasser rendrait des réponses
+    tronquées sans que rien ne le dise — 89 jours plutôt que « trois mois
+    calendaires », qui peut faire 92 jours d'août à octobre."""
     tranches = sikafinance.fenetres("2019-02-15", "2026-07-27")
     for debut, fin in tranches:
         jours = (pd.Timestamp(fin) - pd.Timestamp(debut)).days
-        assert 0 <= jours <= 92, (debut, fin, jours)
+        assert 0 <= jours < sikafinance.PAS_JOURS, (debut, fin, jours)
 
 
 def test_une_periode_courte_tient_en_une_fenetre():
     assert sikafinance.fenetres("2026-01-01", "2026-02-15") == [
         ("2026-01-01", "2026-02-15")]
+
+
+def test_une_seule_journee_donne_une_seule_fenetre():
+    assert sikafinance.fenetres("2026-03-19", "2026-03-19") == [
+        ("2026-03-19", "2026-03-19")]
 
 
 def test_une_periode_a_l_envers_est_refusee():
@@ -194,6 +310,19 @@ def test_le_29_fevrier_ne_fait_pas_tomber_le_decoupage():
 
 def test_le_symbole_suffixe_le_ticker():
     assert sikafinance.symbole("SDSC") == "SDSC.ci"
+    assert sikafinance.symbole("SNTS", {"SNTS": ".sn"}) == "SNTS.sn"
+
+
+def test_le_volume_generique_ne_mange_pas_les_deux_colonnes_du_html():
+    """`_correspondance` attribue chaque colonne une seule fois, dans
+    l'ordre d'ALIAS. Le générique « volume » placé avant les spécifiques
+    avalait « Volume Titres », et la colonne des titres disparaissait sans
+    un mot — le genre de perte qu'on ne remarque qu'une fois la base
+    remplie."""
+    table = _table()
+    assert table["volume_titres"].iloc[1] == 11_729
+    assert table["volume_fcfa"].iloc[1] == 20_643_040
+    assert "volume" not in table.columns
 
 
 if __name__ == "__main__":

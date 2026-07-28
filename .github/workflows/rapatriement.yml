@@ -23,6 +23,11 @@ on:
         description: "Sonder une seule valeur sans rien écrire"
         type: boolean
         default: true
+      volume:
+        description: "Ce que compte le « Volume » de l'API (la sonde le dit)"
+        type: choice
+        options: ["", "fcfa", "titres"]
+        default: ""
       tickers:
         description: "Valeurs à rapatrier (vide = tout le référentiel)"
         required: false
@@ -30,7 +35,7 @@ on:
       pause:
         description: "Secondes entre deux requêtes"
         required: false
-        default: "1.5"
+        default: "0.5"
 
 permissions:
   contents: write
@@ -57,22 +62,33 @@ jobs:
 
       - run: python -m pip install --upgrade pip && pip install -e .
 
-      - name: Sonder une valeur
+      # Un appel, et les deux questions qui ne peuvent pas être tranchées
+      # hors ligne : ce que mesure « Volume », et si l'OHLC est cohérent.
+      # La sonde couvre mars 2026 parce que c'est la période dont les
+      # valeurs sont connues par ailleurs — le témoin a besoin du 19/03.
+      - name: Sonder
         if: inputs.sonde
         run: |
-          echo "::notice::Sonde sur SDSC, du ${{ inputs.debut }} au ${{ inputs.fin }}."
-          echo "Rien ne sera écrit. Relire le tableau ci-dessous avant"
-          echo "de relancer avec « sonder » décoché."
-          python -m brvm rapatrier \
-            --debut "${{ inputs.debut }}" --fin "${{ inputs.fin }}" \
-            --tickers SDSC --pause "${{ inputs.pause }}" --simulation
+          echo "::notice::Sonde sur SDSC. Rien ne sera écrit."
+          python -m brvm sonder --ticker SDSC \
+            --debut 2026-01-01 --fin 2026-03-31
+
+      - name: Refuser un rapatriement sans réponse de la sonde
+        if: ${{ !inputs.sonde && inputs.volume == '' }}
+        run: |
+          echo "::error::« volume » n'est pas renseigné. Lancez d'abord la"
+          echo "sonde : elle dit si le « Volume » de l'API compte des titres"
+          echo "ou des francs. Ranger les uns dans la colonne des autres ne"
+          echo "se verrait qu'au moment où le filtre de liquidité laisse"
+          echo "passer n'importe quoi."
+          exit 1
 
       - name: Rapatrier
         if: ${{ !inputs.sonde }}
         run: |
           python -m brvm rapatrier \
             --debut "${{ inputs.debut }}" --fin "${{ inputs.fin }}" \
-            --pause "${{ inputs.pause }}" \
+            --pause "${{ inputs.pause }}" --volume "${{ inputs.volume }}" \
             ${{ inputs.tickers != '' && format('--tickers {0}', inputs.tickers) || '' }}
 
       # La base SQLite est un artefact dérivé ; l'archive CSV est la source

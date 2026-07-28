@@ -4,6 +4,7 @@
     python -m brvm verifier page.html    idem, sur une page enregistrée
     python -m brvm ingerer               enregistre la séance publiée
     python -m brvm referentiel           met à jour ticker / nom / secteur
+    python -m brvm sonder                un appel réel, pour trancher
     python -m brvm rapatrier             historique sikafinance → archive
     python -m brvm noter                 classe les valeurs
     python -m brvm backtester            rejoue le classement dans le temps
@@ -50,6 +51,82 @@ def _ingerer(args) -> int:
     return 0
 
 
+def _sonder(args) -> int:
+    """Un seul appel réel, et tout ce qu'il permet de trancher.
+
+    L'API de sikafinance n'est joignable ni depuis l'environnement de
+    développement ni depuis les tests : deux questions restent donc
+    ouvertes jusqu'au premier appel — ce que mesure la colonne `Volume`,
+    et si l'OHLC est cohérent. Les lancer sur 1 269 requêtes sans les
+    avoir tranchées reviendrait à remplir l'archive au hasard.
+    """
+    ticker = args.ticker
+    print(f"Sonde sur {ticker}, du {args.debut} au {args.fin}. "
+          "Rien ne sera écrit.\n")
+
+    if args.source is None:
+        try:
+            suffixes = sikafinance.symboles()
+            print(f"Menu de l'accueil : {len(suffixes)} actions, "
+                  f"{ticker} → {sikafinance.symbole(ticker, suffixes)}")
+            pays = sorted(set(suffixes.values()))
+            print(f"Suffixes rencontrés : {', '.join(pays)}\n")
+        except Exception as erreur:  # noqa: BLE001
+            suffixes = None
+            print(f"Menu illisible ({type(erreur).__name__} — {erreur}) ; "
+                  f"suffixe par défaut « {sikafinance.SUFFIXE_DEFAUT} »\n",
+                  file=sys.stderr)
+    else:
+        suffixes = None
+
+    try:
+        table = sikafinance.historique(ticker, args.debut, args.fin,
+                                       source=args.source, suffixes=suffixes)
+    except Exception as erreur:  # noqa: BLE001
+        print(f"échec : {type(erreur).__name__} — {erreur}", file=sys.stderr)
+        return 1
+
+    if table.empty:
+        print("réponse vide : ni erreur ni donnée. Vérifiez le symbole et "
+              "la période avant de conclure.", file=sys.stderr)
+        return 1
+
+    print(f"{len(table)} séances, {table['date'].min()} → "
+          f"{table['date'].max()}")
+    print(f"colonnes rendues : {', '.join(table.columns)}\n")
+    print(table.head(12).to_string(index=False))
+
+    print("\n1. Que mesure « Volume » ?")
+    print(f"   {sikafinance.temoin(table)}")
+
+    print("\n2. « plus bas » <= clôture <= « plus haut » ?")
+    fautives = sikafinance.ohlc_incoherent(table)
+    if not fautives:
+        print("   cohérent sur toutes les séances rendues — l'API est "
+              "meilleure que la page, l'OHLC peut entrer en base.")
+    else:
+        print(f"   {len(fautives)} séances sur {len(table)} incohérentes, "
+              "comme dans le HTML. Ces colonnes restent dehors.")
+        for ligne in fautives[:5]:
+            print(f"   {ligne}")
+
+    print("\n3. Séances republiées ?")
+    repetees = sikafinance.seances_repetees(table)
+    print(f"   {len(repetees)} séance(s) au volume identique à la veille")
+    for ligne in repetees[:5]:
+        print(f"   {ligne}")
+
+    ecarts = sikafinance.coherence(table)
+    if ecarts:
+        print(f"\n4. {len(ecarts)} variations incohérentes avec la clôture")
+        for ligne in ecarts[:5]:
+            print(f"   {ligne}")
+
+    print("\nSi ces trois réponses vous conviennent, relancez le "
+          "rapatriement complet.")
+    return 0
+
+
 def _rapatrier(args) -> int:
     """Historique sikafinance → archive des cours.
 
@@ -66,13 +143,23 @@ def _rapatrier(args) -> int:
               file=sys.stderr)
         return 1
 
+    # Le suffixe pays fait partie de l'identifiant et ne se devine pas :
+    # la BRVM cote des émetteurs de huit pays. Lu une fois pour toutes.
+    suffixes = None
+    if args.source is None:
+        try:
+            suffixes = sikafinance.symboles()
+        except Exception as erreur:  # noqa: BLE001
+            print(f"menu des symboles illisible ({erreur}) ; suffixe par "
+                  f"défaut « {sikafinance.SUFFIXE_DEFAUT} »", file=sys.stderr)
+
     connu = db.charger_archive("cours")
     recoltes, refus, signales = [], [], []
     for ticker in demandes:
         try:
             table = sikafinance.historique(
                 ticker, args.debut, args.fin, source=args.source,
-                pause=args.pause)
+                suffixes=suffixes, pause=args.pause)
         except Exception as erreur:  # noqa: BLE001 — réseau, HTML, tout
             refus.append(f"{ticker} : {type(erreur).__name__} — {erreur}")
             continue
@@ -83,9 +170,16 @@ def _rapatrier(args) -> int:
                 f"{ticker} : {len(ecarts)} variations incohérentes, valeur "
                 f"écartée (première : {ecarts[0]})")
             continue
+        if "volume" in table.columns and args.volume is None:
+            print("l'API rend une colonne « Volume » unique, et rien ne dit "
+                  "si elle compte des titres ou des francs. Lancez "
+                  "« brvm sonder » puis relancez avec --volume titres ou "
+                  "--volume fcfa.", file=sys.stderr)
+            return 1
         signales += [f"{ticker} — {m}" for m in
                      sikafinance.seances_repetees(table)]
-        recoltes.append(sikafinance.retenir(table))
+        recoltes.append(sikafinance.retenir(
+            table, f"volume_{args.volume}" if args.volume else None))
         print(f"  {ticker:<7} {len(table):>5} séances "
               f"{table['date'].min()} → {table['date'].max()}")
 
@@ -368,11 +462,29 @@ def construire_analyseur() -> argparse.ArgumentParser:
                            help="par défaut, tout le référentiel")
     rapatrier.add_argument("--source", default=None,
                            help="page enregistrée, au lieu du réseau")
-    rapatrier.add_argument("--pause", type=float, default=1.5,
-                           help="secondes entre deux requêtes (défaut 1,5)")
+    rapatrier.add_argument("--pause", type=float, default=0.5,
+                           help="secondes entre deux requêtes (défaut 0,5)")
+    rapatrier.add_argument("--volume", choices=["titres", "fcfa"],
+                           default=None,
+                           help="ce que compte le « Volume » de l'API — "
+                                "« brvm sonder » le dit")
     rapatrier.add_argument("--simulation", action="store_true",
                            help="compter sans écrire")
     rapatrier.set_defaults(fonction=_rapatrier)
+
+    sonder = commandes.add_parser(
+        "sonder",
+        help="un appel réel, pour trancher ce qui ne peut l'être hors ligne",
+        description="Interroge l'API sur une seule valeur et rend compte : "
+                    "ce que mesure « Volume », si l'OHLC est cohérent, si "
+                    "des séances sont republiées. N'écrit rien.",
+    )
+    sonder.add_argument("--ticker", default="SDSC")
+    sonder.add_argument("--debut", default="2026-01-01", help="AAAA-MM-JJ")
+    sonder.add_argument("--fin", default="2026-03-31", help="AAAA-MM-JJ")
+    sonder.add_argument("--source", default=None,
+                        help="réponse enregistrée (.json ou .html)")
+    sonder.set_defaults(fonction=_sonder)
 
     noter = commandes.add_parser(
         "noter", help="classer les valeurs (momentum filtré par liquidité)"
