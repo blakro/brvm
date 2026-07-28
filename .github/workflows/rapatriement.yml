@@ -82,6 +82,16 @@ jobs:
         continue-on-error: true
         run: python -m brvm sonder-dividendes --date 2026-07-24
 
+      # Les dividendes se collectent avec le rapatriement : deux pages, pas
+      # deux mille appels. Les sociétés non appariées à un ticker ne sont
+      # pas écrites, elles sont listées dans le journal.
+      - name: Collecter les dividendes
+        if: ${{ !inputs.sonde }}
+        continue-on-error: true
+        run: |
+          python -m brvm importer
+          python -m brvm dividendes
+
       - name: Rapatrier
         if: ${{ !inputs.sonde }}
         run: |
