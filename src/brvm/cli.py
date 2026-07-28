@@ -30,7 +30,7 @@ import pandas as pd
 
 from . import (backtest, db, dividende, exogene, features, prediction,
                recherche, scoring)
-from .ingestion import brvm_org, sikafinance
+from .ingestion import brvm_org, dividendes as source_dividendes, sikafinance
 
 
 def _verifier(args) -> int:
@@ -51,6 +51,38 @@ def _ingerer(args) -> int:
         return 1
     print(f"{lignes} lignes de cote enregistrées")
     return 0
+
+
+def _sonder_dividendes(args) -> int:
+    """Interroge les trois sources de dividendes et décrit ce qu'elles rendent.
+
+    Aucune n'a jamais été atteinte depuis l'environnement de développement :
+    le balisage de leurs tableaux est inconnu, et les sélecteurs de
+    `ingestion.dividendes` sont des hypothèses. Ce journal est ce qui les
+    transforme en faits.
+    """
+    rapport = source_dividendes.sonder(args.date)
+    for nom, detail in rapport.items():
+        print(f"\n=== {nom} ({detail['nature']}) ===")
+        print(f"  {detail['url']}")
+        if "echec" in detail:
+            print(f"  ÉCHEC : {detail['echec']}")
+            continue
+        print(f"  {detail['octets']} octets, {detail['tableaux']} tableaux")
+        for i, (entete, forme) in enumerate(
+                zip(detail["entetes"], detail["dimensions"])):
+            print(f"  tableau {i} {forme} : {entete}")
+        for i, lignes in enumerate(detail["premieres_lignes"]):
+            for ligne in lignes:
+                print(f"    [{i}] {ligne}")
+        print(f"  lecture : {detail['lu']}")
+        for ligne in detail.get("extrait", []):
+            print(f"    {ligne}")
+
+    lisibles = sum("echec" not in d and not str(d.get("lu", "")).startswith("illisible")
+                   for d in rapport.values())
+    print(f"\n{lisibles} source(s) sur {len(rapport)} lues correctement.")
+    return 0 if lisibles else 1
 
 
 def _sonder(args) -> int:
@@ -515,6 +547,17 @@ def construire_analyseur() -> argparse.ArgumentParser:
     sonder.add_argument("--source", default=None,
                         help="réponse enregistrée (.json ou .html)")
     sonder.set_defaults(fonction=_sonder)
+
+    sonder_div = commandes.add_parser(
+        "sonder-dividendes",
+        help="ce que rendent les trois sources de dividendes",
+        description="Interroge brvm.org, sikafinance et abourse, décrit "
+                    "leurs tableaux et n'écrit rien. Les sélecteurs de ce "
+                    "module n'ont jamais rencontré les vraies pages.",
+    )
+    sonder_div.add_argument("--date", default=None,
+                            help="séance pour abourse (AAAA-MM-JJ)")
+    sonder_div.set_defaults(fonction=_sonder_dividendes)
 
     noter = commandes.add_parser(
         "noter", help="classer les valeurs (momentum filtré par liquidité)"

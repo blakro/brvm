@@ -73,6 +73,15 @@ jobs:
           python -m brvm sonder --ticker SDSC \
             --debut 2026-01-01 --fin 2026-03-31
 
+      # Les trois sources de dividendes, dont aucune n'a jamais été
+      # atteinte depuis l'environnement de développement. `continue-on-error`
+      # parce qu'une source muette est un fait à rapporter, pas une raison
+      # de faire échouer la sonde des cours.
+      - name: Sonder les dividendes
+        if: inputs.sonde
+        continue-on-error: true
+        run: python -m brvm sonder-dividendes --date 2026-07-24
+
       - name: Rapatrier
         if: ${{ !inputs.sonde }}
         run: |
