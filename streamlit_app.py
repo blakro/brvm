@@ -118,7 +118,7 @@ def _attente(titre: str, disponible: int, requis: int, pourquoi: str,
 @st.cache_data(ttl=900)
 def charger_archive():
     return (db.charger_archive("cours"), db.charger_archive("referentiel"),
-            db.charger_archive("dividendes"))
+            db.charger_archive("dividendes"), db.charger_archive("fondamentaux"))
 
 
 @st.cache_data(ttl=900, show_spinner="Lecture de brvm.org…")
@@ -136,7 +136,7 @@ def lire_en_direct():
         return None, f"{type(erreur).__name__} — {detail}"
 
 
-cours, referentiel, dividendes = charger_archive()
+cours, referentiel, dividendes, fondamentaux = charger_archive()
 if referentiel.empty:
     referentiel = brvm_org.referentiel_amorce()
 
@@ -460,8 +460,32 @@ with onglets[1]:
         st.info(f"Une seule séance en base pour {choix} : pas d'historique à "
                 "tracer. Le graphique apparaîtra dès la deuxième.")
 
+    mesures = fondamentaux[fondamentaux["ticker"] == choix] \
+        if not fondamentaux.empty else pd.DataFrame()
+    if not mesures.empty:
+        st.subheader("Dividendes par exercice")
+        large = (mesures.pivot_table(index="date", columns="indicateur",
+                                     values="valeur", aggfunc="first")
+                 .reset_index().sort_values("date", ascending=False))
+        large["date"] = large["date"].str[:4]
+        st.dataframe(
+            large, width="stretch", hide_index=True,
+            column_config={
+                "date": st.column_config.TextColumn("Exercice"),
+                "dividende": st.column_config.NumberColumn(
+                    "Dividende net", format="%.2f", help="Par action, en FCFA."),
+                "rendement": st.column_config.NumberColumn(
+                    "Rendement", format="%.2f %%"),
+            },
+        )
+        st.caption(
+            "Un exercice absent du tableau est un exercice sans versement "
+            "publié — pas un dividende nul : « n'a pas versé » et « on ne "
+            "sait pas » ne sont pas la même chose."
+        )
+
     if not div_valeur.empty:
-        st.subheader("Dividendes")
+        st.subheader("Détachements à venir")
         st.dataframe(div_valeur.sort_values("date_detachement", ascending=False),
                      width="stretch", hide_index=True)
 
@@ -582,8 +606,74 @@ with onglets[2]:
         )
         _telecharger(classement, "classement.csv", "dl_classement")
 
+    # LE RENDEMENT PASSE DEVANT, ET C'EST LA DONNÉE QUI L'A DÉCIDÉ. Sur
+    # les quatre exercices connus, le dividende médian vaut 7 à 10 % par
+    # an, tous les ans ; le cours, lui, va de -1,6 % à +61,4 %. Le
+    # classement par momentum ordonne le quart bruyant du rendement, et
+    # aucun trait de prix ne bat le hasard sur 11,5 ans.
+    st.subheader("Rendement du dividende")
+    rendements = fondamentaux[fondamentaux["indicateur"] == "rendement"]
+    if rendements.empty:
+        st.info(
+            "Aucun rendement en archive. `brvm dividendes` lit les "
+            "calendriers de brvm.org et de sikafinance, et le tableau "
+            "pluriannuel de ce dernier."
+        )
+    else:
+        dernier_exercice = rendements["date"].max()
+        recent = (rendements[rendements["date"] == dernier_exercice]
+                  .merge(referentiel_filtre[["ticker", "nom", "secteur"]],
+                         on="ticker", how="inner")
+                  .sort_values("valeur", ascending=False))
+        st.markdown(
+            f"Exercice **{dernier_exercice[:4]}**, {len(recent)} sociétés. "
+            f"Rendement médian **{pedagogie.pourcentage(recent['valeur'].median() / 100, signe=False)}** — "
+            "à comparer aux 2,8 % l'an que rapporte le cours seul sur onze "
+            "ans. **Sur ce marché, le dividende est l'essentiel du "
+            "rendement**, et le classement ci-dessus n'en tient aucun compte."
+        )
+        if not recent.empty:
+            tete = recent.head(15)
+            st.altair_chart(
+                alt.Chart(tete)
+                .mark_bar(cornerRadiusEnd=4, height=16, color=SERIE_2)
+                .encode(
+                    x=alt.X("valeur:Q", title="rendement du dividende (%)"),
+                    y=alt.Y("ticker:N", sort="-x", title=None,
+                            axis=alt.Axis(labelOverlap=False)),
+                    tooltip=[
+                        alt.Tooltip("ticker:N", title="Symbole"),
+                        alt.Tooltip("nom:N", title="Société"),
+                        alt.Tooltip("valeur:Q", title="Rendement",
+                                    format=".2f"),
+                        alt.Tooltip("secteur:N", title="Secteur"),
+                    ],
+                )
+                .properties(height=max(220, 24 * len(tete))),
+                width="stretch",
+            )
+            st.dataframe(
+                recent[["ticker", "nom", "secteur", "valeur"]],
+                width="stretch", hide_index=True,
+                column_config={
+                    "ticker": st.column_config.TextColumn("Symbole"),
+                    "nom": st.column_config.TextColumn("Société"),
+                    "secteur": st.column_config.TextColumn("Secteur"),
+                    "valeur": st.column_config.NumberColumn(
+                        "Rendement", format="%.2f %%",
+                        help="Dividende de l'exercice rapporté au cours."),
+                },
+            )
+            _telecharger(recent, "rendements.csv", "dl_rendements")
+        st.caption(
+            "Quatre exercices seulement sont publiés : c'est assez pour "
+            "voir que le dividende domine, beaucoup trop peu pour mesurer "
+            "s'il prédit quoi que ce soit — quatre dates ne font pas une "
+            "validation."
+        )
+
     _glossaire("momentum", "tendance", "volatilite", "liquidite", "score",
-               "rang", "frais")
+               "rang", "dividende", "rendement", "frais")
 
 
 # --- Prédiction -----------------------------------------------------------
@@ -890,7 +980,9 @@ with onglets[4]:
 with onglets[5]:
     etat = st.columns(3)
     etat[0].metric("Séances en base", f"{seances}")
-    etat[1].metric("Dividendes en base", f"{len(dividendes)}")
+    etat[1].metric("Dividendes en base",
+                   f"{len(dividendes)} + {len(fondamentaux)}",
+                   help="Détachements datés, puis mesures par exercice.")
     etat[2].metric("Sociétés au référentiel", f"{len(referentiel)}")
 
     # Visible sans avoir à ouvrir les journaux de l'hébergeur : un onglet
