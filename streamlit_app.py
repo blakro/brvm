@@ -146,7 +146,21 @@ def _habiller() -> None:
       --encre: {ENCRE}; --encre-douce: {ENCRE_DOUCE}; --muet: {MUET};
       --serie-1: {SERIE_1}; --hausse: {HAUSSE}; --baisse: {BAISSE};
     }}
-    .stApp {{ background: var(--plan); }}
+    /* UN DÉGRADÉ, PAS UNE COULEUR. Le plan reste presque neutre — deux
+       nappes de la teinte de série à 5 % et 3,5 %, posées aux deux angles
+       hauts. Assez pour que les cartes se détachent au lieu de flotter
+       sur un aplat, trop peu pour qu'on puisse nommer la couleur du fond.
+       C'est le seuil : dès qu'un fond se remarque, il concurrence ce
+       qu'il porte. */
+    .stApp {{
+      background:
+        radial-gradient(1200px 620px at 12% -8%,
+                        {_lavis(SERIE_1, 0.05)}, transparent 62%),
+        radial-gradient(1000px 540px at 88% -4%,
+                        {_lavis(SERIE_2, 0.035)}, transparent 58%),
+        var(--plan);
+      background-attachment: fixed;
+    }}
     .block-container {{ padding-top: 2.2rem; max-width: 1420px; }}
 
     /* Échelle typographique : trois tailles, pas sept. */
@@ -1092,8 +1106,20 @@ with onglets[2]:
             )).properties(height=max(240, 26 * len(tete))),
             width="stretch",
         )
+        # Le tableau reprend la rampe du graphique au-dessus : même
+        # grandeur, même encodage. Les voir se contredire coûterait plus
+        # cher que de ne pas colorer du tout.
+        peint_rang = tete.style.map(
+            lambda v: _fond_sequentiel(v - float(tete["score"].min()),
+                                       float(tete["score"].max()
+                                             - tete["score"].min()) or 1),
+            subset=["score"])
+        for trait in ("momentum", "tendance"):
+            if trait in tete.columns:
+                peint_rang = peint_rang.map(
+                    lambda v: _fond_divergent(v, plafond=1.5), subset=[trait])
         st.dataframe(
-            tete, width="stretch", hide_index=True,
+            peint_rang, width="stretch", hide_index=True,
             column_config={
                 "rang": st.column_config.NumberColumn(
                     "Rang", format="%d", help=f"Sur {total} valeurs classées."),
@@ -1287,7 +1313,12 @@ with onglets[3]:
                 )
             with st.expander("Ce que vaut chaque trait, pris séparément"):
                 st.dataframe(
-                    table, width="stretch", hide_index=True,
+                    # Un IC se lit par son signe autant que par sa taille :
+                    # le fond divergent le dit avant le chiffre. Plafond à
+                    # 0,05, la borne haute de la bande exploitable.
+                    table.style.map(lambda v: _fond_divergent(v, plafond=0.05),
+                                    subset=["IC"]),
+                    width="stretch", hide_index=True,
                     column_config={
                         "trait": st.column_config.TextColumn("Trait"),
                         "IC": st.column_config.NumberColumn(format="%+.3f"),
@@ -1310,7 +1341,10 @@ with onglets[3]:
                 "Un IC exploitable vaut 0,02 à 0,05. Cherchez la fuite."
             )
         st.dataframe(
-            validation["periodes"], width="stretch", hide_index=True,
+            validation["periodes"].style.map(
+                lambda v: _fond_divergent(v, plafond=0.05),
+                subset=["ic_modele", "ic_composite"]),
+            width="stretch", hide_index=True,
             column_config={
                 "periode": st.column_config.TextColumn("Période de test"),
                 "lignes_entrainement": st.column_config.NumberColumn(
@@ -1358,7 +1392,15 @@ with onglets[3]:
             )
             # Jumeau tabulaire : une infobulle ne doit jamais être le seul
             # accès à une valeur.
-            st.dataframe(probable, width="stretch", hide_index=True)
+            st.dataframe(
+                # Une probabilité s'écarte de 0,5 dans un sens ou dans
+                # l'autre : c'est un encodage divergent centré sur le
+                # hasard, et le plafond à 0,05 correspond à l'écart au-delà
+                # duquel le modèle prétend savoir quelque chose.
+                probable.style.map(
+                    lambda v: _fond_divergent(v - 0.5, plafond=0.05),
+                    subset=["probabilite"]),
+                width="stretch", hide_index=True)
             _telecharger(probable, "prediction.csv", "dl_prediction")
 
     st.warning("**Ce que ces chiffres ne disent pas.** "
@@ -1513,7 +1555,12 @@ with onglets[4]:
         st.caption("La référence est l'univers éligible équipondéré : c'est "
                    "elle qu'il faut battre, pas zéro.")
         st.dataframe(
-            etapes, width="stretch", hide_index=True,
+            etapes.style
+            .map(lambda v: _fond_divergent(v, plafond=0.15),
+                 subset=["rendement"])
+            .map(lambda v: _fond_sequentiel(v, float(etapes["cout"].max() or 1)),
+                 subset=["cout"]),
+            width="stretch", hide_index=True,
             column_config={
                 "date_decision": st.column_config.TextColumn(
                     "Décidé le",
