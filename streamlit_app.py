@@ -61,7 +61,174 @@ else:
     ENCRE, ENCRE_DOUCE = "#0b0b0b", "#52514e"
     GRILLE, AXE, SURFACE = "#e1e0d9", "#c3c2b7", "#fcfcfb"
 
+# Le plan de page est un cran SOUS la surface des cartes. C'est ce
+# décalage — et pas la couleur — qui fait qu'un tableau de bord paraît
+# construit plutôt que posé à plat : les cartes flottent au-dessus du
+# plan, et la hiérarchie se lit avant qu'on ait lu un mot.
+PLAN = "#0d0d0d" if SOMBRE else "#f9f9f7"
+MUET = "#898781"
+BORDURE = "rgba(255,255,255,0.10)" if SOMBRE else "rgba(11,11,11,0.10)"
+# Statut : jamais réutilisé pour une série, toujours accompagné d'un mot.
+BON, ALERTE, GRAVE, CRITIQUE = "#0ca30c", "#fab219", "#ec835a", "#d03b3b"
+
 POLICE = 'system-ui, -apple-system, "Segoe UI", sans-serif'
+
+
+def _habiller() -> None:
+    """Le système visuel, injecté une fois.
+
+    Streamlit rend des blocs empilés sur un fond uni : correct, et plat.
+    Trois choses suffisent à en faire un tableau de bord — un plan de page
+    sous des cartes, une échelle typographique, et de l'air. Tout le reste
+    ci-dessous n'est que l'application de ces trois-là.
+    """
+    st.markdown(f"""<style>
+    :root {{
+      --plan: {PLAN}; --surface: {SURFACE}; --bordure: {BORDURE};
+      --encre: {ENCRE}; --encre-douce: {ENCRE_DOUCE}; --muet: {MUET};
+      --serie-1: {SERIE_1}; --hausse: {HAUSSE}; --baisse: {BAISSE};
+    }}
+    .stApp {{ background: var(--plan); }}
+    .block-container {{ padding-top: 2.2rem; max-width: 1420px; }}
+
+    /* Échelle typographique : trois tailles, pas sept. */
+    h1 {{ font-size: 1.9rem !important; font-weight: 650 !important;
+         letter-spacing: -0.02em; margin-bottom: .1rem !important; }}
+    h2 {{ font-size: 1.05rem !important; font-weight: 600 !important;
+         letter-spacing: .01em; text-transform: uppercase;
+         color: var(--muet) !important; margin-top: 2rem !important; }}
+    h3 {{ font-size: .95rem !important; font-weight: 600 !important; }}
+
+    /* La carte : un anneau d'un pixel, jamais une ombre portée. Une ombre
+       simule une profondeur que l'écran n'a pas ; l'anneau se contente de
+       délimiter. */
+    .carte {{
+      background: var(--surface); border: 1px solid var(--bordure);
+      border-radius: 12px; padding: 1rem 1.15rem; height: 100%;
+    }}
+    .tuile-label {{
+      font-size: .72rem; font-weight: 600; letter-spacing: .06em;
+      text-transform: uppercase; color: var(--muet); margin-bottom: .35rem;
+    }}
+    /* Chiffres proportionnels : `tabular-nums` donne à chaque chiffre la
+       largeur d'un zéro, et « 121 » paraît alors distendu en grande
+       taille. Le tabulaire est réservé aux colonnes. */
+    .tuile-valeur {{
+      font-size: 1.85rem; font-weight: 650; line-height: 1.05;
+      color: var(--encre); letter-spacing: -0.02em;
+    }}
+    .tuile-delta {{ font-size: .82rem; font-weight: 600; margin-top: .3rem; }}
+    .tuile-note {{ font-size: .75rem; color: var(--muet); margin-top: .3rem; }}
+    .hausse {{ color: var(--hausse); }} .baisse {{ color: var(--baisse); }}
+
+    /* Le héros : un seul par vue, et il porte le chiffre qui résume. */
+    .heros {{ font-size: 3.4rem; font-weight: 680; line-height: 1;
+             letter-spacing: -0.03em; color: var(--encre); }}
+
+    /* Onglets : une barre, pas des boutons. */
+    .stTabs [data-baseweb="tab-list"] {{
+      gap: 1.6rem; border-bottom: 1px solid var(--bordure);
+    }}
+    .stTabs [data-baseweb="tab"] {{
+      padding: .4rem 0 .7rem 0; font-weight: 550; font-size: .93rem;
+    }}
+    .stTabs [data-baseweb="tab-highlight"] {{ height: 2px; }}
+
+    /* Le chrome recule : la donnée est la seule chose autorisée à être
+       bruyante. */
+    [data-testid="stDataFrame"] {{ border-radius: 10px; }}
+    [data-testid="stExpander"] details {{
+      border: 1px solid var(--bordure) !important; border-radius: 10px;
+      background: var(--surface);
+    }}
+    hr {{ border-color: var(--bordure); }}
+
+    /* Le conteneur bordé natif, habillé comme les tuiles pour que tout
+       le tableau de bord soit fait du même matériau. */
+    [data-testid="stVerticalBlockBorderWrapper"] {{
+      background: var(--surface); border: 1px solid var(--bordure);
+      border-radius: 12px; padding: 1rem 1.15rem;
+    }}
+    </style>""", unsafe_allow_html=True)
+
+
+def _etincelle(valeurs, largeur=112, hauteur=30) -> str:
+    """Sparkline SVG : douze points de contexte à côté d'un chiffre.
+
+    Une valeur seule ne dit pas si elle sort de l'ordinaire. La courbe
+    n'a ni axe ni graduation — ce n'est pas un graphique, c'est une
+    texture qui répond à « et avant ? ». Le dernier point porte l'accent,
+    le reste est en gris : c'est là que le lecteur regarde.
+    """
+    points = [v for v in valeurs if v == v]
+    if len(points) < 2:
+        return ""
+    bas, haut = min(points), max(points)
+    etendue = (haut - bas) or 1
+    pas = largeur / (len(points) - 1)
+    marge = 3
+    chemin = " ".join(
+        f"{i * pas:.1f},"
+        f"{marge + (hauteur - 2 * marge) * (1 - (v - bas) / etendue):.1f}"
+        for i, v in enumerate(points)
+    )
+    fin = chemin.split(" ")[-1]
+    monte = points[-1] >= points[0]
+    couleur = HAUSSE if monte else BAISSE
+    return (
+        f'<svg width="{largeur}" height="{hauteur}" viewBox="0 0 {largeur} '
+        f'{hauteur}" fill="none" style="display:block;margin-top:.45rem">'
+        f'<polyline points="{chemin}" stroke="{MUET}" stroke-width="1.5" '
+        f'stroke-linejoin="round" stroke-linecap="round" opacity="0.55"/>'
+        # L'anneau à la couleur de la surface détache le point de la
+        # courbe là où ils se croisent.
+        f'<circle cx="{fin.split(",")[0]}" cy="{fin.split(",")[1]}" r="3.2" '
+        f'fill="{couleur}" stroke="{SURFACE}" stroke-width="2"/></svg>'
+    )
+
+
+def _panneau(titre: str = "", note: str = ""):
+    """Un graphique posé sur une surface, pas flottant sur le plan.
+
+    Même décalage que pour les tuiles : une carte sous le tracé le fait
+    paraître construit plutôt qu'inséré. Le graphique reste sur fond
+    transparent — c'est la carte qui porte la surface, et une seule des
+    deux doit le faire.
+
+    Bâti sur le conteneur bordé de Streamlit plutôt que sur un sélecteur
+    CSS remontant l'arbre : la structure du DOM de Streamlit change d'une
+    version à l'autre, un `:has(> div > div > …)` casserait sans bruit à
+    la première mise à jour.
+    """
+    boite = st.container(border=True)
+    if titre:
+        boite.markdown(f'<div class="tuile-label">{titre}</div>',
+                       unsafe_allow_html=True)
+    if note:
+        boite.markdown(f'<div class="tuile-note" style="margin:0 0 .4rem">'
+                       f'{note}</div>', unsafe_allow_html=True)
+    return boite
+
+
+def _tuile(colonne, label: str, valeur: str, delta: str = "",
+           sens: int = 0, note: str = "", etincelle: str = "") -> None:
+    """Une tuile : intitulé, valeur, écart signé, contexte. Dans cet ordre.
+
+    Le contrat vient de la référence de conception — `label`, `value`,
+    `delta`, `trend` — et l'ordre n'est pas décoratif : on lit ce que
+    c'est, puis combien, puis si c'est inhabituel.
+    """
+    classe = "hausse" if sens > 0 else "baisse" if sens < 0 else ""
+    morceaux = [f'<div class="tuile-label">{label}</div>',
+                f'<div class="tuile-valeur">{valeur}</div>']
+    if delta:
+        morceaux.append(f'<div class="tuile-delta {classe}">{delta}</div>')
+    if note:
+        morceaux.append(f'<div class="tuile-note">{note}</div>')
+    if etincelle:
+        morceaux.append(etincelle)
+    colonne.markdown(f'<div class="carte">{"".join(morceaux)}</div>',
+                     unsafe_allow_html=True)
 
 
 @alt.theme.register("brvm", enable=True)
@@ -70,8 +237,9 @@ def _theme() -> alt.theme.ThemeConfig:
     marques qui portent la donnée. Traits pleins, jamais pointillés — un
     pointillé se lit comme une projection ou un seuil."""
     return alt.theme.ThemeConfig({
-        "background": SURFACE,
+        "background": "transparent",   # la carte porte la surface
         "view": {"stroke": "transparent"},
+        "padding": {"left": 4, "right": 4, "top": 8, "bottom": 4},
         "axis": {
             "labelColor": ENCRE_DOUCE, "titleColor": ENCRE_DOUCE,
             "gridColor": GRILLE, "domainColor": AXE, "tickColor": AXE,
@@ -141,6 +309,7 @@ cours, referentiel, dividendes, fondamentaux = charger_archive()
 if referentiel.empty:
     referentiel = brvm_org.referentiel_amorce()
 
+_habiller()
 st.title("Bourse Régionale des Valeurs Mobilières")
 
 # L'avertissement est ici, au-dessus de tout, et non en légende sous le
@@ -272,25 +441,78 @@ with onglets[0]:
     jour = _variations(cours_filtre)
     connues = jour["variation"].dropna()
 
-    tuiles = st.columns(4)
-    tuiles[0].metric("Séance", pedagogie.jour(derniere))
-    tuiles[1].metric("Variation médiane",
-                     pedagogie.pourcentage(
-                         None if connues.empty else connues.median()))
-    # Largeur du marché : une médiane positive portée par trois valeurs ne
-    # dit pas la même chose qu'une hausse partagée.
-    tuiles[2].metric(
-        "Hausses / baisses",
-        "—" if connues.empty
-        else f"{int((connues > 0).sum())} / {int((connues < 0).sum())}",
-    )
-    tuiles[3].metric("Valeurs affichées", f"{jour['ticker'].nunique()}",
-                     delta=(None if len(retenus) == len(referentiel)
-                            else f"{len(retenus) - len(referentiel)} filtrées"))
-
-    # Les quatre tuiles ci-dessus disent la même chose, mais il faut les
-    # lire ensemble pour l'entendre. La phrase le fait à la place du lecteur.
+    # LE HÉROS : un seul chiffre par vue, celui qui résume la séance. Ici
+    # la capitalisation échangée — c'est la mesure d'activité du marché,
+    # et la seule qui se lise sans contexte.
     echange = jour["volume_fcfa"].sum(skipna=True)
+    heros_1, heros_2 = st.columns([2, 3])
+    with heros_1:
+        recentes = (cours_filtre.groupby("date")["volume_fcfa"].sum()
+                    .tail(12).tolist())
+        st.markdown(
+            f'<div class="tuile-label">Échangé le {pedagogie.jour(derniere)}'
+            f'</div><div class="heros">{pedagogie.montant(echange)}</div>'
+            f'<div class="tuile-note">12 dernières séances</div>'
+            + _etincelle(recentes, largeur=180, hauteur=34),
+            unsafe_allow_html=True)
+    with heros_2:
+        if not connues.empty:
+            hausses = int((connues > 0).sum())
+            baisses = int((connues < 0).sum())
+            stables = len(connues) - hausses - baisses
+            # La largeur du marché en une barre : une médiane positive
+            # portée par trois valeurs ne dit pas la même chose qu'une
+            # hausse partagée, et un empilement le montre sans le dire.
+            total = max(1, len(connues))
+            segments = [(hausses, HAUSSE, "en hausse"),
+                        (stables, MUET, "stables"),
+                        (baisses, BAISSE, "en baisse")]
+            # `flex` ET NON `width` : dans une rangée flex, une largeur en
+            # pourcentage n'est qu'une base que le conteneur réajuste, et
+            # les segments s'affichaient à des proportions fausses — 17,
+            # 2 et 28 valeurs rendues comme 45 %, 5 % et 48 % au lieu de
+            # 36 %, 4 % et 60 %. Une barre de répartition qui ment sur la
+            # répartition est pire qu'une absence de barre.
+            barre = "".join(
+                f'<div style="flex:{n} 0 0;background:{c};height:12px;'
+                f'border-radius:3px" title="{n} {m}"></div>'
+                for n, c, m in segments if n
+            )
+            st.markdown(
+                '<div class="tuile-label">Largeur du marché</div>'
+                # Le trou de 2 px à la couleur du plan sépare les segments :
+                # c'est le vide qui distingue, jamais un contour.
+                f'<div style="display:flex;gap:2px;margin-top:.55rem">{barre}</div>'
+                f'<div class="tuile-note">{hausses} en hausse · '
+                f'{stables} stables · {baisses} en baisse, '
+                f'sur {len(connues)} valeurs</div>',
+                unsafe_allow_html=True)
+
+    st.write("")
+    tuiles = st.columns(4)
+    _tuile(tuiles[0], "Séance", pedagogie.jour(derniere),
+           note=f"{seances} séances en archive")
+    mediane = None if connues.empty else connues.median()
+    _tuile(tuiles[1], "Variation médiane", pedagogie.pourcentage(mediane),
+           sens=0 if mediane is None else (1 if mediane > 0 else -1),
+           note="sur les valeurs ayant coté")
+    # Douze séances de contexte derrière le chiffre du jour : une valeur
+    # seule ne dit pas si elle sort de l'ordinaire.
+    plus_traitee = jour.loc[jour["volume_fcfa"].idxmax()] \
+        if jour["volume_fcfa"].notna().any() else None
+    _tuile(tuiles[2], "Plus échangée",
+           "—" if plus_traitee is None else str(plus_traitee["ticker"]),
+           note=("aucun échange"
+                 if plus_traitee is None else
+                 f"{pedagogie.montant(plus_traitee['volume_fcfa'])} · "
+                 f"{(plus_traitee['volume_fcfa'] / echange):.0%} du marché"))
+    _tuile(tuiles[3], "Valeurs suivies", f"{jour['ticker'].nunique()}",
+           note=("toutes les sociétés cotées"
+                 if len(retenus) == len(referentiel)
+                 else f"{len(referentiel) - len(retenus)} écartées par le filtre"))
+
+    # Les tuiles disent la même chose, mais il faut les lire ensemble pour
+    # l'entendre. La phrase le fait à la place du lecteur.
     if connues.empty:
         st.markdown(
             f"À la séance du **{pedagogie.jour(derniere)}**, "
@@ -312,9 +534,12 @@ with onglets[0]:
         )
 
     if not connues.empty:
-        st.subheader(f"Variation de la séance du {pedagogie.jour(derniere)}")
         classees = jour.dropna(subset=["variation"]).sort_values("variation")
-        st.altair_chart(
+        panneau = _panneau(
+            f"Variation de la séance du {pedagogie.jour(derniere)}",
+            f"{len(classees)} valeurs, de la plus forte hausse à la plus "
+            "forte baisse")
+        panneau.altair_chart(
             alt.Chart(classees)
             .mark_bar(cornerRadiusEnd=4, height=14)
             .encode(
@@ -393,15 +618,22 @@ with onglets[1]:
     )
 
     faits = st.columns(3)
-    faits[0].metric(
-        "Clôture", f"{dernier['cloture']:,.0f}".replace(",", " "),
-        delta=(f"{serie['cloture'].iloc[-1] / serie['cloture'].iloc[-2] - 1:+.2%}"
-               if len(serie) >= 2 else None),
-    )
+    variation = (dernier["cloture"] / serie["cloture"].iloc[-2] - 1
+                 if len(serie) >= 2 else None)
+    # Douze séances de contexte : un cours seul ne dit pas s'il sort de
+    # l'ordinaire.
+    _tuile(faits[0], "Clôture", pedagogie.montant(dernier["cloture"]),
+           delta=pedagogie.pourcentage(variation) + " sur la séance"
+                 if variation is not None else "",
+           sens=0 if variation is None else (1 if variation > 0 else -1),
+           etincelle=_etincelle(serie["cloture"].tail(12).tolist()))
     # Même arrondi que la phrase juste en dessous : deux écritures du même
     # montant à trois lignes d'écart donnent à croire à deux montants.
-    faits[1].metric("Volume échangé", pedagogie.montant(dernier["volume_fcfa"]))
-    faits[2].metric("Dividendes connus", f"{len(div_valeur)}")
+    _tuile(faits[1], "Volume échangé",
+           pedagogie.montant(dernier["volume_fcfa"]),
+           note="sur la dernière séance")
+    _tuile(faits[2], "Dividendes connus", f"{len(div_valeur)}",
+           note="détachements datés en archive")
 
     # La même information en toutes lettres. Trois tuiles se lisent vite
     # quand on sait quoi y chercher ; sinon ce sont trois nombres nus.
@@ -435,7 +667,9 @@ with onglets[1]:
     st.markdown(", ".join(morceaux) + ".")
 
     if len(serie) >= 2:
-        st.altair_chart(
+        _panneau(f"{choix} — cours de clôture",
+                 f"{len(serie)} séances, {serie['date'].iloc[0]} → "
+                 f"{serie['date'].iloc[-1]}").altair_chart(
             alt.Chart(serie)
             .mark_line(strokeWidth=2, color=SERIE_1)
             .encode(
@@ -557,13 +791,28 @@ with onglets[2]:
             )
             + f" sur {total}. Le score n'a pas d'unité — seul l'ordre compte."
         )
-        st.altair_chart(
-            alt.Chart(tete)
-            .mark_bar(cornerRadiusEnd=4, height=16, color=SERIE_1)
+        # POINTS ET NON BARRES. Une barre part obligatoirement de zéro, et
+        # sur des scores compris entre 90 et 111 les quinze barres
+        # paraissent identiques. Tronquer l'axe pour « voir la
+        # différence » exagérerait des écarts que le score ne prétend pas
+        # porter — il n'a pas d'unité, seul son ordre compte. Le point,
+        # lui, ne réclame pas de ligne de base : il situe sans quantifier.
+        base_score = alt.Chart(tete).encode(
+            y=alt.Y("ticker:N", sort="-x", title=None,
+                    axis=alt.Axis(labelOverlap=False)),
+            x=alt.X("score:Q", title="score (sans unité)",
+                    scale=alt.Scale(zero=False, nice=True)),
+        )
+        _panneau("Score composite",
+                 f"{len(tete)} premières sur {total} classées · "
+                 "aucun des traits qui le composent ne bat le hasard").altair_chart(
+            (base_score.mark_rule(color=GRILLE, strokeWidth=1)
+             .encode(x2=alt.X2("minimum:Q"))
+             .transform_calculate(minimum=str(float(tete["score"].min())))
+             + base_score
+            .mark_point(size=110, filled=True, color=SERIE_1,
+                        stroke=SURFACE, strokeWidth=2)
             .encode(
-                x=alt.X("score:Q", title="score"),
-                y=alt.Y("ticker:N", sort="-x", title=None,
-                        axis=alt.Axis(labelOverlap=False)),
                 tooltip=[
                     alt.Tooltip("rang:Q", title="Rang"),
                     alt.Tooltip("ticker:N", title="Symbole"),
@@ -572,8 +821,7 @@ with onglets[2]:
                     alt.Tooltip("momentum:Q", title="Momentum", format="+.1%"),
                     alt.Tooltip("secteur:N", title="Secteur"),
                 ],
-            )
-            .properties(height=max(220, 24 * len(tete))),
+            )).properties(height=max(240, 26 * len(tete))),
             width="stretch",
         )
         st.dataframe(
@@ -635,7 +883,9 @@ with onglets[2]:
         )
         if not recent.empty:
             tete = recent.head(15)
-            st.altair_chart(
+            _panneau(f"Rendement du dividende — exercice {dernier_exercice[:4]}",
+                     "la part du rendement qui existe réellement sur ce "
+                     "marché").altair_chart(
                 alt.Chart(tete)
                 .mark_bar(cornerRadiusEnd=4, height=16, color=SERIE_2)
                 .encode(
@@ -798,7 +1048,8 @@ with onglets[3]:
             probable = probable.merge(referentiel[["ticker", "nom", "secteur"]],
                                       on="ticker", how="left")
             tete = probable.head(15)
-            st.altair_chart(
+            _panneau("Probabilité de surperformer le marché",
+                     "à trois mois, quinze premières").altair_chart(
                 alt.Chart(tete)
                 .mark_bar(cornerRadiusEnd=4, height=16, color=SERIE_1)
                 .encode(
@@ -954,7 +1205,9 @@ with onglets[4]:
                                  color=ENCRE_DOUCE)
                       .encode(x="date_sortie:T", y="part:Q", text="serie:N"))
 
-        st.altair_chart(
+        _panneau("Valeur d'une part",
+                 "stratégie contre univers éligible équipondéré, "
+                 "frais et dividende compris").altair_chart(
             (lignes + points + etiquettes).properties(
                 height=360,
                 padding={"right": 150, "left": 5, "top": 5, "bottom": 5}),
@@ -1019,11 +1272,11 @@ with onglets[5]:
            "d'apprentissage et reste calculé.")
     )
 
-    st.subheader("Répartition sectorielle")
     if referentiel_filtre["secteur"].notna().any():
         comptes = (referentiel_filtre.groupby("secteur").size()
                    .reset_index(name="sociétés"))
-        st.altair_chart(
+        _panneau("Répartition sectorielle",
+                 f"{len(referentiel_filtre)} sociétés").altair_chart(
             alt.Chart(comptes)
             .mark_bar(cornerRadiusEnd=4, height=20, color=SERIE_1)
             .encode(
