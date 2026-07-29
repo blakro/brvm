@@ -1047,14 +1047,30 @@ with onglets[2]:
     classement = scoring.noter(features.calculer(cours_filtre, reglages),
                                referentiel_filtre, reglages)
 
-    if classement.empty:
+    requis = reglages["analyse"]["fenetre_momentum"] + 1
+    if classement.empty and seances < requis:
         _attente(
             "Classement",
-            seances, reglages["analyse"]["fenetre_momentum"] + 1,
+            seances, requis,
             "Le momentum se mesure sur un an de cotation. Calculé sur moins, "
             "il aurait toutes les apparences d'un momentum sans rien "
             "mesurer — d'où le refus plutôt qu'une approximation. "
             "L'archive gagne une séance par jour ouvré.",
+        )
+    elif classement.empty:
+        # L'ARCHIVE EST SUFFISANTE : C'EST LE FILTRE QUI A TOUT ÉCARTÉ. Le
+        # compteur d'attente affichait ici « 2 996 sur 251 séances
+        # nécessaires », jauge pleine, tableau absent — il accusait
+        # l'historique d'un vide que l'utilisateur venait de créer lui-même
+        # en montant le seuil. Un refus doit nommer sa vraie cause, sinon
+        # il se lit comme une panne.
+        st.warning(
+            f"**Aucune valeur ne passe le filtre de liquidité.** Le seuil "
+            f"est réglé à {pedagogie.montant(seuil)} de volume médian "
+            f"quotidien ; aucune des {len(referentiel_filtre)} sociétés "
+            f"suivies n'échange autant. Abaissez-le dans « Réglages "
+            f"avancés » — le défaut du projet est "
+            f"{pedagogie.montant(DEFAUTS['analyse']['volume_median_min_fcfa'])}."
         )
     else:
         # Le rang est ce qui se comprend sans rien savoir ; le score n'a pas
