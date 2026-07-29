@@ -204,6 +204,37 @@ def enregistrer(df: pd.DataFrame, table: str, chemin: str | Path | None = None) 
         cnx.close()
 
 
+def effacer_cours(cles: pd.DataFrame, chemin: str | Path | None = None) -> int:
+    """Supprime des séances de la table `cours`, par (date, ticker).
+
+    LA SEULE SUPPRESSION DU PROJET, ET ELLE EST NÉCESSAIRE. `enregistrer`
+    est un INSERT OR REPLACE : il ajoute et corrige, il n'enlève jamais.
+    `importer` hérite de cette propriété, si bien qu'effacer une ligne du
+    CSV — pourtant déclaré source de vérité — n'a aucun effet sur une base
+    qui la connaît déjà. Le prochain `exporter` la réécrit dans le CSV et
+    la correction disparaît sans un mot.
+
+    Une suppression doit donc pouvoir s'exprimer explicitement. Elle reste
+    volontairement bornée à `cours` : c'est la seule table où une ligne
+    puisse être fausse plutôt que périmée.
+    """
+    if cles is None or cles.empty:
+        return 0
+
+    cnx = connexion(chemin)
+    try:
+        curseur = cnx.executemany(
+            "DELETE FROM cours WHERE date = ? AND ticker = ?",
+            cles[["date", "ticker"]].astype(str).itertuples(index=False,
+                                                            name=None),
+        )
+        efface = curseur.rowcount
+        cnx.commit()
+        return efface
+    finally:
+        cnx.close()
+
+
 def lire(table: str, chemin: str | Path | None = None) -> pd.DataFrame:
     """Table entière, dans un DataFrame. Vide si la table est vide."""
     if table not in SCHEMAS:

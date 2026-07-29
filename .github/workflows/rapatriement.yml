@@ -112,6 +112,17 @@ jobs:
           python -m brvm importer
           python -m brvm etat
 
+      # SANS CETTE ÉTAPE, LE NETTOYAGE NE TIENT QU'UN RAPATRIEMENT. Les 38
+      # séances fantômes retirées de l'archive viennent de sikafinance :
+      # un nouveau passage sur la même plage les réimporte à l'identique.
+      # Le contrôle rend 1 quand il en trouve, ce qui met l'action au rouge
+      # — c'est voulu. Le retrait n'est pas automatique : effacer des cours
+      # sans qu'un humain ait vu ce qui est effacé est le genre
+      # d'automatisme qu'on regrette.
+      - name: Contrôler les séances fantômes
+        if: ${{ !inputs.sonde }}
+        run: python -m brvm qualite
+
       - name: Déposer l'archive élargie
         if: ${{ !inputs.sonde }}
         run: |

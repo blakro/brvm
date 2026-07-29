@@ -33,7 +33,7 @@ from pathlib import Path
 import pandas as pd
 
 from . import (backtest, db, dividende, exogene, features, prediction,
-               recherche, scoring)
+               qualite, recherche, scoring)
 from .ingestion import brvm_org, dividendes as source_dividendes, sikafinance
 
 
@@ -492,6 +492,58 @@ def _veille(args) -> int:
     return 0
 
 
+def _qualite(args) -> int:
+    """Signale — et sur demande retire — les séances fantômes.
+
+    Le code de retour est 1 quand il reste des lignes signalées : la
+    commande peut ainsi garder une action au rouge après un rapatriement
+    qui aurait réintroduit ce qu'un précédent passage avait retiré. Sans
+    cela, la correction ne tiendrait qu'un import.
+
+    `--retirer` écrit l'archive CSV **et** efface les lignes de la base.
+    Les deux, parce que `importer` est un INSERT OR REPLACE : il ajoute et
+    corrige, il n'enlève jamais. Nettoyer le seul CSV laisse les lignes
+    dans une base qui les connaît déjà, et le premier `exporter` les
+    réécrit dans le CSV — la correction disparaît sans un mot. C'est
+    exactement ce qui s'est produit au premier essai.
+    """
+    chemin = db.chemin_archive("cours")
+    if not chemin.exists():
+        print(f"pas d'archive à contrôler : {chemin}", file=sys.stderr)
+        return 1
+
+    archive = pd.read_csv(chemin)
+    suspects = qualite.pics_isoles(archive)
+
+    print(f"{len(archive)} lignes contrôlées ← {chemin}")
+    if suspects.empty:
+        print("aucune séance fantôme.")
+        return 0
+
+    print(f"\n{len(suspects)} séances fantômes — cours valant un multiple "
+          f"entier de la veille ET du lendemain :\n")
+    for ticker, lot in suspects.groupby("ticker"):
+        facteurs = ", ".join(f"×{f:g}" if f >= 1 else f"÷{1 / f:g}"
+                             for f in sorted(set(lot["facteur"])))
+        print(f"  {ticker:<6} {len(lot):>3} lignes  {facteurs}  "
+              f"{lot['date'].min()} → {lot['date'].max()}")
+
+    if not args.retirer:
+        print("\nRien n'a été modifié. « brvm qualite --retirer » les efface "
+              "de l'archive.\n"
+              "Le retrait plutôt que la réparation : ces lignes n'ont pas de "
+              "vrai cours derrière elles, leur substituer une valeur "
+              "fabriquerait une observation.", file=sys.stderr)
+        return 1
+
+    propre = qualite.retirer(archive, suspects)
+    propre.to_csv(chemin, index=False)
+    efface = db.effacer_cours(suspects)
+    print(f"\n{len(archive)} → {len(propre)} lignes → {chemin}")
+    print(f"{efface} lignes effacées de la base.")
+    return 0
+
+
 # TOUTES LES TABLES ARCHIVÉES, PAS DEUX. Le couple export/import ne
 # connaissait que `cours` et `referentiel` : les dividendes et les
 # fondamentaux étaient bien versionnés mais jamais rechargés, et le
@@ -683,6 +735,15 @@ def construire_analyseur() -> argparse.ArgumentParser:
         help="jours ouvrés tolérés sans nouvelle séance (5 par défaut)",
     )
     veille.set_defaults(fonction=_veille)
+
+    qual = commandes.add_parser(
+        "qualite", help="séances fantômes dans l'archive des cours"
+    )
+    qual.add_argument(
+        "--retirer", action="store_true",
+        help="effacer les lignes signalées au lieu de seulement les lister",
+    )
+    qual.set_defaults(fonction=_qualite)
 
     exporter = commandes.add_parser(
         "exporter", help="base → CSV versionnés de data/"

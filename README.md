@@ -4,7 +4,7 @@ Les cours de la [Bourse Régionale des Valeurs Mobilières](https://www.brvm.org
 — 47 sociétés cotées, huit pays de l'UEMOA — collectés, archivés et
 analysés, avec un tableau de bord web comme point d'entrée.
 
-**112 763 lignes, 2 996 séances, du 2 janvier 2015 au 27 juillet 2026.**
+**112 725 lignes, 2 996 séances, du 2 janvier 2015 au 27 juillet 2026.**
 Ouverture, plus haut, plus bas, clôture et volumes pour chaque valeur et
 chaque séance, plus quatre exercices de dividendes sur 30 sociétés.
 
@@ -29,7 +29,7 @@ il en mesure le quart, et c'est le quart le plus bruyant.
 **Aucun facteur de prix ne bat le hasard.** Sur 144 cases balayées —
 huit prédicteurs × six segments × trois horizons — une seule survit à la
 correction du test multiple : le retournement à un mois sur l'ensemble du
-marché, IC +0,068 pour une erreur type de 0,019 sur 148 périodes
+marché, IC +0,067 pour une erreur type de 0,019 sur 148 périodes
 disjointes (t = 3,6). Momentum, tendance, volatilité et liquidité
 sont indiscernables du bruit sur 11,5 ans.
 
@@ -129,8 +129,36 @@ python -m brvm importer-fondamentaux fichier.csv
 python -m brvm exporter        # base → CSV versionnés
 python -m brvm importer        # CSV versionnés → base
 python -m brvm veille          # l'archive s'enrichit-elle encore ?
+python -m brvm qualite         # séances fantômes (--retirer pour les effacer)
 python -m brvm etat            # ce que contient la base
 ```
+
+### Les séances fantômes
+
+`qualite` cherche une signature étroite : une ligne dont le cours vaut un
+multiple entier — ×2, ×5, ×10 — de la séance qui la précède **et** de
+celle qui la suit. Sous une limite de ±7,5 % par séance, l'aller-retour
+est deux fois impossible.
+
+Trente-huit lignes portaient cette marque, toutes entre 2015 et 2017, sur
+ONTBF, SAFC et UNXC. Leur mécanisme se lit à découvert sur ONTBF : cours
+divisé par deux, quantité doublée, capitaux échangés identiques au franc
+près à ceux de la veille. Ce ne sont pas des cours mal transcrits, ce
+sont des échos de la séance précédente rejoués à une autre échelle —
+d'où le retrait plutôt que la réparation, puisqu'il n'y a aucune vraie
+observation à récupérer derrière.
+
+Le contrôle **n'est pas** un test de la limite de ±7,5 %. Appliquée
+telle quelle aux clôtures, elle produit 356 alertes dont la plupart sont
+légitimes : le prix de référence est ajusté le jour du détachement du
+dividende (174 alertes entre mai et août), la limite ne relie pas deux
+séances séparées par un mois sans échange (34 alertes), et une division
+du nominal la franchit par construction. Un contrôle qui crie sur des
+données justes s'apprend à s'ignorer.
+
+`--retirer` écrit l'archive CSV **et** efface les lignes de la base :
+`importer` étant un INSERT OR REPLACE, nettoyer le seul CSV les laisserait
+en base, et le premier `exporter` les réécrirait sans un mot.
 
 `verifier` accepte un fichier, pour travailler sans réseau :
 
