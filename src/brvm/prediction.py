@@ -489,15 +489,19 @@ def predire(
 
 
 def _avec_incertitude(mesure: dict) -> str:
-    """« +0,006 ± 0,043 (t=+0,3, non significatif) ».
+    """« +0,006 ± 0,043 à 95 % (t=+0,3, non significatif) ».
 
     Un IC nu se retient et se cite ; son incertitude, non. Les coller
     ensemble est le seul moyen d'empêcher le premier de voyager seul.
+
+    Le « à 95 % » n'est pas de la coquetterie : ce qui suit le ± vaut deux
+    erreurs types, et un lecteur qui le prend pour une seule divise par
+    deux la marge d'erreur qu'il croit lire.
     """
     if mesure["dates"] == 0 or mesure["erreur_type"] != mesure["erreur_type"]:
         return f"{mesure['ic']:+.3f} (incertitude non calculable)"
     verdict = "significatif" if mesure["significatif"] else "non significatif"
-    return (f"{mesure['ic']:+.3f} ± {2 * mesure['erreur_type']:.3f} "
+    return (f"{mesure['ic']:+.3f} ± {2 * mesure['erreur_type']:.3f} à 95 % "
             f"(t={mesure['t']:+.1f}, {verdict})")
 
 

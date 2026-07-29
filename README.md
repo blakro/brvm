@@ -29,7 +29,8 @@ il en mesure le quart, et c'est le quart le plus bruyant.
 **Aucun facteur de prix ne bat le hasard.** Sur 144 cases balayées —
 huit prédicteurs × six segments × trois horizons — une seule survit à la
 correction du test multiple : le retournement à un mois sur l'ensemble du
-marché, IC +0,068 ± 0,038. Momentum, tendance, volatilité et liquidité
+marché, IC +0,068 pour une erreur type de 0,019 sur 148 périodes
+disjointes (t = 3,6). Momentum, tendance, volatilité et liquidité
 sont indiscernables du bruit sur 11,5 ans.
 
 **Et ce seul effet est inexploitable.** Simulé à dix lignes et
