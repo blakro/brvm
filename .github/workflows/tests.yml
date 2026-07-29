@@ -6,6 +6,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+# La suite ne fait que lire le dépôt : rien à écrire, aucun jeton élargi.
+permissions:
+  contents: read
+
 jobs:
   tests:
     runs-on: ubuntu-latest

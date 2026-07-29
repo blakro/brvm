@@ -573,7 +573,14 @@ def lire_referentiel(source: str | Path | None = None) -> pd.DataFrame:
     ref = pd.concat(morceaux, ignore_index=True)
     ref["ticker"] = ref["ticker"].astype(str).str.strip().str.upper()
     ref = ref[ref["ticker"].str.fullmatch(r"[A-Z]{2,6}")]
-    ref["nom"] = ref["nom"].astype(str).str.strip()
+    # Espaces internes réduits, pas seulement les bordures : brvm.org publie
+    # « SERVAIR ABIDJAN  COTE D'IVOIRE » avec deux espaces. Un doublon
+    # invisible se voit dans les libellés de l'app et fait échouer le
+    # rapprochement par nom des dividendes, qui compare des chaînes.
+    # `_normaliser` ne convient pas ici : il abaisse la casse et retire la
+    # ponctuation, ce qui sert à reconnaître un en-tête, pas à conserver un
+    # nom propre. On ne touche qu'aux espaces.
+    ref["nom"] = ref["nom"].astype(str).str.replace(r"\s+", " ", regex=True).str.strip()
     if "secteur" not in ref.columns:
         # Sans secteur, scoring.py applique la pondération par défaut. C'est
         # dégradé mais exact ; l'inventer serait pire.

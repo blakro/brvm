@@ -294,6 +294,11 @@ def test_referentiel_lit_ticker_nom_et_secteur():
     # jamais deviner — scoring.py applique alors la pondération par défaut.
     assert ref["secteur"].isna().all()
     assert ref.set_index("ticker").loc["BICC", "nom"] == "BICI COTE D'IVOIRE"
+    # brvm.org sépare parfois deux mots par deux espaces. Le doublon ne se
+    # voit pas à l'œil mais casse le rapprochement des dividendes, qui
+    # compare des chaînes : la lecture doit le réduire.
+    assert ref.set_index("ticker").loc["ABJC", "nom"] == "SERVAIR ABIDJAN COTE D'IVOIRE"
+    assert not ref["nom"].str.contains(r"\s{2,}").any()
 
 
 def test_referentiel_reconnait_les_entetes_plausibles():
