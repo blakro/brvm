@@ -85,6 +85,32 @@ RAMPE = (["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95"]
          ["#0d366b", "#184f95", "#256abf", "#3987e5", "#6da7ec", "#9ec5f4"])
 
 
+def _fond_divergent(valeur, plafond: float = 0.02) -> str:
+    """Fond de cellule : bleu si ça monte, rouge si ça baisse, rien sinon.
+
+    L'intensité suit l'ampleur, plafonnée : une variation de 2 % ne doit
+    pas teindre comme une de 0,1 %. Et le maximum reste à 22 % d'opacité —
+    au-delà, le texte de la cellule perdrait son contraste, et une couleur
+    qu'on ne peut plus lire à travers n'informe plus, elle décore.
+    """
+    if valeur is None or valeur != valeur or valeur == 0:
+        return ""
+    force = min(abs(float(valeur)) / plafond, 1.0)
+    couleur = HAUSSE if valeur > 0 else BAISSE
+    return f"background-color: {_lavis(couleur, 0.05 + 0.17 * force)}"
+
+
+def _fond_sequentiel(valeur, maximum: float) -> str:
+    """Fond de cellule sur la rampe : plus la valeur pèse, plus c'est dense."""
+    if valeur is None or valeur != valeur or not maximum:
+        return ""
+    # Racine carrée : les volumes de la BRVM s'étalent sur quatre ordres de
+    # grandeur, et une échelle linéaire laisserait quarante lignes
+    # indistinctement pâles autour d'une seule foncée.
+    force = min((float(valeur) / maximum) ** 0.5, 1.0)
+    return f"background-color: {_lavis(SERIE_1, 0.04 + 0.20 * force)}"
+
+
 def _teinte(fraction: float) -> str:
     """Un pas de la rampe séquentielle, pour une valeur entre 0 et 1."""
     fraction = 0.0 if fraction != fraction else min(max(fraction, 0.0), 1.0)
@@ -126,9 +152,16 @@ def _habiller() -> None:
     /* Échelle typographique : trois tailles, pas sept. */
     h1 {{ font-size: 1.9rem !important; font-weight: 650 !important;
          letter-spacing: -0.02em; margin-bottom: .1rem !important; }}
+    /* Le filet porte la couleur, le mot garde son encre : c'est la même
+       règle que pour les tuiles, appliquée aux titres de section. */
     h2 {{ font-size: 1.05rem !important; font-weight: 600 !important;
          letter-spacing: .01em; text-transform: uppercase;
-         color: var(--muet) !important; margin-top: 2rem !important; }}
+         color: var(--muet) !important; margin-top: 2rem !important;
+         display: flex; align-items: center; gap: .55rem; }}
+    h2::before {{
+      content: ""; width: 3px; height: 1em; border-radius: 2px;
+      background: var(--serie-1); flex: 0 0 auto;
+    }}
     h3 {{ font-size: .95rem !important; font-weight: 600 !important; }}
 
     /* La carte : un anneau d'un pixel, jamais une ombre portée. Une ombre
@@ -172,7 +205,11 @@ def _habiller() -> None:
     [data-testid="stExpander"] details {{
       border: 1px solid var(--bordure) !important; border-radius: 10px;
       background: var(--surface);
+      border-left: 3px solid var(--serie-1) !important;
     }}
+    /* L'onglet actif est le seul point coloré de la barre : le reste
+       recule, sinon six accents se disputent le regard. */
+    .stTabs [aria-selected="true"] {{ color: var(--serie-1) !important; }}
     hr {{ border-color: var(--bordure); }}
 
     /* Le conteneur bordé natif, habillé comme les tuiles pour que tout
@@ -750,8 +787,20 @@ with onglets[0]:
     ordre = ["ticker", "nom", "secteur", "tendance", "cloture"]
     ordre += [c for c in colonnes if c not in ordre]
 
+    # LE TABLEAU CESSE D'ÊTRE GRIS. La variation prend un fond divergent,
+    # le volume un fond séquentiel : on lit la structure de la séance en
+    # balayant la grille, sans comparer quarante-sept nombres de tête.
+    # L'opacité plafonne à 22 % — au-delà, le texte de la cellule perdrait
+    # son contraste, et c'est le confort de lecture qui décide, pas
+    # l'envie de couleur.
+    peint = tableau[ordre].style
+    if "variation" in ordre:
+        peint = peint.map(_fond_divergent, subset=["variation"])
+    plafond_volume = float(tableau["volume_fcfa"].max() or 0)
+    peint = peint.map(lambda v: _fond_sequentiel(v, plafond_volume),
+                      subset=["volume_fcfa"])
     st.dataframe(
-        tableau[ordre], width="stretch", hide_index=True,
+        peint, width="stretch", hide_index=True,
         column_config={
             "ticker": st.column_config.TextColumn("Symbole"),
             "nom": st.column_config.TextColumn("Société"),
@@ -772,11 +821,11 @@ with onglets[0]:
             # « 1 042 625 » et non « 1,042,625 ».
             "volume_titres": st.column_config.NumberColumn("Titres",
                                                            format="localized"),
-            # Une barre en cellule : on compare les lignes à l'œil au lieu
-            # de lire sept chiffres et de les ordonner de tête.
-            "volume_fcfa": st.column_config.ProgressColumn(
-                "Échangé (FCFA)", format="localized", min_value=0,
-                max_value=float(tableau["volume_fcfa"].max() or 1)),
+            # Nombre et non barre : la cellule porte déjà un fond dont
+            # la densité dit le poids, et superposer les deux ferait
+            # encoder la même grandeur deux fois.
+            "volume_fcfa": st.column_config.NumberColumn(
+                "Échangé (FCFA)", format="localized"),
         },
     )
     # L'export garde les colonnes chiffrées : une liste de clôtures ne se
@@ -887,10 +936,19 @@ with onglets[1]:
         point = (base_cours.mark_point(size=80, filled=True, color=SERIE_1,
                                        stroke=SURFACE, strokeWidth=2)
                  .transform_filter(survol))
+        # Le lavis sous la courbe : la teinte de la série à faible
+        # opacité, jamais un aplat saturé. Il donne du corps à une ligne
+        # de 2 px sans rien ajouter à ce qu'elle dit.
+        aire = base_cours.mark_area(
+            line=False,
+            color=alt.Gradient(
+                gradient="linear", x1=0, x2=0, y1=1, y2=0,
+                stops=[alt.GradientStop(color=_lavis(SERIE_1, 0.0), offset=0),
+                       alt.GradientStop(color=_lavis(SERIE_1, 0.28), offset=1)]))
         _panneau(f"{choix} — cours de clôture",
                  f"{len(serie)} séances, {serie['date'].iloc[0]} → "
                  f"{serie['date'].iloc[-1]}").altair_chart(
-            (base_cours.mark_line(strokeWidth=2, color=SERIE_1)
+            (aire + base_cours.mark_line(strokeWidth=2, color=SERIE_1)
              + capteur + trait + point)
             # Une série de plusieurs années ne se lit pas d'un bloc.
             .properties(height=320),
