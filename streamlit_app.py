@@ -485,7 +485,8 @@ with titre_1:
     # classement : un tableau ordonné de valeurs se lit comme une liste
     # d'achat si rien ne dit le contraire AVANT qu'on l'ait vu.
     st.caption(
-        "Les cours des 47 sociétés cotées à Abidjan, et de quoi les lire. "
+        f"Les cours des {len(referentiel)} sociétés cotées à Abidjan, et de "
+        "quoi les lire. "
         "**Ce n'est pas un conseil d'investissement** : rien ici n'a été "
         "calibré sur quoi que ce soit, et aucun classement affiché n'est un "
         "signal validé."
@@ -1025,7 +1026,11 @@ with onglets[2]:
                 value=int(DEFAUTS["analyse"]["volume_median_min_fcfa"]),
                 help="Une valeur qui ne s'échange pas ne se vend pas non plus.",
             )
-            combien = st.slider("Lignes affichées", 5, 47, 15)
+            # Le maximum suit le référentiel : une introduction en bourse
+            # de plus, et un plafond écrit en dur rendrait la dernière
+            # valeur inatteignable sans que rien ne le signale.
+            plafond = max(5, len(referentiel))
+            combien = st.slider("Lignes affichées", 5, plafond, min(15, plafond))
         with reg_2:
             poids = {
                 "momentum":
