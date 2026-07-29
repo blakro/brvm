@@ -71,6 +71,38 @@ BORDURE = "rgba(255,255,255,0.10)" if SOMBRE else "rgba(11,11,11,0.10)"
 # Statut : jamais réutilisé pour une série, toujours accompagné d'un mot.
 BON, ALERTE, GRAVE, CRITIQUE = "#0ca30c", "#fab219", "#ec835a", "#d03b3b"
 
+# LA RAMPE SÉQUENTIELLE : une seule teinte, du clair au foncé. C'est
+# l'encodage d'une grandeur continue — un score, un rendement — et le seul
+# moyen d'ajouter beaucoup de couleur sans mentir : la teinte y dit
+# « combien », jamais « lequel ».
+#
+# Sept teintes distinctes pour les sept secteurs ont été MESURÉES et
+# rejetées : l'orange et le rouge de la palette sont à ΔE 7,1 en vision
+# NORMALE, sous le plancher de 15. Un lecteur sans déficit visuel ne les
+# distingue pas, et aucun encodage secondaire n'excuse cela.
+RAMPE = (["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95"]
+         if not SOMBRE else
+         ["#0d366b", "#184f95", "#256abf", "#3987e5", "#6da7ec", "#9ec5f4"])
+
+
+def _teinte(fraction: float) -> str:
+    """Un pas de la rampe séquentielle, pour une valeur entre 0 et 1."""
+    fraction = 0.0 if fraction != fraction else min(max(fraction, 0.0), 1.0)
+    return RAMPE[min(int(fraction * len(RAMPE)), len(RAMPE) - 1)]
+
+
+def _lavis(couleur: str, alpha: float) -> str:
+    """La même couleur en fond très dilué.
+
+    Un lavis teinte une surface sans devenir de l'encre : le texte posé
+    dessus garde son propre contraste, et la couleur ne prétend pas porter
+    une valeur qu'elle ne porte pas. C'est là que la couleur est
+    illimitée — sur la surface, pas sur le signe.
+    """
+    couleur = couleur.lstrip("#")
+    r, v, b = (int(couleur[i:i + 2], 16) for i in (0, 2, 4))
+    return f"rgba({r},{v},{b},{alpha})"
+
 POLICE = 'system-ui, -apple-system, "Segoe UI", sans-serif'
 
 
@@ -202,10 +234,24 @@ def _carte_secteur(colonne, nom: str, variation, valeurs: int,
     signe = 0 if variation is None or variation != variation else (
         1 if variation > 0 else -1 if variation < 0 else 0)
     couleur = HAUSSE if signe > 0 else BAISSE if signe < 0 else MUET
+    # ENCODAGE DIVERGENT : deux pôles, un milieu neutre, l'intensité
+    # suivant l'ampleur. Une variation de 2 % ne doit pas teindre la carte
+    # comme une de 0,1 %, sinon la couleur crie là où il ne se passe
+    # presque rien. Le plafond est à 2 % — au-delà, une séance de la BRVM
+    # est déjà remarquable.
+    force = 0.0 if signe == 0 else min(abs(variation) / 0.02, 1.0)
     colonne.markdown(
-        f'<div class="carte" style="padding:.75rem .85rem">'
-        f'<div class="tuile-label" style="font-size:.65rem;line-height:1.25;'
-        f'min-height:2.2em">{nom}</div>'
+        f'<div class="carte" style="padding:.75rem .85rem;'
+        f'border-left:3px solid {couleur};'
+        f'background:linear-gradient(160deg,'
+        f'{_lavis(couleur, 0.06 + 0.18 * force)} 0%,'
+        f'{_lavis(couleur, 0.0)} 78%)">'
+        # DEUX LIGNES RÉSERVÉES, quelle que soit la longueur du nom :
+        # « Consommation Discrétionnaire » en prend deux et « Energie »
+        # une, et sans réserve les chiffres des sept cartes ne s'alignent
+        # plus — l'œil compare des hauteurs avant de lire des mots.
+        f'<div class="tuile-label" style="font-size:.65rem;line-height:1.3;'
+        f'height:2.6em;overflow:hidden">{nom}</div>'
         f'<div style="font-size:1.15rem;font-weight:650;color:{couleur};'
         f'letter-spacing:-.01em">{pedagogie.pourcentage(variation)}</div>'
         # Piste et remplissage du même bleu, deux pas d'écart : l'état se
@@ -244,7 +290,8 @@ def _panneau(titre: str = "", note: str = ""):
 
 
 def _tuile(colonne, label: str, valeur: str, delta: str = "",
-           sens: int = 0, note: str = "", etincelle: str = "") -> None:
+           sens: int = 0, note: str = "", etincelle: str = "",
+           teinte: str = "") -> None:
     """Une tuile : intitulé, valeur, écart signé, contexte. Dans cet ordre.
 
     Le contrat vient de la référence de conception — `label`, `value`,
@@ -252,15 +299,25 @@ def _tuile(colonne, label: str, valeur: str, delta: str = "",
     c'est, puis combien, puis si c'est inhabituel.
     """
     classe = "hausse" if sens > 0 else "baisse" if sens < 0 else ""
+    # LE BANDEAU PORTE LA COULEUR, LE TEXTE GARDE SON ENCRE. Une teinte
+    # claire est illisible en texte sur le fond, et un intitulé coloré
+    # confierait l'identité à un canal qui ne l'assume pas. Le lavis, lui,
+    # est de la surface : il peut être aussi coloré qu'on veut.
+    accent = teinte or (HAUSSE if sens > 0 else BAISSE if sens < 0 else SERIE_1)
+    style = (f' style="border-left:3px solid {accent};'
+             f'background:linear-gradient(100deg,{_lavis(accent, 0.13)} 0%,'
+             f'{_lavis(accent, 0.04)} 45%,{_lavis(accent, 0.0)} 80%)"')
+    couleur_valeur = (f' style="color:{accent}"'
+                      if sens else "")
     morceaux = [f'<div class="tuile-label">{label}</div>',
-                f'<div class="tuile-valeur">{valeur}</div>']
+                f'<div class="tuile-valeur"{couleur_valeur}>{valeur}</div>']
     if delta:
         morceaux.append(f'<div class="tuile-delta {classe}">{delta}</div>')
     if note:
         morceaux.append(f'<div class="tuile-note">{note}</div>')
     if etincelle:
         morceaux.append(etincelle)
-    colonne.markdown(f'<div class="carte">{"".join(morceaux)}</div>',
+    colonne.markdown(f'<div class="carte"{style}>{"".join(morceaux)}</div>',
                      unsafe_allow_html=True)
 
 
@@ -563,7 +620,7 @@ with onglets[0]:
     st.write("")
     tuiles = st.columns(4)
     _tuile(tuiles[0], "Séance", pedagogie.jour(derniere),
-           note=f"{seances} séances en archive")
+           note=f"{seances} séances en archive", teinte=SERIE_1)
     mediane = None if connues.empty else connues.median()
     _tuile(tuiles[1], "Variation médiane", pedagogie.pourcentage(mediane),
            sens=0 if mediane is None else (1 if mediane > 0 else -1),
@@ -572,13 +629,18 @@ with onglets[0]:
     # seule ne dit pas si elle sort de l'ordinaire.
     plus_traitee = jour.loc[jour["volume_fcfa"].idxmax()] \
         if jour["volume_fcfa"].notna().any() else None
+    # La teinte suit l'intensité : plus une valeur pèse dans la séance,
+    # plus sa tuile est foncée. Une grandeur, donc la rampe.
     _tuile(tuiles[2], "Plus échangée",
            "—" if plus_traitee is None else str(plus_traitee["ticker"]),
            note=("aucun échange"
                  if plus_traitee is None else
                  f"{pedagogie.montant(plus_traitee['volume_fcfa'])} · "
-                 f"{(plus_traitee['volume_fcfa'] / echange):.0%} du marché"))
+                 f"{(plus_traitee['volume_fcfa'] / echange):.0%} du marché"),
+           teinte=(SERIE_1 if plus_traitee is None
+                   else _teinte(float(plus_traitee["volume_fcfa"]) / echange * 3)))
     _tuile(tuiles[3], "Valeurs suivies", f"{jour['ticker'].nunique()}",
+           teinte=SERIE_1,
            note=("toutes les sociétés cotées"
                  if len(retenus) == len(referentiel)
                  else f"{len(referentiel) - len(retenus)} écartées par le filtre"))
@@ -954,9 +1016,13 @@ with onglets[2]:
              .encode(x2=alt.X2("minimum:Q"))
              .transform_calculate(minimum=str(float(tete["score"].min())))
              + base_score
-            .mark_point(size=110, filled=True, color=SERIE_1,
-                        stroke=SURFACE, strokeWidth=2)
+            # Le score est une grandeur continue : la rampe d'une seule
+            # teinte est faite pour cela, et elle dit « combien » sans
+            # jamais prétendre dire « lequel ».
+            .mark_point(size=130, filled=True, stroke=SURFACE, strokeWidth=2)
             .encode(
+                color=alt.Color("score:Q", legend=None,
+                                scale=alt.Scale(range=RAMPE)),
                 tooltip=[
                     alt.Tooltip("rang:Q", title="Rang"),
                     alt.Tooltip("ticker:N", title="Symbole"),
@@ -1031,9 +1097,17 @@ with onglets[2]:
                      "la part du rendement qui existe réellement sur ce "
                      "marché").altair_chart(
                 alt.Chart(tete)
-                .mark_bar(cornerRadiusEnd=4, height=16, color=SERIE_2)
+                .mark_bar(cornerRadiusEnd=4, height=16)
                 .encode(
                     x=alt.X("valeur:Q", title="rendement du dividende (%)"),
+                    # Rampe orange : c'est la seconde grandeur continue
+                    # affichée en même temps que le score, et deux rampes
+                    # simultanées prennent chacune leur propre teinte.
+                    color=alt.Color(
+                        "valeur:Q", legend=None,
+                        scale=alt.Scale(range=["#f7c9b4", "#eb6834", "#a83c17"]
+                                        if not SOMBRE else
+                                        ["#7a3016", "#d95926", "#f0a883"])),
                     y=alt.Y("ticker:N", sort="-x", title=None,
                             axis=alt.Axis(labelOverlap=False)),
                     tooltip=[
@@ -1124,6 +1198,7 @@ with onglets[3]:
         _tuile(mesures[2], "Écart", f"{validation['ecart']:+.3f}",
                sens=1 if validation["ecart"] > 0 else -1,
                note="le modèle moins le composite")
+
         st.caption(
             f"L'intervalle couvre deux erreurs-types, calculées sur "
             f"{m['dates_independantes']} périodes **disjointes** et non sur "
@@ -1288,7 +1363,7 @@ with onglets[4]:
                     "par an — c'est elle qu'il faut battre")
         _tuile(m[2], "Perte maximale",
                pedagogie.pourcentage(resultat["perte_max"], signe=False),
-               note="plus forte baisse depuis un sommet")
+               note="plus forte baisse depuis un sommet", teinte=BAISSE)
         _tuile(m[3], "Coût cumulé",
                pedagogie.pourcentage(resultat["cout_cumule"], signe=False),
                sens=-1,
@@ -1419,12 +1494,13 @@ with onglets[4]:
 # --- Données --------------------------------------------------------------
 with onglets[5]:
     etat = st.columns(3)
-    _tuile(etat[0], "Séances en archive", f"{seances}",
+    _tuile(etat[0], "Séances en archive", f"{seances}", teinte=SERIE_1,
            note=f"{cours['date'].min()} → {cours['date'].max()}")
     _tuile(etat[1], "Dividendes",
-           f"{len(dividendes)} + {len(fondamentaux)}",
+           f"{len(dividendes)} + {len(fondamentaux)}", teinte=SERIE_2,
            note="détachements datés, puis mesures par exercice")
     _tuile(etat[2], "Sociétés au référentiel", f"{len(referentiel)}",
+           teinte=SERIE_1,
            note=f"{int(referentiel['secteur'].notna().sum())} avec secteur")
 
     # Visible sans avoir à ouvrir les journaux de l'hébergeur : un onglet
