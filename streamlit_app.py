@@ -311,8 +311,29 @@ def _attente(titre: str, disponible: int, requis: int, pourquoi: str,
     est : l'archive n'a pas encore l'âge requis, et elle vieillit.
     """
     etat = pedagogie.attente(disponible, requis, derniere, unite)
-    st.progress(etat["part"], text=f"**{titre}** — {etat['phrase']}")
-    st.caption(pourquoi)
+    boite = st.container(border=True)
+    # La jauge est dessinée à la main plutôt que confiée à `st.progress` :
+    # celle de Streamlit occupe toute la largeur en pleine saturation, et
+    # une attente n'a pas à crier. Piste et remplissage du même bleu à
+    # deux pas d'écart, pour que l'état se lise sur toute la barre.
+    boite.markdown(
+        f'<div class="tuile-label">{titre} — en attente de données</div>'
+        f'<div style="display:flex;align-items:baseline;gap:.6rem;'
+        f'margin:.25rem 0 .6rem">'
+        f'<div style="font-size:1.6rem;font-weight:650;color:{ENCRE}">'
+        f'{etat["disponible"]}</div>'
+        f'<div style="color:{MUET};font-size:.95rem">sur '
+        f'{etat["requis"]} {unite}s nécessaires</div></div>'
+        f'<div style="display:flex;height:6px;border-radius:3px;'
+        f'background:{GRILLE};overflow:hidden">'
+        f'<div style="flex:{max(etat["part"], 0.004)} 0 0;'
+        f'background:{SERIE_1}"></div>'
+        f'<div style="flex:{max(1 - etat["part"], 0.004)} 0 0"></div></div>'
+        f'<div class="tuile-note" style="margin-top:.6rem">{etat["phrase"]}'
+        f'</div>'
+        f'<div class="tuile-note" style="margin-top:.5rem;line-height:1.5">'
+        f'{pourquoi}</div>',
+        unsafe_allow_html=True)
 
 
 # --- Données --------------------------------------------------------------
@@ -606,12 +627,27 @@ with onglets[0]:
 
     if not connues.empty:
         classees = jour.dropna(subset=["variation"]).sort_values("variation")
+        # TÊTE ET QUEUE PLUTÔT QUE TOUT. Quarante-sept lignes à 22 px font
+        # plus de mille pixels : le graphique n'était jamais vu en entier,
+        # et son milieu — les valeurs qui n'ont presque pas bougé — est
+        # justement ce qu'on ne regarde pas. Les extrêmes tiennent dans un
+        # écran ; le reste s'ouvre au clic, et le tableau plus bas porte
+        # toujours les 47.
+        tout_montrer = st.toggle(
+            f"Afficher les {len(classees)} valeurs", value=False,
+            key="marche_tout",
+            help="Par défaut, les dix plus fortes hausses et les dix plus "
+                 "fortes baisses.")
+        if tout_montrer or len(classees) <= 20:
+            visibles, note = classees, f"{len(classees)} valeurs"
+        else:
+            visibles = pd.concat([classees.head(10), classees.tail(10)])
+            note = (f"dix plus fortes baisses et dix plus fortes hausses, "
+                    f"sur {len(classees)} valeurs")
         panneau = _panneau(
-            f"Variation de la séance du {pedagogie.jour(derniere)}",
-            f"{len(classees)} valeurs, de la plus forte hausse à la plus "
-            "forte baisse")
+            f"Variation de la séance du {pedagogie.jour(derniere)}", note)
         panneau.altair_chart(
-            alt.Chart(classees)
+            alt.Chart(visibles)
             .mark_bar(cornerRadiusEnd=4, height=14)
             .encode(
                 # Axe en haut : le graphique fait plusieurs écrans, une
@@ -632,7 +668,7 @@ with onglets[0]:
                     alt.Tooltip("secteur:N", title="Secteur"),
                 ],
             )
-            .properties(height=max(280, 22 * len(classees))),
+            .properties(height=max(240, 22 * len(visibles))),
             width="stretch",
         )
     colonnes = ["ticker", "nom", "secteur", "cloture"]
@@ -760,30 +796,45 @@ with onglets[1]:
     st.markdown(", ".join(morceaux) + ".")
 
     if len(serie) >= 2:
+        # LE CURSEUR EST LE POINT, PAS L'ORNEMENT. Sur 2 876 séances, un
+        # point fait moins d'un demi-pixel de large : viser une infobulle
+        # est impossible, et une courbe sans lecture ponctuelle n'est
+        # qu'une silhouette. La sélection porte sur l'abscisse la plus
+        # proche du curseur, quelle que soit la hauteur de la souris.
+        survol = alt.selection_point(nearest=True, on="pointermove",
+                                     fields=["date"], empty=False)
+        base_cours = alt.Chart(serie).encode(
+            x=alt.X("date:T", title=None,
+                    axis=alt.Axis(format="%d/%m/%y", tickCount=8)),
+            # Format SI (« 22k ») : « 22,000 » est une convention
+            # anglaise, et l'app affiche « 14 229 » juste au-dessus.
+            y=alt.Y("cloture:Q", title="clôture (FCFA)",
+                    scale=alt.Scale(zero=False),
+                    axis=alt.Axis(format="~s")),
+        )
+        infobulle = [
+            alt.Tooltip("date:T", title="Séance", format="%d/%m/%Y"),
+            alt.Tooltip("cloture:Q", title="Clôture", format=",.0f"),
+            alt.Tooltip("volume_titres:Q", title="Titres", format=",.0f"),
+        ]
+        # La zone de capture est transparente et couvre toute la hauteur :
+        # une cible de survol doit être plus grande que la marque.
+        capteur = (base_cours.mark_rule(strokeWidth=24, opacity=0)
+                   .encode(tooltip=infobulle).add_params(survol))
+        trait = base_cours.mark_rule(color=MUET, strokeWidth=1).transform_filter(survol)
+        point = (base_cours.mark_point(size=80, filled=True, color=SERIE_1,
+                                       stroke=SURFACE, strokeWidth=2)
+                 .transform_filter(survol))
         _panneau(f"{choix} — cours de clôture",
                  f"{len(serie)} séances, {serie['date'].iloc[0]} → "
                  f"{serie['date'].iloc[-1]}").altair_chart(
-            alt.Chart(serie)
-            .mark_line(strokeWidth=2, color=SERIE_1)
-            .encode(
-                x=alt.X("date:T", title=None,
-                        axis=alt.Axis(format="%d/%m/%y", tickCount=8)),
-                # Format SI (« 22k ») : « 22,000 » est une convention
-                # anglaise, et l'app affiche « 14 229 » juste au-dessus.
-                y=alt.Y("cloture:Q", title="clôture (FCFA)",
-                        scale=alt.Scale(zero=False),
-                        axis=alt.Axis(format="~s")),
-                tooltip=[
-                    alt.Tooltip("date:T", title="Séance", format="%d/%m/%Y"),
-                    alt.Tooltip("cloture:Q", title="Clôture", format=",.0f"),
-                    alt.Tooltip("volume_titres:Q", title="Titres", format=",.0f"),
-                ],
-            )
+            (base_cours.mark_line(strokeWidth=2, color=SERIE_1)
+             + capteur + trait + point)
             # Une série de plusieurs années ne se lit pas d'un bloc.
-            .properties(height=320).interactive(),
+            .properties(height=320),
             width="stretch",
         )
-        st.caption("Molette pour zoomer, glisser pour parcourir.")
+        st.caption("Survolez la courbe pour lire une séance.")
     else:
         st.info(f"Une seule séance en base pour {choix} : pas d'historique à "
                 "tracer. Le graphique apparaîtra dès la deuxième.")
@@ -1058,11 +1109,21 @@ with onglets[3]:
         # une flèche devant un delta, et une incertitude n'a pas de sens de
         # variation — « ↑ ± 0,117 » se lit comme une hausse.
         mesures = st.columns(3)
-        mesures[0].metric("IC du modèle", f"{validation['ic']:+.3f}")
-        mesures[0].caption(f"± {2 * m['erreur_type']:.3f}  ·  t = {m['t']:+.1f}")
-        mesures[1].metric("IC du composite", f"{validation['ic_composite']:+.3f}")
-        mesures[1].caption(f"± {2 * c['erreur_type']:.3f}  ·  t = {c['t']:+.1f}")
-        mesures[2].metric("Écart", f"{validation['ecart']:+.3f}")
+        # L'intervalle passe en note et non en écart : Streamlit dessine
+        # une flèche devant un delta, et une incertitude n'a pas de sens
+        # de variation.
+        _tuile(mesures[0], "IC du modèle", f"{validation['ic']:+.3f}",
+               note=f"± {2 * m['erreur_type']:.3f} · t = {m['t']:+.1f} · "
+                    + ("significatif" if m["significatif"]
+                       else "indiscernable du hasard"))
+        _tuile(mesures[1], "IC du composite",
+               f"{validation['ic_composite']:+.3f}",
+               note=f"± {2 * c['erreur_type']:.3f} · t = {c['t']:+.1f} · "
+                    + ("significatif" if c["significatif"]
+                       else "indiscernable du hasard"))
+        _tuile(mesures[2], "Écart", f"{validation['ecart']:+.3f}",
+               sens=1 if validation["ecart"] > 0 else -1,
+               note="le modèle moins le composite")
         st.caption(
             f"L'intervalle couvre deux erreurs-types, calculées sur "
             f"{m['dates_independantes']} périodes **disjointes** et non sur "
@@ -1214,14 +1275,24 @@ with onglets[4]:
         )
     else:
         m = st.columns(4)
-        m[0].metric("Stratégie",
-                    pedagogie.pourcentage(resultat["rendement_total"]))
-        m[1].metric("Référence",
-                    pedagogie.pourcentage(resultat["reference_total"]))
-        m[2].metric("Perte max.",
-                    pedagogie.pourcentage(resultat["perte_max"], signe=False))
-        m[3].metric("Coût cumulé",
-                    pedagogie.pourcentage(resultat["cout_cumule"], signe=False))
+        ecart_bt = resultat["rendement_total"] - resultat["reference_total"]
+        _tuile(m[0], "Stratégie",
+               pedagogie.pourcentage(resultat["rendement_total"]),
+               sens=1 if resultat["rendement_total"] > 0 else -1,
+               note=f"{pedagogie.pourcentage(resultat['rendement_annualise'])} "
+                    "par an")
+        _tuile(m[1], "Référence équipondérée",
+               pedagogie.pourcentage(resultat["reference_total"]),
+               sens=1 if resultat["reference_total"] > 0 else -1,
+               note=f"{pedagogie.pourcentage(resultat['reference_annualisee'])} "
+                    "par an — c'est elle qu'il faut battre")
+        _tuile(m[2], "Perte maximale",
+               pedagogie.pourcentage(resultat["perte_max"], signe=False),
+               note="plus forte baisse depuis un sommet")
+        _tuile(m[3], "Coût cumulé",
+               pedagogie.pourcentage(resultat["cout_cumule"], signe=False),
+               sens=-1,
+               note=f"{resultat['rotation_moyenne']:.0%} de rotation moyenne")
 
         # Le verdict en toutes lettres : quatre tuiles ne disent pas d'
         # elles-mêmes laquelle des deux courbes gagne, et c'est la seule
@@ -1348,11 +1419,13 @@ with onglets[4]:
 # --- Données --------------------------------------------------------------
 with onglets[5]:
     etat = st.columns(3)
-    etat[0].metric("Séances en base", f"{seances}")
-    etat[1].metric("Dividendes en base",
-                   f"{len(dividendes)} + {len(fondamentaux)}",
-                   help="Détachements datés, puis mesures par exercice.")
-    etat[2].metric("Sociétés au référentiel", f"{len(referentiel)}")
+    _tuile(etat[0], "Séances en archive", f"{seances}",
+           note=f"{cours['date'].min()} → {cours['date'].max()}")
+    _tuile(etat[1], "Dividendes",
+           f"{len(dividendes)} + {len(fondamentaux)}",
+           note="détachements datés, puis mesures par exercice")
+    _tuile(etat[2], "Sociétés au référentiel", f"{len(referentiel)}",
+           note=f"{int(referentiel['secteur'].notna().sum())} avec secteur")
 
     # Visible sans avoir à ouvrir les journaux de l'hébergeur : un onglet
     # bridé s'explique ici plutôt que de laisser croire à un bug.
