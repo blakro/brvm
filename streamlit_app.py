@@ -187,6 +187,39 @@ def _etincelle(valeurs, largeur=112, hauteur=30) -> str:
     )
 
 
+def _carte_secteur(colonne, nom: str, variation, valeurs: int,
+                   part_hausse: float) -> None:
+    """Un secteur en une carte : nom, variation médiane, largeur interne.
+
+    C'est la première lecture que fait un professionnel devant un marché —
+    quel secteur porte la séance ? — et l'app ne la permettait pas : elle
+    alignait 47 valeurs et jamais les sept secteurs.
+
+    La barre dit la part de valeurs en hausse À L'INTÉRIEUR du secteur.
+    Une médiane positive portée par une valeur sur sept ne dit pas la même
+    chose qu'une hausse partagée, et le chiffre seul ne l'avoue pas.
+    """
+    signe = 0 if variation is None or variation != variation else (
+        1 if variation > 0 else -1 if variation < 0 else 0)
+    couleur = HAUSSE if signe > 0 else BAISSE if signe < 0 else MUET
+    colonne.markdown(
+        f'<div class="carte" style="padding:.75rem .85rem">'
+        f'<div class="tuile-label" style="font-size:.65rem;line-height:1.25;'
+        f'min-height:2.2em">{nom}</div>'
+        f'<div style="font-size:1.15rem;font-weight:650;color:{couleur};'
+        f'letter-spacing:-.01em">{pedagogie.pourcentage(variation)}</div>'
+        # Piste et remplissage du même bleu, deux pas d'écart : l'état se
+        # lit sur toute la barre, pas seulement sur la partie pleine.
+        f'<div style="display:flex;height:4px;border-radius:2px;'
+        f'background:{GRILLE};margin-top:.5rem;overflow:hidden">'
+        f'<div style="flex:{max(part_hausse, 0.001)} 0 0;background:{HAUSSE}">'
+        f'</div><div style="flex:{max(1 - part_hausse, 0.001)} 0 0"></div></div>'
+        f'<div class="tuile-note" style="margin-top:.35rem;font-size:.7rem">'
+        f'{valeurs} valeur{"s" if valeurs > 1 else ""} · '
+        f'{part_hausse:.0%} en hausse</div></div>',
+        unsafe_allow_html=True)
+
+
 def _panneau(titre: str = "", note: str = ""):
     """Un graphique posé sur une surface, pas flottant sur le plan.
 
@@ -310,23 +343,38 @@ if referentiel.empty:
     referentiel = brvm_org.referentiel_amorce()
 
 _habiller()
-st.title("Bourse Régionale des Valeurs Mobilières")
 
-# L'avertissement est ici, au-dessus de tout, et non en légende sous le
-# classement. Un tableau ordonné de valeurs se lit comme une liste d'achat
-# si rien ne dit le contraire assez tôt — et « assez tôt » veut dire avant
-# de l'avoir vu, pas après.
-st.caption(
-    "Les cours des 47 sociétés cotées à Abidjan, et de quoi les lire. "
-    "**Ce n'est pas un conseil d'investissement** : rien ici n'a été "
-    "calibré sur quoi que ce soit, et aucun classement affiché n'est un "
-    "signal validé."
-)
+# LE PREMIER ÉCRAN APPARTIENT À LA DONNÉE. Titre, avertissement et bouton
+# d'actualisation tiennent sur une seule rangée : auparavant chacun avait
+# la sienne, et les onglets commençaient à 410 px du haut sur ordinateur,
+# 1 640 px sur téléphone. Un tableau de bord doit montrer un chiffre avant
+# de montrer ses réglages.
+titre_1, titre_2 = st.columns([4, 1], vertical_alignment="center")
+with titre_1:
+    st.title("Bourse Régionale des Valeurs Mobilières")
+    # L'avertissement reste au-dessus de tout, jamais en légende sous le
+    # classement : un tableau ordonné de valeurs se lit comme une liste
+    # d'achat si rien ne dit le contraire AVANT qu'on l'ait vu.
+    st.caption(
+        "Les cours des 47 sociétés cotées à Abidjan, et de quoi les lire. "
+        "**Ce n'est pas un conseil d'investissement** : rien ici n'a été "
+        "calibré sur quoi que ce soit, et aucun classement affiché n'est un "
+        "signal validé."
+    )
+
+direct, echec = (None, None)
+if cours.empty:
+    direct, echec = lire_en_direct()
+
+with titre_2:
+    if st.button("↻ Actualiser", width="stretch",
+                 help="Relire la cote publiée sur brvm.org, sans rien écrire"):
+        lire_en_direct.clear()
+        direct, echec = lire_en_direct()
 
 # Replié par défaut, et ce n'est pas un détail : changer d'onglet ne relance
 # pas le script côté Streamlit, donc un dépliant ouvert le reste sur les six
-# onglets et leur mange le premier écran. L'avertissement ci-dessus, lui,
-# reste visible en permanence — c'est le seul qui doive l'être.
+# onglets et leur mange le premier écran.
 with st.expander("Première visite ? Comment lire cette app, et trois choses "
                  "à savoir sur la BRVM"):
     st.markdown(
@@ -357,20 +405,10 @@ Elle n'exécute aucun ordre et ne vous connaît pas.
 """
     )
 
-direct, echec = (None, None)
-if cours.empty:
-    direct, echec = lire_en_direct()
-
-entete_1, entete_2 = st.columns([3, 1])
-with entete_2:
-    if st.button("Actualiser depuis brvm.org", width="stretch"):
-        lire_en_direct.clear()
-        direct, echec = lire_en_direct()
-
 if direct is not None and not direct.empty:
     cours = (pd.concat([cours, direct], ignore_index=True)
              .drop_duplicates(subset=["date", "ticker"], keep="last"))
-    entete_1.success(
+    st.success(
         f"Séance du {direct['date'].iloc[0]} lue à l'instant "
         f"(site mis à jour à {direct.attrs.get('heure_mise_a_jour') or '?'}). "
         "Affichée seulement — l'archive du dépôt n'est pas modifiée."
@@ -396,14 +434,27 @@ dates_triees = sorted(cours["date"].unique())
 # --- Filtre unique, au-dessus de tout ce qu'il cadre ----------------------
 
 secteurs_connus = sorted(referentiel["secteur"].dropna().unique())
-filtre_1, filtre_2 = st.columns([3, 2])
+
+# LE FILTRE SE REPLIE. Sept puces de secteur occupaient deux lignes
+# pleines pour dire « tout est sélectionné », c'est-à-dire rien. La
+# pastille annonce l'état en trois mots et n'ouvre le détail qu'au clic ;
+# la place gagnée revient à la donnée.
+filtre_1, filtre_2 = st.columns([1, 2], vertical_alignment="bottom")
 with filtre_1:
-    secteurs = st.multiselect(
-        "Secteurs", secteurs_connus, default=secteurs_connus,
-        help="Cadre l'ensemble du tableau de bord.",
-    )
+    choisis = st.session_state.get("secteurs", secteurs_connus)
+    resume = ("tous les secteurs" if len(choisis) == len(secteurs_connus)
+              else f"{len(choisis)} secteur{'s' if len(choisis) > 1 else ''}"
+              if choisis else "aucun secteur")
+    with st.popover(f"⚟  {resume}", width="stretch"):
+        secteurs = st.multiselect(
+            "Secteurs", secteurs_connus, default=secteurs_connus,
+            key="secteurs", label_visibility="collapsed",
+            help="Cadre l'ensemble du tableau de bord.",
+        )
 with filtre_2:
-    recherche = st.text_input("Rechercher", placeholder="Symbole ou société")
+    recherche = st.text_input(
+        "Rechercher", placeholder="Symbole ou société",
+        label_visibility="collapsed")
 
 retenus = (set(referentiel[referentiel["secteur"].isin(secteurs)]["ticker"])
            if secteurs else set(referentiel["ticker"]))
@@ -511,6 +562,26 @@ with onglets[0]:
                  if len(retenus) == len(referentiel)
                  else f"{len(referentiel) - len(retenus)} écartées par le filtre"))
 
+    # --- Les secteurs, avant le détail ------------------------------------
+    if not connues.empty and jour["secteur"].notna().any():
+        st.markdown("## Par secteur")
+        par_secteur = (
+            jour.dropna(subset=["variation", "secteur"])
+            .groupby("secteur")
+            .agg(variation=("variation", "median"),
+                 valeurs=("ticker", "size"),
+                 hausses=("variation", lambda v: float((v > 0).mean())))
+            .sort_values("variation", ascending=False)
+            .reset_index()
+        )
+        # Les sept secteurs de la BRVM tiennent sur une rangée ; au-delà,
+        # ce serait une grille et le rang cesserait de se lire.
+        cartes = st.columns(max(1, len(par_secteur)))
+        for colonne, ligne in zip(cartes, par_secteur.itertuples()):
+            _carte_secteur(colonne, ligne.secteur, ligne.variation,
+                           int(ligne.valeurs), float(ligne.hausses))
+        st.write("")
+
     # Les tuiles disent la même chose, mais il faut les lire ensemble pour
     # l'entendre. La phrase le fait à la place du lecteur.
     if connues.empty:
@@ -568,12 +639,29 @@ with onglets[0]:
     if not connues.empty:
         colonnes.append("variation")
     colonnes += ["volume_titres", "volume_fcfa"]
+
+    tableau = jour[colonnes].sort_values("ticker").copy()
+    # Trente séances de contexte DANS le tableau : sans elles, chaque ligne
+    # est un instantané et rien ne dit si la valeur du jour est ordinaire.
+    # C'est aussi ce qui distingue une grille d'un terminal.
+    fenetre = cours_filtre[cours_filtre["date"] > dates_triees[-30]] \
+        if len(dates_triees) > 30 else cours_filtre
+    trente = (fenetre.sort_values("date").groupby("ticker")["cloture"]
+              .apply(list).to_dict())
+    tableau["tendance"] = tableau["ticker"].map(trente)
+    ordre = ["ticker", "nom", "secteur", "tendance", "cloture"]
+    ordre += [c for c in colonnes if c not in ordre]
+
     st.dataframe(
-        jour[colonnes].sort_values("ticker"), width="stretch", hide_index=True,
+        tableau[ordre], width="stretch", hide_index=True,
         column_config={
             "ticker": st.column_config.TextColumn("Symbole"),
             "nom": st.column_config.TextColumn("Société"),
             "secteur": st.column_config.TextColumn("Secteur"),
+            "tendance": st.column_config.LineChartColumn(
+                "30 séances", width="small",
+                help="Clôtures des trente dernières séances. Sans axe : "
+                     "c'est une texture, pas un graphique."),
             # `format="percent"` et non « %+.2f%% » : le format printf ne
             # multiplie pas par cent, et affichait « -0,02 % » là où la
             # valeur baissait de 2 %. Cent fois trop petit, sans rien qui
@@ -586,10 +674,15 @@ with onglets[0]:
             # « 1 042 625 » et non « 1,042,625 ».
             "volume_titres": st.column_config.NumberColumn("Titres",
                                                            format="localized"),
-            "volume_fcfa": st.column_config.NumberColumn("FCFA",
-                                                         format="localized"),
+            # Une barre en cellule : on compare les lignes à l'œil au lieu
+            # de lire sept chiffres et de les ordonner de tête.
+            "volume_fcfa": st.column_config.ProgressColumn(
+                "Échangé (FCFA)", format="localized", min_value=0,
+                max_value=float(tableau["volume_fcfa"].max() or 1)),
         },
     )
+    # L'export garde les colonnes chiffrées : une liste de clôtures ne se
+    # met pas dans un CSV.
     _telecharger(jour[colonnes], f"brvm_{derniere}.csv", "dl_marche")
     _glossaire("fixing", "limite", "liquidite")
 
