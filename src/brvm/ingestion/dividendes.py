@@ -44,14 +44,18 @@ a corrigé mes deux hypothèses sur l'API d'historique.
 
 from __future__ import annotations
 
+import hashlib
+import re
 import time
+from datetime import date
 
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup
 
 from ..config import charger
-from .brvm_org import SourceIllisible, _en_dataframe, _nombre, _normaliser
+from .brvm_org import (MOIS, SourceIllisible, _en_dataframe, _nombre,
+                       _normaliser)
 
 SOURCES = {
     "brvm.org": {
@@ -352,13 +356,36 @@ def rapprocher(noms, referentiel: pd.DataFrame) -> tuple[dict, list]:
 
 
 def _date(valeur: object) -> str:
-    """Vers l'ISO. Chaîne vide si illisible — jamais une date inventée."""
+    """Vers l'ISO. Chaîne vide si illisible — jamais une date inventée.
+
+    LES DEUX SOURCES N'ÉCRIVENT PAS LES DATES PAREIL, et l'oubli d'une
+    forme rend une source entière muette. sikafinance publie
+    « 27/07/2026 » ; brvm.org publie « 4 septembre 2026 ». Faute de lire
+    la seconde, `lire_dividendes` vidait la table de toutes ses lignes,
+    puis la rejetait — en accusant les colonnes, qui étaient pourtant
+    reconnues. Le message d'échec désignait donc le mauvais coupable, et
+    le calendrier officiel — le seul à porter la date de détachement ET
+    l'exercice comptable — passait pour illisible depuis le début.
+    """
     texte = str(valeur).strip()
     for forme in ("%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d", "%d.%m.%Y", "%d/%m/%y"):
         try:
             return pd.to_datetime(texte, format=forme).date().isoformat()
         except (ValueError, TypeError):
             continue
+
+    # « 4 septembre 2026 », « Lundi, 27 juillet, 2026 ». Le mois est
+    # comparé sans accent ni casse, comme partout ailleurs dans le projet.
+    trouve = re.search(
+        r"(\d{1,2})\s*,?\s+(" + "|".join(MOIS) + r")\s*,?\s+(\d{4})",
+        _normaliser(texte),
+    )
+    if trouve:
+        jour, mois, annee = trouve.groups()
+        try:
+            return date(int(annee), MOIS[mois], int(jour)).isoformat()
+        except ValueError:
+            return ""
     return ""
 
 
@@ -470,22 +497,49 @@ PISTES_HISTORIQUE = [
         # strictement mieux que l'exercice seul de sikafinance — le
         # backtest total-return répartit aujourd'hui le dividende sur
         # l'exercice faute de savoir quand il tombe.
+        # ÉTABLI PAR LA SONDE DU 31/07/2026 : la pagination fonctionne. Les
+        # six pages essayées ont rendu six contenus différents, dix lignes
+        # chacune, avec « Exercice comptable », « Date ex-dividende » et
+        # « Montant du dividende net ». Reste à savoir jusqu'où elle
+        # remonte — d'où la plage élargie.
         "url": "https://www.brvm.org/fr/esv/paiement-de-dividendes?page={n}",
-        "parametres": [{"n": n} for n in range(0, 6)],
+        "parametres": [{"n": n} for n in range(0, 30)],
     },
     {
-        "nom": "sikafinance — paramètre d'exercice",
-        # Le tableau large est peut-être une vue sur quatre ans glissants.
-        # Trois orthographes du paramètre, parce qu'aucune n'est connue.
+        # TÉMOIN NÉGATIF, GARDÉ EXPRÈS. La sonde du 31/07/2026 a montré que
+        # sikafinance ignore le paramètre : six orthographes, six réponses
+        # de 49 155 octets au dernier octet près, toujours 2022-2025. Cette
+        # piste ne sert plus à chercher — elle sert à vérifier que le
+        # verdict sait encore dire « identique ». Un contrôle qui ne répond
+        # jamais « rien de neuf » ne prouve rien quand il dit le contraire.
+        "nom": "sikafinance — paramètre d'exercice (témoin négatif)",
         "url": "https://www.sikafinance.com/marches/dividendes?annee={a}",
-        "parametres": [{"a": a} for a in (2015, 2018, 2021)],
-    },
-    {
-        "nom": "sikafinance — autres orthographes du paramètre",
-        "url": "https://www.sikafinance.com/marches/dividendes?{cle}=2018",
-        "parametres": [{"cle": c} for c in ("year", "exercice", "periode")],
+        "parametres": [{"a": a} for a in (2015, 2018)],
     },
 ]
+
+
+def _empreinte(html: str) -> str:
+    """Empreinte du CONTENU des tableaux, pas de la page.
+
+    DEUX FAÇONS DE SE TROMPER, RENCONTRÉES TOUTES LES DEUX AU PREMIER
+    PASSAGE. Comparer les octets de la page fait passer pour différentes
+    deux réponses qui ne diffèrent que par un horodatage ou un encart. Et
+    se fier à ce qu'un lecteur a réussi à extraire rend aveugle dès que ce
+    lecteur échoue : les six pages du calendrier de brvm.org ont été
+    déclarées identiques alors que leurs tailles différaient toutes, parce
+    que `lire_dividendes` échouait sur chacune et que la clé de comparaison
+    valait « rien » des deux côtés.
+
+    L'empreinte porte donc sur les cellules des tableaux, seule chose qui
+    dise si la page apporte des données nouvelles.
+    """
+    cellules = []
+    for table in tableaux(html):
+        cellules.append("|".join(str(c) for c in table.columns))
+        for ligne in table.itertuples(index=False, name=None):
+            cellules.append("|".join(str(c) for c in ligne))
+    return hashlib.sha256("\n".join(cellules).encode()).hexdigest()[:16]
 
 
 def _annees_vues(html: str) -> list[str]:
@@ -533,6 +587,7 @@ def sonder_historique() -> list[dict]:
                     entree["dimensions"] = [t.shape for t in trouves]
                     entree["entetes"] = [list(t.columns)[:14] for t in trouves]
                     entree["exercices"] = _annees_vues(reponse.text)
+                    entree["empreinte"] = _empreinte(reponse.text)
                     # Le calendrier ne porte pas de colonnes « Div. AAAA » :
                     # pour lui, l'apport se mesure aux dates lues.
                     try:

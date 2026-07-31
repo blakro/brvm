@@ -220,3 +220,58 @@ def test_annees_vues_ignore_une_annee_hors_dividende():
     faux = "<table><tr><th>Nom</th><th>Cours 2024</th></tr>" \
            "<tr><td>X</td><td>1</td></tr></table>"
     assert dividendes._annees_vues(faux) == []
+
+
+def test_date_lit_les_deux_formats_des_deux_sources():
+    """L'oubli d'une forme rend une source entière muette.
+
+    sikafinance publie « 27/07/2026 », brvm.org publie « 4 septembre
+    2026 ». Faute de lire la seconde, `lire_dividendes` vidait la table de
+    toutes ses lignes puis la rejetait — en accusant les colonnes, qui
+    étaient pourtant reconnues.
+    """
+    assert dividendes._date("27/07/2026") == "2026-07-27"
+    assert dividendes._date("4 septembre 2026") == "2026-09-04"
+    assert dividendes._date("13 août 2026") == "2026-08-13"
+    assert dividendes._date("Lundi, 27 juillet, 2026") == "2026-07-27"
+    # Jamais une date inventée : un jour impossible reste vide.
+    assert dividendes._date("32 janvier 2026") == ""
+    assert dividendes._date("n'importe quoi") == ""
+
+
+def test_calendrier_officiel_lu_avec_son_exercice():
+    """La vraie mise en page de brvm.org, relevée par la sonde du 31/07/2026.
+
+    C'est la seule source à porter la date de détachement ET l'exercice
+    comptable : le backtest total-return répartit aujourd'hui le dividende
+    uniformément faute de savoir quand il tombe.
+    """
+    table = pd.DataFrame([
+        {"Emetteur": "NESTLE CI", "Exercice comptable": "2025",
+         "Date de paiement": "7 septembre 2026",
+         "Date ex-dividende": "4 septembre 2026",
+         "Montant du dividende net": "420 FCFA", "Avis": "Télécharger"},
+    ])
+    lu = dividendes.lire_dividendes(table.to_html(index=False))
+    ligne = lu.iloc[0]
+    assert ligne["nom"] == "NESTLE CI"
+    assert ligne["date_detachement"] == "2026-09-04"
+    assert ligne["date_paiement"] == "2026-09-07"
+    assert ligne["montant"] == 420.0
+    assert ligne["exercice"] == "2025"
+
+
+def test_empreinte_distingue_deux_contenus_et_pas_deux_habillages():
+    """Le verdict d'une piste tient à cette empreinte.
+
+    Comparer les octets fait passer pour différentes deux réponses qui ne
+    diffèrent que par un horodatage. Se fier à ce qu'un lecteur extrait
+    rend aveugle dès qu'il échoue — c'est ainsi que six pages toutes
+    différentes ont été déclarées identiques au premier passage.
+    """
+    une = "<table><tr><th>A</th></tr><tr><td>1</td></tr></table>"
+    deux = "<table><tr><th>A</th></tr><tr><td>2</td></tr></table>"
+    assert dividendes._empreinte(une) != dividendes._empreinte(deux)
+    # Même tableau, page habillée autrement : même empreinte.
+    habille = "<div class='x'>bruit</div>" + une + "<footer>2026</footer>"
+    assert dividendes._empreinte(habille) == dividendes._empreinte(une)

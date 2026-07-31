@@ -117,7 +117,12 @@ def _sonder_historique(args) -> int:
     l'environnement de développement. Ce journal est ce qui les tranche.
     """
     rapport = source_dividendes.sonder_historique()
-    reference = None
+    # UNE RÉFÉRENCE PAR PISTE, PAS UNE POUR TOUT LE JOURNAL. Au premier
+    # passage, les six pages de brvm.org servaient de référence aux appels
+    # sikafinance qui suivaient : ceux-ci étaient donc déclarés « apporte
+    # autre chose » alors qu'ils rendaient tous la même page, au dernier
+    # octet près. Comparer deux sites entre eux ne veut rien dire.
+    references: dict[str, str] = {}
     for entree in rapport:
         print(f"\n=== {entree['piste']} ===")
         print(f"  {entree['url']}")
@@ -138,13 +143,20 @@ def _sonder_historique(args) -> int:
             for ligne in entree.get("extrait", []):
                 print(f"    {ligne}")
         # Le verdict qui compte : cette page montre-t-elle autre chose que
-        # la première ? Une réponse 200 identique à la précédente n'apporte
+        # la première de SA piste ? Une réponse 200 identique n'apporte
         # rien, et c'est le piège d'un site qui ignore un paramètre inconnu
-        # au lieu de rendre une 404 — brvm.org le fait déjà sur les secteurs.
-        if reference is None:
-            reference = (tuple(exercices), entree.get("dates"))
-            print("  → page de référence")
-        elif (tuple(exercices), entree.get("dates")) == reference:
+        # au lieu de rendre une 404 — brvm.org le fait déjà sur les
+        # secteurs. L'empreinte porte sur les cellules des tableaux : se
+        # fier à ce qu'un lecteur extrait rend aveugle dès qu'il échoue, et
+        # c'est ainsi que six pages toutes différentes ont été déclarées
+        # identiques au premier passage.
+        empreinte = entree.get("empreinte")
+        piste = entree["piste"]
+        print(f"  empreinte du contenu : {empreinte}")
+        if piste not in references:
+            references[piste] = empreinte
+            print("  → page de référence de cette piste")
+        elif empreinte == references[piste]:
             print("  → IDENTIQUE à la référence : le paramètre est ignoré")
         else:
             print("  → APPORTE AUTRE CHOSE — piste à retenir")
