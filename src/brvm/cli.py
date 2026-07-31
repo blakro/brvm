@@ -6,6 +6,7 @@
     python -m brvm referentiel           met à jour ticker / nom / secteur
     python -m brvm sonder                un appel réel à l'API sikafinance
     python -m brvm sonder-dividendes     ce que rendent les trois sources
+    python -m brvm sonder-historique     comment remonter avant 2022
     python -m brvm rapatrier             historique sikafinance → archive
     python -m brvm dividendes            calendriers et historique → archive
     python -m brvm noter                 classe les valeurs
@@ -100,6 +101,56 @@ def _dividendes(args) -> int:
     print(f"\n{len(div)} détachements, {len(fonda)} mesures pluriannuelles "
           f"sur {div['ticker'].nunique() if not div.empty else 0} et "
           f"{fonda['ticker'].nunique() if not fonda.empty else 0} sociétés")
+    return 0
+
+
+def _sonder_historique(args) -> int:
+    """Quelles pistes mènent aux exercices anciens ? Journal seul, rien d'écrit.
+
+    L'archive porte quatre exercices (2022-2025), soit trois transitions
+    annuelles. C'est assez pour établir que le dividende persiste, pas pour
+    tester si son rendement prédit les cours : trois périodes disjointes ne
+    font pas un échantillon.
+
+    Les pistes de `PISTES_HISTORIQUE` sont des hypothèses, aucune n'a été
+    vérifiée — les trois hôtes sont refusés au CONNECT depuis
+    l'environnement de développement. Ce journal est ce qui les tranche.
+    """
+    rapport = source_dividendes.sonder_historique()
+    reference = None
+    for entree in rapport:
+        print(f"\n=== {entree['piste']} ===")
+        print(f"  {entree['url']}")
+        if "echec" in entree:
+            print(f"  ÉCHEC : {entree['echec']}")
+            continue
+        print(f"  HTTP {entree['code']}, {entree.get('octets', 0)} octets")
+        if not entree.get("tableaux"):
+            continue
+        print(f"  {entree['tableaux']} tableaux : {entree['dimensions']}")
+        for i, tete in enumerate(entree["entetes"]):
+            print(f"    [{i}] {tete}")
+        exercices = entree.get("exercices") or []
+        print(f"  exercices en colonnes : {exercices or 'aucun'}")
+        if "dividendes_lus" in entree:
+            print(f"  calendrier : {entree['dividendes_lus']} lignes, "
+                  f"{entree.get('dates', '—')}")
+            for ligne in entree.get("extrait", []):
+                print(f"    {ligne}")
+        # Le verdict qui compte : cette page montre-t-elle autre chose que
+        # la première ? Une réponse 200 identique à la précédente n'apporte
+        # rien, et c'est le piège d'un site qui ignore un paramètre inconnu
+        # au lieu de rendre une 404 — brvm.org le fait déjà sur les secteurs.
+        if reference is None:
+            reference = (tuple(exercices), entree.get("dates"))
+            print("  → page de référence")
+        elif (tuple(exercices), entree.get("dates")) == reference:
+            print("  → IDENTIQUE à la référence : le paramètre est ignoré")
+        else:
+            print("  → APPORTE AUTRE CHOSE — piste à retenir")
+
+    print("\nRien n'a été écrit. Les sélecteurs se corrigeront sur ce "
+          "journal, pas sur des suppositions.")
     return 0
 
 
@@ -677,6 +728,15 @@ def construire_analyseur() -> argparse.ArgumentParser:
     sonder_div.add_argument("--date", default=None,
                             help="séance pour abourse (AAAA-MM-JJ)")
     sonder_div.set_defaults(fonction=_sonder_dividendes)
+
+    sonder_histo = commandes.add_parser(
+        "sonder-historique",
+        help="quelles pistes mènent aux exercices de dividendes anciens",
+        description="Essaie les pistes de PISTES_HISTORIQUE et dit ce que "
+                    "chacune rend. N'écrit rien. L'archive s'arrête à quatre "
+                    "exercices ; c'est ce journal qui dira comment remonter.",
+    )
+    sonder_histo.set_defaults(fonction=_sonder_historique)
 
     div = commandes.add_parser(
         "dividendes",

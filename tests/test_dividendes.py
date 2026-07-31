@@ -193,3 +193,30 @@ if __name__ == "__main__":
             print(f"  ÉCHEC {nom}\n        {erreur}")
     print(f"\n{'tout passe' if not echecs else f'{echecs} échec(s)'}")
     sys.exit(1 if echecs else 0)
+
+
+# --------------------------------------------------------------------
+# La sonde des exercices anciens
+# --------------------------------------------------------------------
+
+def test_annees_vues_lit_les_exercices_du_temoin():
+    """Le verdict d'une piste tient à cette lecture, pas au poids de la page.
+
+    Un site qui ignore un paramètre inconnu répond 200 avec la page par
+    défaut — brvm.org le fait déjà sur les identifiants de secteur. Comparer
+    les octets ne verrait rien ; comparer les exercices affichés tranche.
+    """
+    assert dividendes._annees_vues(SIKA) == ["2022", "2023", "2024", "2025"]
+
+
+def test_annees_vues_ne_confond_pas_un_calendrier_avec_un_historique():
+    """Le calendrier de brvm.org porte des dates, pas des colonnes « Div.
+    AAAA » : aucun exercice à en tirer, et c'est la bonne réponse."""
+    assert dividendes._annees_vues(BRVM) == []
+
+
+def test_annees_vues_ignore_une_annee_hors_dividende():
+    """Une colonne « Cours 2024 » n'est pas un exercice de dividende."""
+    faux = "<table><tr><th>Nom</th><th>Cours 2024</th></tr>" \
+           "<tr><td>X</td><td>1</td></tr></table>"
+    assert dividendes._annees_vues(faux) == []

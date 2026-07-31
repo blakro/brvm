@@ -84,6 +84,17 @@ jobs:
         continue-on-error: true
         run: python -m brvm sonder-dividendes --date 2026-07-24
 
+      # L'archive s'arrête à quatre exercices (2022-2025) parce que c'est
+      # ce que la page de sikafinance affiche. Quatre exercices donnent
+      # trois transitions annuelles : de quoi établir que le dividende
+      # persiste, pas de quoi tester si son rendement prédit les cours.
+      # Cette sonde essaie les pistes vers les exercices anciens et dit
+      # laquelle existe — aucune n'est vérifiée, elles sont des hypothèses.
+      - name: Sonder les exercices anciens
+        if: inputs.sonde
+        continue-on-error: true
+        run: python -m brvm sonder-historique
+
       # Les dividendes se collectent avec le rapatriement : deux pages, pas
       # deux mille appels. Les sociétés non appariées à un ticker ne sont
       # pas écrites, elles sont listées dans le journal.

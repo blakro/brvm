@@ -44,6 +44,8 @@ a corrigé mes deux hypothèses sur l'API d'historique.
 
 from __future__ import annotations
 
+import time
+
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup
@@ -441,6 +443,113 @@ def sonder(date: str | None = None) -> dict[str, dict]:
         except SourceIllisible as erreur:
             entree["lu"] = f"illisible — {erreur}"
         rapport[source] = entree
+    return rapport
+
+
+# --- Sonde des exercices anciens ------------------------------------------
+#
+# LE PROBLÈME. `lire_historique` rend quatre exercices (2022-2025) parce que
+# c'est ce que la page de sikafinance affiche. Quatre exercices donnent trois
+# transitions annuelles : de quoi établir que le dividende persiste
+# (Spearman +0,83), pas de quoi tester si le RENDEMENT du dividende prédit
+# les cours — cela demanderait des périodes disjointes en nombre, et trois
+# n'en font pas un échantillon.
+#
+# CE QUI SUIT N'EST QU'UNE LISTE D'HYPOTHÈSES. Aucune n'a été vérifiée : les
+# trois hôtes sont refusés au CONNECT depuis l'environnement de
+# développement. C'est le journal de l'action GitHub qui dira laquelle
+# existe, et les sélecteurs se corrigeront sur ce qu'elle aura montré — pas
+# l'inverse.
+
+PISTES_HISTORIQUE = [
+    {
+        "nom": "brvm.org — calendrier paginé",
+        # La piste la plus prometteuse ET la plus utile : le calendrier
+        # officiel porte « Date ex-dividende » et « Montant du dividende
+        # net ». S'il remonte, on obtient de vraies dates de détachement,
+        # strictement mieux que l'exercice seul de sikafinance — le
+        # backtest total-return répartit aujourd'hui le dividende sur
+        # l'exercice faute de savoir quand il tombe.
+        "url": "https://www.brvm.org/fr/esv/paiement-de-dividendes?page={n}",
+        "parametres": [{"n": n} for n in range(0, 6)],
+    },
+    {
+        "nom": "sikafinance — paramètre d'exercice",
+        # Le tableau large est peut-être une vue sur quatre ans glissants.
+        # Trois orthographes du paramètre, parce qu'aucune n'est connue.
+        "url": "https://www.sikafinance.com/marches/dividendes?annee={a}",
+        "parametres": [{"a": a} for a in (2015, 2018, 2021)],
+    },
+    {
+        "nom": "sikafinance — autres orthographes du paramètre",
+        "url": "https://www.sikafinance.com/marches/dividendes?{cle}=2018",
+        "parametres": [{"cle": c} for c in ("year", "exercice", "periode")],
+    },
+]
+
+
+def _annees_vues(html: str) -> list[str]:
+    """Les exercices que porte réellement la page, lus dans les en-têtes.
+
+    C'est la seule mesure qui compte pour trancher une piste : une page qui
+    répond 200 avec les mêmes quatre années que la page par défaut n'a rien
+    apporté, quel que soit son poids en octets.
+    """
+    annees = set()
+    for table in tableaux(html):
+        for colonne in table.columns:
+            norme = _normaliser(colonne)
+            chiffres = "".join(c for c in norme if c.isdigit())
+            if len(chiffres) == 4 and (norme.startswith("div")
+                                       or norme.startswith("rend")):
+                annees.add(chiffres)
+    return sorted(annees)
+
+
+def sonder_historique() -> list[dict]:
+    """Essaie les pistes vers les exercices anciens. N'écrit rien, ne lève pas.
+
+    Rend une ligne par tentative : ce qu'on a demandé, ce qui est revenu, et
+    surtout les exercices que la page porte. Une piste ne vaut que si elle
+    montre des années que la page par défaut n'a pas.
+    """
+    conf = charger().get("ingestion", {})
+    entetes = {"User-Agent": conf.get("user_agent", "brvm/0.1")}
+    delai = int(conf.get("delai_secondes", 30))
+    pause = float(conf.get("delai_entre_requetes_s", 1.5))
+
+    rapport = []
+    for piste in PISTES_HISTORIQUE:
+        for parametres in piste["parametres"]:
+            url = piste["url"].format(**parametres)
+            entree = {"piste": piste["nom"], "url": url}
+            try:
+                reponse = requests.get(url, headers=entetes, timeout=delai)
+                entree["code"] = reponse.status_code
+                entree["octets"] = len(reponse.text)
+                if reponse.ok:
+                    trouves = tableaux(reponse.text)
+                    entree["tableaux"] = len(trouves)
+                    entree["dimensions"] = [t.shape for t in trouves]
+                    entree["entetes"] = [list(t.columns)[:14] for t in trouves]
+                    entree["exercices"] = _annees_vues(reponse.text)
+                    # Le calendrier ne porte pas de colonnes « Div. AAAA » :
+                    # pour lui, l'apport se mesure aux dates lues.
+                    try:
+                        lu = lire_dividendes(reponse.text)
+                        entree["dividendes_lus"] = len(lu)
+                        if not lu.empty and "date_detachement" in lu.columns:
+                            dates = sorted(d for d in lu["date_detachement"] if d)
+                            entree["dates"] = (
+                                f"{dates[0]} → {dates[-1]}" if dates else "aucune"
+                            )
+                            entree["extrait"] = lu.head(3).to_dict("records")
+                    except SourceIllisible as erreur:
+                        entree["dividendes_lus"] = f"illisible — {erreur}"
+            except Exception as erreur:  # noqa: BLE001
+                entree["echec"] = f"{type(erreur).__name__} — {erreur}"
+            rapport.append(entree)
+            time.sleep(pause)
     return rapport
 
 
