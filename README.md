@@ -6,7 +6,8 @@ analysés, avec un tableau de bord web comme point d'entrée.
 
 **112 725 lignes, 2 996 séances, du 2 janvier 2015 au 27 juillet 2026.**
 Ouverture, plus haut, plus bas, clôture et volumes pour chaque valeur et
-chaque séance, plus quatre exercices de dividendes sur 30 sociétés.
+chaque séance, plus **309 détachements de dividendes datés, onze
+exercices (2015-2025), 41 sociétés**.
 
 ## Ce que les données disent
 
@@ -32,6 +33,21 @@ correction du test multiple : le retournement à un mois sur l'ensemble du
 marché, IC +0,067 pour une erreur type de 0,019 sur 148 périodes
 disjointes (t = 3,6). Momentum, tendance, volatilité et liquidité
 sont indiscernables du bruit sur 11,5 ans.
+
+**Le rendement du dividende : on ne peut pas conclure, et c'est une
+réponse différente de « non ».** Le rendement connu au détachement,
+confronté à la performance du cours sur les douze mois suivants, donne un
+IC de **+0,074** — positif sur 7 saisons sur 10, mais avec une erreur type
+de 0,058 sur dix saisons disjointes, soit t = 1,3. Le seuil de détection
+de ce test est un IC de 0,117 : en deçà, il ne dit rien. Là où les
+facteurs de prix ont été réfutés sur 148 périodes, celui-ci n'a pas été
+testé, faute d'histoire. L'absence de preuve n'est pas une preuve
+d'absence.
+
+*(Un premier calcul confrontait le rendement de l'exercice N à l'année
+civile N+1 entière. C'était un regard en avant : le dividende de
+l'exercice N se détache au milieu de l'année N+1 et n'est pas connu en
+janvier. Le chiffre ci-dessus est celui du test corrigé.)*
 
 **Et ce seul effet est inexploitable.** Simulé à dix lignes et
 rééquilibrage mensuel, il rend +7,2 % l'an brut contre 5,4 % pour la
