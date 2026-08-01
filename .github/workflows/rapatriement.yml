@@ -161,12 +161,20 @@ jobs:
       - name: Écrire le calendrier dans le journal
         if: ${{ !inputs.sonde }}
         run: |
-          echo "--- DÉBUT DIVIDENDES CSV ---"
-          cat data/dividendes.csv
-          echo "--- FIN DIVIDENDES CSV ---"
-          echo "--- DÉBUT FONDAMENTAUX CSV ---"
-          cat data/fondamentaux.csv
-          echo "--- FIN FONDAMENTAUX CSV ---"
+          # COMPRESSÉ SUR UNE LIGNE, ET CE N'EST PAS DE LA COQUETTERIE.
+          # En clair, les deux fichiers font plus de cinq cents lignes de
+          # journal : les relire demande de deviner combien de lignes
+          # remonter, et une ligne manquée passe pour une donnée absente
+          # plutôt que pour une lecture tronquée. Une empreinte accompagne
+          # chaque blob pour que le versement se vérifie au lieu de se
+          # supposer.
+          for f in dividendes fondamentaux; do
+            echo "--- $f sha256 $(sha256sum "data/$f.csv" | cut -c1-16) \
+          lignes $(wc -l < "data/$f.csv") ---"
+            echo "--- $f base64 gzip ---"
+            gzip -9 -c "data/$f.csv" | base64 -w0
+            echo
+          done
 
       - name: Publier l'artefact
         if: ${{ !inputs.sonde }}
