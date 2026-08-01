@@ -24,6 +24,7 @@ os.environ.setdefault(
 )
 
 import pandas as pd  # noqa: E402
+import pytest  # noqa: E402
 
 from brvm import backtest, dividende  # noqa: E402
 
@@ -295,3 +296,100 @@ if __name__ == "__main__":
             print(f"  ÉCHEC {nom}\n        {erreur}")
     print(f"\n{'tout passe' if not echecs else f'{echecs} échec(s)'}")
     sys.exit(1 if echecs else 0)
+
+
+# --------------------------------------------------------------------
+# Le détachement daté
+# --------------------------------------------------------------------
+
+def _cours(prix_par_ticker, debut="2020-01-01"):
+    dates = pd.bdate_range(debut, periods=len(next(iter(prix_par_ticker.values()))))
+    lignes = []
+    for t, serie in prix_par_ticker.items():
+        for d, c in zip(dates, serie):
+            lignes.append({"date": d.strftime("%Y-%m-%d"), "ticker": t,
+                           "cloture": c, "volume_fcfa": 1e6})
+    return pd.DataFrame(lignes)
+
+
+def test_le_dividende_est_credite_le_jour_du_detachement():
+    """Et rapporté au cours de la VEILLE, pas à celui du jour.
+
+    Le cours du jour du détachement est déjà amputé du dividende :
+    diviser par lui surestimerait le rendement.
+    """
+    cours = _cours({"AAAA": [100, 100, 90, 90, 90]})
+    dates = sorted(cours["date"].unique())
+    div = pd.DataFrame([{"ticker": "AAAA", "date_detachement": dates[2],
+                         "montant": 10.0, "exercice": "2019"}])
+    table, couverts = dividende.detachements(cours, div)
+    # Crédité sur la séance du détachement, rapporté au cours de cette
+    # séance-là tel qu'il figure à l'index — 10/90.
+    assert table.loc[dates[2], "AAAA"] == pytest.approx(10 / 90)
+    assert (table.drop(index=dates[2])["AAAA"] == 0).all()
+    assert couverts == {("AAAA", "2019")}
+
+
+def test_un_rendement_impossible_ecarte_toute_l_ere_qui_le_precede():
+    """La coupure de 2018 : montants d'époque contre cours archivés.
+
+    CFAC verse 2 032 en 2017 puis 9,9 en 2018 ; la SGBC 5 837 puis 585.
+    Reconstituer un facteur par société à partir du saut reviendrait à
+    déduire la donnée de l'anomalie qu'elle explique. On refuse.
+    """
+    cours = _cours({"AAAA": [100] * 12})
+    dates = sorted(cours["date"].unique())
+    div = pd.DataFrame([
+        {"ticker": "AAAA", "date_detachement": dates[1], "montant": 200.0,
+         "exercice": "2018"},   # 200 % — impossible
+        {"ticker": "AAAA", "date_detachement": dates[4], "montant": 5.0,
+         "exercice": "2019"},   # 5 % — plausible, mais AVANT la frontière ?
+        {"ticker": "AAAA", "date_detachement": dates[8], "montant": 8.0,
+         "exercice": "2020"},   # 8 % — après, retenu
+    ])
+    table, couverts = dividende.detachements(cours, div)
+    assert table.loc[dates[1], "AAAA"] == 0      # écarté : impossible
+    assert table.loc[dates[4], "AAAA"] == pytest.approx(0.05)  # après la frontière
+    assert table.loc[dates[8], "AAAA"] == pytest.approx(0.08)
+    assert ("AAAA", "2018") not in couverts
+
+
+def test_une_societe_saine_ne_perd_rien():
+    cours = _cours({"AAAA": [100] * 6})
+    dates = sorted(cours["date"].unique())
+    div = pd.DataFrame([{"ticker": "AAAA", "date_detachement": d,
+                         "montant": 7.0, "exercice": "2020"}
+                        for d in (dates[1], dates[3])])
+    table, _ = dividende.detachements(cours, div)
+    assert (table["AAAA"] > 0).sum() == 2
+
+
+def test_pas_de_double_compte_entre_calendrier_et_fondamentaux():
+    """Un exercice connu des deux côtés serait compté deux fois, et le
+    rendement total gonflerait sans que rien ne le dise."""
+    cours = _cours({"AAAA": [100] * 10})
+    dates = sorted(cours["date"].unique())
+    annee = dates[0][:4]
+    div = pd.DataFrame([{"ticker": "AAAA", "date_detachement": dates[3],
+                         "montant": 8.0, "exercice": annee}])
+    fonda = pd.DataFrame([{"ticker": "AAAA", "date": f"{annee}-12-31",
+                           "indicateur": "rendement", "valeur": 8.0}])
+    total = dividende.accroissement(cours, fonda, div)["AAAA"].sum()
+    assert total == pytest.approx(0.08), "l'exercice a été compté deux fois"
+    # Sans calendrier, le repli s'applique et rend le même total.
+    etale = dividende.accroissement(cours, fonda)["AAAA"].sum()
+    assert etale == pytest.approx(0.08)
+
+
+def test_la_couverture_se_compte_en_exercices_pas_en_seances():
+    """Depuis le détachement daté, le dividende ne touche qu'une séance
+    par an. Compter les séances créditées ferait chuter la couverture
+    alors qu'on en sait plus — la mesure punirait le progrès."""
+    cours = _cours({"AAAA": [100] * 260})
+    dates = sorted(cours["date"].unique())
+    annee = dates[0][:4]
+    div = pd.DataFrame([{"ticker": "AAAA", "date_detachement": dates[100],
+                         "montant": 8.0, "exercice": annee}])
+    c = dividende.couverture(cours, pd.DataFrame(), div)
+    assert c["exercices"] == [annee]
+    assert c["part"] > 0.9, "la couverture a été comptée en séances créditées"

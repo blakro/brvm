@@ -57,6 +57,17 @@ AVERTISSEMENTS_AVEC_DIVIDENDES = (
     "frais et impact estimés, non relevés",
 )
 
+# Le jeu servi quand le calendrier daté couvre la période. Le deuxième
+# avertissement disparaît alors — non par optimisme, mais parce qu'il
+# décrivait une approximation qui n'a plus lieu d'être. En garder la trace
+# après coup serait aussi trompeur que l'avoir tue avant.
+AVERTISSEMENTS_DATES = (
+    "univers restreint aux sociétés cotées aujourd'hui (biais du survivant)",
+    "dividende détaché à sa date réelle quand le calendrier la donne, "
+    "réparti sur l'exercice sinon",
+    "frais et impact estimés, non relevés",
+)
+
 COLONNES = ["date_decision", "date_entree", "date_sortie", "positions",
             "rendement", "dividende", "rotation", "cout", "valeur",
             "valeur_reference"]
@@ -87,6 +98,7 @@ def backtester(
     referentiel: pd.DataFrame | None = None,
     reglages: dict | None = None,
     fondamentaux: pd.DataFrame | None = None,
+    dividendes: pd.DataFrame | None = None,
 ) -> dict:
     """Rejoue le classement dans le temps. Renvoie mesures et journal.
 
@@ -107,15 +119,22 @@ def backtester(
     dates = list(prix.index)
     # Le dividende vaut 7 à 10 % l'an sur ce marché quand le cours en rend
     # 2,8 : l'ignorer ne biaise pas le résultat à la marge, il en change
-    # l'ordre de grandeur. `accroissement` le répartit sur les séances de
-    # son exercice — voir `dividende` pour ce que cette convention
-    # approxime et ce qu'elle ne peut pas rendre.
-    accru = dividende.accroissement(cours, fondamentaux) \
-        if fondamentaux is not None and not fondamentaux.empty else None
-    couverture = dividende.couverture(cours, fondamentaux) \
+    # l'ordre de grandeur. `accroissement` le crédite à sa VRAIE DATE de
+    # détachement quand le calendrier la donne, et le répartit sur
+    # l'exercice sinon — voir `dividende` pour ce que chaque convention
+    # rend et ce qu'elle ne peut pas rendre.
+    a_du_dividende = (
+        (fondamentaux is not None and not fondamentaux.empty)
+        or (dividendes is not None and not dividendes.empty)
+    )
+    accru = dividende.accroissement(cours, fondamentaux, dividendes) \
+        if a_du_dividende else None
+    couverture = dividende.couverture(cours, fondamentaux, dividendes) \
         if accru is not None else None
-    avertissements = (AVERTISSEMENTS_AVEC_DIVIDENDES if accru is not None
-                      else AVERTISSEMENTS)
+    date = (AVERTISSEMENTS_DATES
+            if dividendes is not None and not dividendes.empty else None)
+    avertissements = (AVERTISSEMENTS if accru is None
+                      else date or AVERTISSEMENTS_AVEC_DIVIDENDES)
     besoin = int(conf.get("analyse", {}).get("fenetre_momentum", 250)) + 1
 
     vide = {

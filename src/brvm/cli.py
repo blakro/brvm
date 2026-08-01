@@ -431,7 +431,8 @@ def _backtester(args) -> int:
         return 1
 
     resultat = backtest.backtester(cours, db.lire("referentiel"),
-                                   fondamentaux=db.lire("fondamentaux"))
+                                   fondamentaux=db.lire("fondamentaux"),
+                                   dividendes=db.lire("dividendes"))
     print(backtest.expliquer(resultat))
     if args.journal and not resultat["etapes"].empty:
         print("\nJournal des rééquilibrages :")

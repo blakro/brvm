@@ -1458,7 +1458,7 @@ with onglets[4]:
         {"analyse": DEFAUTS["analyse"], "ponderations": DEFAUTS["ponderations"],
          "backtest": {**DEFAUTS["backtest"], "positions": positions,
                       "frais_pourcent": frais, "impact_pourcent": impact}},
-        fondamentaux=fondamentaux,
+        fondamentaux=fondamentaux, dividendes=dividendes,
     )
 
     if resultat["etapes"].empty:
