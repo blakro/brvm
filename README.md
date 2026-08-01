@@ -7,7 +7,10 @@ analysés, avec un tableau de bord web comme point d'entrée.
 **112 725 lignes, 2 996 séances, du 2 janvier 2015 au 27 juillet 2026.**
 Ouverture, plus haut, plus bas, clôture et volumes pour chaque valeur et
 chaque séance, plus **309 détachements de dividendes datés, onze
-exercices (2015-2025), 41 sociétés**.
+exercices (2015-2025), 41 sociétés** — dont **254 exploitables** : les
+montants d'avant la réduction du nominal ne sont pas sur la même
+échelle que les cours archivés, et sont refusés plutôt que corrigés
+(voir `dividende.detachements`).
 
 ## Ce que les données disent
 
