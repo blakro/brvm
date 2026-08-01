@@ -148,6 +148,26 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
+      # LE MÊME FILET QUE POUR L'INGESTION QUOTIDIENNE, ET IL SERT ICI
+      # DAVANTAGE. L'artefact est hébergé hors de GitHub, sur un stockage
+      # que tous les environnements ne peuvent pas atteindre — celui d'où
+      # ce projet est développé ne le peut pas. `cours.csv` est trop gros
+      # pour tenir dans un journal, mais le calendrier des dividendes fait
+      # quelques centaines de lignes : l'écrire ici permet de le verser
+      # depuis n'importe quelle session capable de lire ce journal.
+      #
+      # Le fichier ENTIER, pas l'incrément : le rapatriement réécrit la
+      # table, et un diff ne dirait pas ce qui a disparu.
+      - name: Écrire le calendrier dans le journal
+        if: ${{ !inputs.sonde }}
+        run: |
+          echo "--- DÉBUT DIVIDENDES CSV ---"
+          cat data/dividendes.csv
+          echo "--- FIN DIVIDENDES CSV ---"
+          echo "--- DÉBUT FONDAMENTAUX CSV ---"
+          cat data/fondamentaux.csv
+          echo "--- FIN FONDAMENTAUX CSV ---"
+
       - name: Publier l'artefact
         if: ${{ !inputs.sonde }}
         uses: actions/upload-artifact@v4
