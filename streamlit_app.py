@@ -1502,9 +1502,15 @@ with onglets[4]:
         couverture = resultat.get("couverture_dividende")
         if couverture and couverture["part"] > 0:
             st.info(
+                # « des séances » était faux depuis que la couverture se
+                # compte par couple : en 2015, trois sociétés sur
+                # trente-cinq ont un dividende retenu, et annoncer une
+                # part « des séances » laissait croire que toute la cote
+                # était couverte cette année-là.
                 "**Dividende compté** sur "
                 f"{pedagogie.pourcentage(couverture['part'], signe=False)} "
-                f"des séances (exercices {', '.join(couverture['exercices'])}). "
+                "des couples valeur × séance (exercices "
+                f"{', '.join(couverture['exercices'])}). "
                 f"Il apporte {pedagogie.pourcentage(resultat['apport_dividende'])} "
                 "au total : sans lui, la stratégie rendrait "
                 f"{pedagogie.pourcentage(resultat['rendement_prix_annualise'])} "
