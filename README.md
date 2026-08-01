@@ -37,17 +37,21 @@ sont indiscernables du bruit sur 11,5 ans.
 **Le rendement du dividende : on ne peut pas conclure, et c'est une
 réponse différente de « non ».** Le rendement connu au détachement,
 confronté à la performance du cours sur les douze mois suivants, donne un
-IC de **+0,074** — positif sur 7 saisons sur 10, mais avec une erreur type
-de 0,058 sur dix saisons disjointes, soit t = 1,3. Le seuil de détection
-de ce test est un IC de 0,117 : en deçà, il ne dit rien. Là où les
+IC de **+0,086** — positif sur 6 saisons sur 9, mais avec une erreur type
+de 0,085 sur neuf saisons disjointes, soit t = 1,0. Le seuil de détection
+de ce test est un IC de 0,169 : en deçà, il ne dit rien. Là où les
 facteurs de prix ont été réfutés sur 148 périodes, celui-ci n'a pas été
 testé, faute d'histoire. L'absence de preuve n'est pas une preuve
 d'absence.
 
-*(Un premier calcul confrontait le rendement de l'exercice N à l'année
+*(Deux corrections successives. Un premier calcul confrontait le rendement de l'exercice N à l'année
 civile N+1 entière. C'était un regard en avant : le dividende de
 l'exercice N se détache au milieu de l'année N+1 et n'est pas connu en
-janvier. Le chiffre ci-dessus est celui du test corrigé.)*
+janvier. Un second tournait avant le garde-fou d'échelle et laissait
+entrer les saisons 2016-2017, dont les rendements implicites étaient
+impossibles — voir `dividende.detachements`. Le chiffre ci-dessus est
+celui du test purgé des deux défauts ; il porte sur neuf saisons au lieu
+de dix, et sa puissance en souffre.)*
 
 **Et ce seul effet est inexploitable.** Simulé à dix lignes et
 rééquilibrage mensuel, il rend +7,2 % l'an brut contre 5,4 % pour la

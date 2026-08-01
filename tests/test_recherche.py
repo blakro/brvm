@@ -196,3 +196,90 @@ if __name__ == "__main__":
             print(f"  ÉCHEC {nom}\n        {erreur}")
     print(f"\n{'tout passe' if not echecs else f'{echecs} échec(s)'}")
     sys.exit(1 if echecs else 0)
+
+
+# --------------------------------------------------------------------
+# Le rendement du dividende comme facteur transversal
+# --------------------------------------------------------------------
+
+def _marche(n_societes=12, n_seances=800):
+    """Un marché jouet. Chaque société suit sa propre pente : des cours
+    strictement plats rendraient la corrélation indéfinie, ce qui teste
+    autre chose que ce qu'on veut."""
+    dates = pd.bdate_range("2020-01-01", periods=n_seances)
+    lignes = []
+    for i in range(n_societes):
+        for j, d in enumerate(dates):
+            lignes.append({"date": d.strftime("%Y-%m-%d"),
+                           "ticker": f"T{i:02d}",
+                           "cloture": 100.0 * (1 + (i - 6) * 0.0002) ** j,
+                           "volume_fcfa": 1e6})
+    return pd.DataFrame(lignes)
+
+
+def test_rendement_transversal_ne_compte_que_les_societes_qui_detachent():
+    """Le piège de pandas 3 : `.stack()` ne supprime plus les valeurs
+    manquantes, et toutes les sociétés de la cote entraient — l'IC se
+    calculait alors sur des rendements inexistants, sans rien signaler."""
+    cours = _marche(n_societes=12)
+    dates = sorted(cours["date"].unique())
+    # Dix sociétés sur douze détachent — au-dessus du seuil de saison,
+    # mais deux doivent rester hors du calcul.
+    div = pd.DataFrame([
+        {"ticker": f"T{i:02d}", "date_detachement": dates[10],
+         "montant": 5.0 + i, "exercice": dates[0][:4]}
+        for i in range(10)
+    ])
+    t = recherche.rendement_transversal(cours, div)
+    assert not t.empty
+    assert (t["societes"] == 10).all(), \
+        "des sociétés sans dividende ont été comptées"
+
+
+def test_rendement_transversal_refuse_une_saison_trop_maigre():
+    """Sur cinq valeurs, une seule inversion fait changer l'IC de signe."""
+    cours = _marche(n_societes=12)
+    dates = sorted(cours["date"].unique())
+    div = pd.DataFrame([
+        {"ticker": f"T{i:02d}", "date_detachement": dates[10],
+         "montant": 5.0, "exercice": dates[0][:4]}
+        for i in range(recherche.SOCIETES_MINIMUM_SAISON - 1)
+    ])
+    assert recherche.rendement_transversal(cours, div).empty
+
+
+def test_rendement_transversal_ne_regarde_que_l_apres():
+    """Le rendement est daté de son détachement et ne prédit que la
+    suite : le dividende de l'exercice N n'est pas connu en janvier N+1."""
+    cours = _marche(n_societes=12, n_seances=400)
+    dates = sorted(cours["date"].unique())
+    # Un détachement à cinquante séances de la fin : la fenêtre de douze
+    # mois ne tient pas, la saison est écartée plutôt qu'amputée.
+    div = pd.DataFrame([
+        {"ticker": f"T{i:02d}", "date_detachement": dates[-50],
+         "montant": 5.0, "exercice": "2021"} for i in range(10)
+    ])
+    assert recherche.rendement_transversal(cours, div).empty
+
+
+def test_rendement_transversal_sans_dividende_rend_un_tableau_vide():
+    cours = _marche()
+    vide = recherche.rendement_transversal(cours, pd.DataFrame())
+    assert vide.empty and list(vide.columns) == ["saison", "societes", "ic"]
+
+
+def test_une_saison_sans_variation_ne_rend_pas_un_ic_indefini():
+    """Tous les cours identiques : la corrélation n'a pas de sens. La
+    saison est retirée, pas rendue à NaN — un NaN contaminerait la
+    moyenne de l'appelant au lieu d'en retirer une observation."""
+    dates = pd.bdate_range("2020-01-01", periods=800)
+    plat = pd.DataFrame([
+        {"date": d.strftime("%Y-%m-%d"), "ticker": f"T{i:02d}",
+         "cloture": 100.0, "volume_fcfa": 1e6}
+        for i in range(12) for d in dates])
+    jours = sorted(plat["date"].unique())
+    div = pd.DataFrame([
+        {"ticker": f"T{i:02d}", "date_detachement": jours[10],
+         "montant": 5.0 + i, "exercice": jours[0][:4]} for i in range(10)])
+    t = recherche.rendement_transversal(plat, div)
+    assert t.empty or t["ic"].notna().all()

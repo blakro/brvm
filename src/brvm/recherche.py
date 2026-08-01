@@ -369,3 +369,84 @@ def expliquer(table: pd.DataFrame, retour: pd.DataFrame | None = None) -> str:
                 f"  {r['ticker']:<8} demi-vie {r['demi_vie']:>6.0f} séances, "
                 f"équilibre {r['équilibre']:>10,.0f} FCFA".replace(",", " "))
     return "\n".join(lignes)
+
+# Nombre minimal de sociétés pour qu'une saison compte. En deçà, un IC
+# transversal se calcule encore mais ne mesure plus rien : sur cinq
+# valeurs, une seule inversion le fait changer de signe.
+SOCIETES_MINIMUM_SAISON = 8
+
+
+def rendement_transversal(cours: pd.DataFrame, dividendes: pd.DataFrame,
+                          jours: int = 365) -> pd.DataFrame:
+    """Le rendement du dividende prédit-il le cours des douze mois suivants ?
+
+    LA QUESTION QUI A MOTIVÉ LA COLLECTE DE ONZE EXERCICES. Aucun facteur
+    de prix ne bat le hasard sur cette place ; le dividende est la seule
+    piste restée ouverte, et avec quatre exercices elle n'était pas
+    testable — trois transitions annuelles ne font pas un échantillon.
+
+    DEUX PIÈGES, FERMÉS ICI PARCE QU'ILS SE SONT REFERMÉS SUR MOI.
+
+    1. LE REGARD EN AVANT. Le dividende de l'exercice N se détache au
+       milieu de l'année N+1 : il n'est pas connu en janvier. Un premier
+       calcul confrontait le rendement de l'exercice N à l'année civile
+       N+1 ENTIÈRE, donc à des mois déjà écoulés quand l'information
+       paraît. Ici chaque rendement est daté de SON détachement et ne
+       prédit que les douze mois qui le suivent.
+
+    2. L'ÉCHELLE D'AVANT LA RÉDUCTION DU NOMINAL. Les montants publiés
+       avant 2018 ne sont pas comparables aux cours archivés ; les
+       rendements implicites y atteignent 383 %. Un second calcul les
+       laissait entrer. `dividende.detachements` les écarte — c'est lui
+       qui est appelé ici, pas le calendrier brut.
+
+    Rend une ligne par saison : le nombre de sociétés et l'IC de Spearman.
+    L'agrégation et son incertitude restent à l'appelant, qui doit compter
+    les saisons comme périodes disjointes — elles le sont, contrairement
+    aux dates d'un historique quotidien.
+    """
+    prix = features.serie(cours)
+    table, _ = dividende.detachements(cours, dividendes)
+    if prix.empty or (table == 0).all().all():
+        return pd.DataFrame(columns=["saison", "societes", "ic"])
+
+    # `.stack()` ne supprime PLUS les valeurs manquantes depuis pandas 3 :
+    # sans le `dropna`, toutes les cellules nulles entraient et chaque
+    # saison comptait les 47 sociétés de la cote au lieu des trente qui
+    # détachent. Le symptôme était un IC calculé sur des rendements
+    # inexistants, pas une erreur visible.
+    empile = table[table > 0].stack().dropna()
+    if empile.empty:
+        return pd.DataFrame(columns=["saison", "societes", "ic"])
+    recus = empile.rename("rendement").reset_index()
+    recus.columns = ["detachement", "ticker", "rendement"]
+    recus["saison"] = recus["detachement"].str[:4]
+
+    lignes = []
+    for saison, bloc in recus.groupby("saison"):
+        # Une observation par société : la somme des acomptes de la
+        # saison, datée du dernier détachement — c'est là qu'on saurait.
+        par = bloc.groupby("ticker").agg(rdt=("rendement", "sum"),
+                                         fin=("detachement", "max"))
+        scores, perfs = [], []
+        for ticker, ligne in par.iterrows():
+            fin = pd.Timestamp(ligne["fin"]) + pd.Timedelta(days=jours)
+            fenetre = prix[ticker].loc[ligne["fin"]:fin.strftime("%Y-%m-%d")]
+            fenetre = fenetre.dropna()
+            if len(fenetre) < 100 or fenetre.iloc[0] <= 0:
+                continue
+            scores.append(ligne["rdt"])
+            perfs.append(fenetre.iloc[-1] / fenetre.iloc[0] - 1)
+        if len(scores) < SOCIETES_MINIMUM_SAISON:
+            continue
+        ic = pd.Series(scores).corr(pd.Series(perfs), method="spearman")
+        # Un IC indéfini n'est pas une mesure nulle : il arrive quand tous
+        # les rendements — ou toutes les performances — sont identiques, et
+        # la corrélation n'a alors pas de sens. Le laisser passer le ferait
+        # entrer dans la moyenne de l'appelant sous forme de NaN, qui
+        # contaminerait le résultat entier au lieu de retirer une saison.
+        if pd.isna(ic):
+            continue
+        lignes.append({"saison": saison, "societes": len(scores),
+                       "ic": float(ic)})
+    return pd.DataFrame(lignes)
