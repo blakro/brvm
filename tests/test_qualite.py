@@ -174,3 +174,63 @@ def test_effacer_cours_sans_cle_ne_fait_rien(tmp_path):
     db.enregistrer(serie([100, 101, 102]), "cours", base)
     assert db.effacer_cours(pd.DataFrame(), base) == 0
     assert len(db.lire("cours", base)) == 3
+
+
+# --------------------------------------------------------------------
+# Le désaccord entre les deux sources de dividendes
+# --------------------------------------------------------------------
+
+def test_desaccords_signale_le_facteur_deux():
+    """Le cas réel : brvm.org annonce 684 pour BOAC 2023, sikafinance 342.
+
+    Un facteur aussi rond désigne une convention qui diffère — montant
+    total contre acompte, brut contre net — pas une faute de saisie.
+    """
+    div = pd.DataFrame([
+        {"ticker": "BOAC", "date_detachement": "2024-04-25",
+         "montant": 684.0, "exercice": 2023},
+    ])
+    fonda = pd.DataFrame([
+        {"ticker": "BOAC", "date": "2023-12-31",
+         "indicateur": "dividende", "valeur": 342.0},
+    ])
+    e = qualite.desaccords(div, fonda)
+    assert len(e) == 1
+    assert e.iloc[0]["ecart"] == pytest.approx(1.0)
+
+
+def test_desaccords_additionne_les_acomptes_avant_de_comparer():
+    """Deux versements dans l'exercice contre un total annoncé : c'est le
+    versement de l'exercice qui se compare, pas chaque ligne isolée."""
+    div = pd.DataFrame([
+        {"ticker": "AAAA", "date_detachement": "2024-04-25",
+         "montant": 60.0, "exercice": 2023},
+        {"ticker": "AAAA", "date_detachement": "2024-10-25",
+         "montant": 40.0, "exercice": 2023},
+    ])
+    fonda = pd.DataFrame([{"ticker": "AAAA", "date": "2023-12-31",
+                           "indicateur": "dividende", "valeur": 100.0}])
+    assert qualite.desaccords(div, fonda).empty
+
+
+def test_desaccords_tolere_un_arrondi():
+    div = pd.DataFrame([{"ticker": "AAAA", "date_detachement": "2024-04-25",
+                         "montant": 101.0, "exercice": 2023}])
+    fonda = pd.DataFrame([{"ticker": "AAAA", "date": "2023-12-31",
+                           "indicateur": "dividende", "valeur": 100.0}])
+    assert qualite.desaccords(div, fonda).empty
+
+
+def test_desaccords_ignore_ce_qu_une_seule_source_connait():
+    """Un exercice absent d'un côté n'est pas un désaccord : c'est une
+    absence, et la signaler noierait les vraies divergences."""
+    div = pd.DataFrame([{"ticker": "AAAA", "date_detachement": "2018-04-25",
+                         "montant": 900.0, "exercice": 2017}])
+    fonda = pd.DataFrame([{"ticker": "AAAA", "date": "2023-12-31",
+                           "indicateur": "dividende", "valeur": 100.0}])
+    assert qualite.desaccords(div, fonda).empty
+
+
+def test_desaccords_sans_source_rend_un_tableau_aux_bonnes_colonnes():
+    vide = qualite.desaccords(pd.DataFrame(), pd.DataFrame())
+    assert vide.empty and list(vide.columns) == qualite.COLONNES_SOURCES

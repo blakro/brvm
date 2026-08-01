@@ -123,7 +123,7 @@ def _sonder_historique(args) -> int:
     # sikafinance qui suivaient : ceux-ci étaient donc déclarés « apporte
     # autre chose » alors qu'ils rendaient tous la même page, au dernier
     # octet près. Comparer deux sites entre eux ne veut rien dire.
-    references: dict[str, str] = {}
+    references: dict[str, tuple[dict, str | None]] = {}
     for entree in rapport:
         print(f"\n=== {entree['piste']} ===")
         print(f"  {entree['url']}")
@@ -154,16 +154,29 @@ def _sonder_historique(args) -> int:
         # fier à ce qu'un lecteur extrait rend aveugle dès qu'il échoue, et
         # c'est ainsi que six pages toutes différentes ont été déclarées
         # identiques au premier passage.
+        # DEUX COMPARAISONS, PAS UNE. Ne se comparer qu'à la première page
+        # de la piste était littéralement vrai et pratiquement inutile :
+        # les pages 50, 51 et 52 du calendrier avaient la MÊME empreinte
+        # entre elles, et toutes les trois ont été annoncées « apporte
+        # autre chose » parce qu'elles différaient de la page 40. Le fait
+        # qui compte — la pagination s'est épuisée — n'était lisible que
+        # dans les données brutes.
         empreinte = entree.get("empreinte")
         piste = entree["piste"]
+        vues, precedente = references.setdefault(piste, ({}, None))
         print(f"  empreinte du contenu : {empreinte}")
-        if piste not in references:
-            references[piste] = empreinte
+        if precedente is None:
             print("  → page de référence de cette piste")
-        elif empreinte == references[piste]:
-            print("  → IDENTIQUE à la référence : le paramètre est ignoré")
+        elif empreinte == precedente:
+            print("  → IDENTIQUE À LA PRÉCÉDENTE : la source se répète, "
+                  "le parcours n'avance plus")
+        elif empreinte in vues:
+            print(f"  → déjà vue plus haut ({vues[empreinte]}) : "
+                  "la source boucle")
         else:
-            print("  → APPORTE AUTRE CHOSE — piste à retenir")
+            print("  → contenu nouveau")
+        vues.setdefault(empreinte, entree["url"])
+        references[piste] = (vues, empreinte)
 
     print("\nRien n'a été écrit. Les sélecteurs se corrigeront sur ce "
           "journal, pas sur des suppositions.")
@@ -560,6 +573,34 @@ def _veille(args) -> int:
     return 0
 
 
+def _desaccords() -> None:
+    """Ce sur quoi les deux sources de dividendes ne s'accordent pas.
+
+    Signalé, jamais tranché : un facteur 2 exact désigne une convention
+    qui diffère, pas une faute de saisie, et préférer une source sans
+    savoir reviendrait à choisir pour la commodité.
+    """
+    ecarts = qualite.desaccords(db.lire("dividendes"), db.lire("fondamentaux"))
+    if ecarts.empty:
+        print("\nDividendes : les deux sources s'accordent.")
+        return
+    print(f"\n{len(ecarts)} couples (société, exercice) où brvm.org et "
+          f"sikafinance divergent de plus de "
+          f"{qualite.ECART_SOURCES:.0%} :\n")
+    for ligne in ecarts.head(12).itertuples(index=False):
+        print(f"  {ligne.ticker:<6} {ligne.exercice}  "
+              f"calendrier {ligne.calendrier:>9.2f}  "
+              f"sikafinance {ligne.sikafinance:>9.2f}  "
+              f"écart {ligne.ecart:>6.0%}")
+    if len(ecarts) > 12:
+        print(f"  … et {len(ecarts) - 12} autres")
+    print("\nAucune des deux n'est corrigée : un facteur 2 exact désigne "
+          "une convention\nqui diffère — montant total contre acompte, brut "
+          "contre net — pas une faute\nde saisie. La chute du cours au "
+          "détachement ne départage pas non plus, la\nlimite de ±7,5 % "
+          "empêchant l'ajustement de tenir en une séance.")
+
+
 def _qualite(args) -> int:
     """Signale — et sur demande retire — les séances fantômes.
 
@@ -586,6 +627,7 @@ def _qualite(args) -> int:
     print(f"{len(archive)} lignes contrôlées ← {chemin}")
     if suspects.empty:
         print("aucune séance fantôme.")
+        _desaccords()
         return 0
 
     print(f"\n{len(suspects)} séances fantômes — cours valant un multiple "
@@ -595,6 +637,8 @@ def _qualite(args) -> int:
                              for f in sorted(set(lot["facteur"])))
         print(f"  {ticker:<6} {len(lot):>3} lignes  {facteurs}  "
               f"{lot['date'].min()} → {lot['date'].max()}")
+
+    _desaccords()
 
     if not args.retirer:
         print("\nRien n'a été modifié. « brvm qualite --retirer » les efface "

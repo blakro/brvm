@@ -152,7 +152,7 @@ python -m brvm importer-fondamentaux fichier.csv
 python -m brvm exporter        # base → CSV versionnés
 python -m brvm importer        # CSV versionnés → base
 python -m brvm veille          # l'archive s'enrichit-elle encore ?
-python -m brvm qualite         # séances fantômes (--retirer pour les effacer)
+python -m brvm qualite         # séances fantômes et désaccords entre sources
 python -m brvm etat            # ce que contient la base
 ```
 
@@ -178,6 +178,21 @@ dividende (174 alertes entre mai et août), la limite ne relie pas deux
 séances séparées par un mois sans échange (34 alertes), et une division
 du nominal la franchit par construction. Un contrôle qui crie sur des
 données justes s'apprend à s'ignorer.
+
+### Les deux sources ne disent pas la même chose
+
+`qualite` compare aussi le calendrier de brvm.org au tableau de
+sikafinance sur la centaine de couples (société, exercice) qu'ils
+partagent. **43 divergent de plus de 10 %**, et plusieurs d'un facteur 2
+exact — brvm.org annonce 684 pour BOA Côte d'Ivoire en 2023, sikafinance
+342.
+
+Aucune des deux n'est corrigée. Un facteur aussi rond désigne une
+convention qui diffère — montant total contre acompte, brut contre net —
+pas une faute de saisie ; et la chute du cours au détachement ne
+départage pas, la limite de ±7,5 % empêchant un dividende de 9 % de
+s'ajuster en une séance. Choisir sans savoir reviendrait à préférer une
+source pour la commodité.
 
 `--retirer` écrit l'archive CSV **et** efface les lignes de la base :
 `importer` étant un INSERT OR REPLACE, nettoyer le seul CSV les laisserait

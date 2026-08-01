@@ -117,3 +117,68 @@ def retirer(cours: pd.DataFrame, suspects: pd.DataFrame) -> pd.DataFrame:
     cle = pd.MultiIndex.from_frame(cours[["date", "ticker"]])
     a_retirer = pd.MultiIndex.from_frame(suspects[["date", "ticker"]])
     return cours[~cle.isin(a_retirer)].copy()
+
+
+# Au-delà, les deux sources ne décrivent pas le même versement. 10 %
+# laisse passer les arrondis et les acomptes comptés d'un côté seulement ;
+# un facteur 2 ne passe pas.
+ECART_SOURCES = 0.10
+
+COLONNES_SOURCES = ["ticker", "exercice", "calendrier", "sikafinance", "ecart"]
+
+
+def desaccords(dividendes: pd.DataFrame,
+               fondamentaux: pd.DataFrame,
+               tolerance: float = ECART_SOURCES) -> pd.DataFrame:
+    """Où le calendrier de brvm.org et le tableau de sikafinance divergent.
+
+    POURQUOI CE CONTRÔLE EXISTE. Jusqu'ici, aucun détachement n'avait été
+    vérifié contre une source tierce : seule la cohérence interne l'était
+    — un rendement médian de 7,8 % est plausible, ce qui ne prouve rien
+    sur une ligne particulière. Or les deux sources se recouvrent sur une
+    centaine de couples (société, exercice), et se comparer coûte deux
+    jointures.
+
+    CE QUE LE CONTRÔLE NE FAIT PAS : trancher. Sur l'archive du
+    01/08/2026, quinze couples divergent de plus de 25 %, et plusieurs
+    d'un FACTEUR 2 EXACT — les Bank of Africa et la SIB, où brvm.org
+    annonce 684 quand sikafinance annonce 342. Un facteur aussi rond
+    désigne une convention qui diffère (montant total contre acompte,
+    brut contre net), pas une faute de saisie. La chute du cours au
+    détachement ne départage pas non plus : elle vaut 3,6 % en moyenne
+    quand le dividende en vaut 9,3, la limite de ±7,5 % par séance
+    empêchant l'ajustement de tenir en un jour.
+
+    Choisir sans savoir reviendrait à préférer une source pour la
+    commodité. Le désaccord est donc signalé et laissé visible.
+    """
+    vide = pd.DataFrame(columns=COLONNES_SOURCES)
+    if dividendes is None or dividendes.empty:
+        return vide
+    if fondamentaux is None or fondamentaux.empty:
+        return vide
+    if "exercice" not in dividendes.columns:
+        return vide
+
+    calendrier = dividendes.dropna(subset=["exercice"]).copy()
+    if calendrier.empty:
+        return vide
+    calendrier["exercice"] = (calendrier["exercice"].astype(float)
+                              .astype(int).astype(str))
+    # La somme des acomptes : c'est le versement de l'exercice qui se
+    # compare, pas chaque ligne prise isolément.
+    somme = calendrier.groupby(["ticker", "exercice"])["montant"].sum()
+
+    montants = fondamentaux[fondamentaux["indicateur"] == "dividende"].copy()
+    if montants.empty:
+        return vide
+    montants["exercice"] = montants["date"].astype(str).str[:4]
+    autre = montants.groupby(["ticker", "exercice"])["valeur"].sum()
+
+    compare = pd.DataFrame({"calendrier": somme, "sikafinance": autre}).dropna()
+    compare = compare[compare["sikafinance"] > 0]
+    if compare.empty:
+        return vide
+    compare["ecart"] = (compare["calendrier"] / compare["sikafinance"] - 1).abs()
+    retenus = compare[compare["ecart"] > tolerance].reset_index()
+    return retenus[COLONNES_SOURCES].sort_values("ecart", ascending=False)
