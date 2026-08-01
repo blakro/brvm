@@ -381,7 +381,7 @@ def test_pas_de_double_compte_entre_calendrier_et_fondamentaux():
     assert etale == pytest.approx(0.08)
 
 
-def test_la_couverture_se_compte_en_exercices_pas_en_seances():
+def test_la_couverture_ne_se_compte_pas_en_seances_creditees():
     """Depuis le détachement daté, le dividende ne touche qu'une séance
     par an. Compter les séances créditées ferait chuter la couverture
     alors qu'on en sait plus — la mesure punirait le progrès."""
@@ -393,3 +393,30 @@ def test_la_couverture_se_compte_en_exercices_pas_en_seances():
     c = dividende.couverture(cours, pd.DataFrame(), div)
     assert c["exercices"] == [annee]
     assert c["part"] > 0.9, "la couverture a été comptée en séances créditées"
+
+
+def test_la_couverture_ne_flatte_pas_non_plus():
+    """Le piège symétrique, trouvé en rendant l'app. Compter les séances
+    dont l'EXERCICE est connu annonçait 95 % là où trois sociétés sur
+    trente-cinq avaient un dividende : un exercice comptait pour couvert
+    dès la première. La mesure porte donc sur les couples (séance,
+    société), et une seule société couverte sur quatre donne 25 %."""
+    cours = _cours({t: [100] * 260 for t in ("AAAA", "BBBB", "CCCC", "DDDD")})
+    dates = sorted(cours["date"].unique())
+    annee = dates[0][:4]
+    div = pd.DataFrame([{"ticker": "AAAA", "date_detachement": dates[100],
+                         "montant": 8.0, "exercice": annee}])
+    c = dividende.couverture(cours, pd.DataFrame(), div)
+    assert c["part"] == pytest.approx(0.25, abs=0.01), \
+        "un exercice a compté pour couvert au-delà de la société qui le porte"
+
+
+def test_la_couverture_ignore_ce_que_le_garde_fou_refuse():
+    """Compter un détachement écarté pour cause d'échelle gonflerait la
+    couverture de ce qu'on vient précisément de refuser."""
+    cours = _cours({"AAAA": [100] * 260})
+    dates = sorted(cours["date"].unique())
+    div = pd.DataFrame([{"ticker": "AAAA", "date_detachement": dates[100],
+                         "montant": 200.0, "exercice": dates[0][:4]}])
+    c = dividende.couverture(cours, pd.DataFrame(), div)
+    assert c["part"] == 0.0 and c["exercices"] == []

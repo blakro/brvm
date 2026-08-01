@@ -199,35 +199,56 @@ def couverture(cours: pd.DataFrame, fondamentaux: pd.DataFrame,
                dividendes: pd.DataFrame | None = None) -> dict:
     """Sur quelle part de l'archive le dividende est-il connu ?
 
-    Un rendement total calculé sur 35 % des séances et présenté comme
-    total serait plus trompeur que le cours nu, qui au moins ne prétend
-    rien. Ce chiffre accompagne donc chaque résultat corrigé.
+    Un rendement total calculé sur une fraction de l'archive et présenté
+    comme total serait plus trompeur que le cours nu, qui au moins ne
+    prétend rien. Ce chiffre accompagne donc chaque résultat corrigé.
 
-    LA COUVERTURE SE COMPTE EN EXERCICES CONNUS, PAS EN SÉANCES CRÉDITÉES.
-    Ce point n'est pas cosmétique : depuis que le dividende se détache à
-    sa vraie date, il ne touche que 309 séances sur 2 996. Compter les
-    séances non nulles ferait alors chuter la couverture de 35 % à 1 %
-    alors qu'on en SAIT PLUS qu'avant — la mesure aurait puni le progrès.
-    Est couverte une séance dont l'exercice porte un dividende connu,
-    quelle que soit la convention qui le crédite.
+    LA COUVERTURE SE COMPTE PAR COUPLE (SÉANCE, SOCIÉTÉ), ET C'EST LA
+    TROISIÈME DÉFINITION — les deux premières mentaient, chacune à sa
+    façon.
+
+    Compter les séances CRÉDITÉES tombait à 1 % dès que le dividende se
+    détacha à sa vraie date : il ne touche plus qu'une séance par an et
+    par société, alors qu'on en sait plus qu'avant. La mesure punissait le
+    progrès.
+
+    Compter les séances dont l'EXERCICE est connu donnait 95 %, et
+    flattait tout autant : en 2015, trois sociétés sur trente-cinq ont un
+    dividende retenu, et l'exercice comptait pour couvert dès la
+    première. Un lecteur y voyait un rendement total presque complet.
+
+    Reste la seule mesure qui ne ment ni dans un sens ni dans l'autre :
+    la part des couples (séance, société cotée ce jour-là) dont la société
+    a un dividende connu pour l'exercice en cours. Elle vaut 56 % sur
+    l'archive du 01/08/2026, ce qui est la vérité.
     """
     prix = features.serie(cours)
     if prix.empty:
         return {"seances": 0, "part": 0.0, "exercices": []}
 
-    exercices = set()
+    # Ce qui est RÉELLEMENT crédité, pas ce que le calendrier annonce :
+    # les détachements d'avant la réduction du nominal sont refusés, et
+    # les compter ici gonflerait la couverture de ce qu'on vient d'écarter.
+    _, connus = detachements(cours, dividendes) if dividendes is not None         else (None, set())
+    connus = set(connus)
     if fondamentaux is not None and not fondamentaux.empty:
-        connus = fondamentaux[fondamentaux["indicateur"] == "rendement"]
-        exercices |= {str(d)[:4] for d in connus["date"]}
-    if dividendes is not None and not dividendes.empty \
-            and "exercice" in dividendes.columns:
-        exercices |= {str(e)[:4] for e in dividendes["exercice"].dropna()}
-    exercices = {e for e in exercices if e.isdigit()}
+        mesures = fondamentaux[fondamentaux["indicateur"] == "rendement"]
+        connus |= {(str(t), str(d)[:4])
+                   for t, d in zip(mesures["ticker"], mesures["date"])}
 
-    couvertes = prix.index.to_series().str[:4].isin(exercices)
-    return {"seances": int(couvertes.sum()),
-            "part": float(couvertes.mean()),
-            "exercices": sorted(exercices)}
+    annees = prix.index.to_series().str[:4]
+    cote = prix.notna()
+    couvert = pd.DataFrame(False, index=prix.index, columns=prix.columns)
+    for ticker in prix.columns:
+        exercices = [a for (t, a) in connus if t == ticker]
+        if exercices:
+            couvert[ticker] = annees.isin(exercices).values
+
+    paires = int(cote.values.sum())
+    retenues = int((couvert & cote).values.sum())
+    return {"seances": retenues,
+            "part": float(retenues / paires) if paires else 0.0,
+            "exercices": sorted({a for _, a in connus if a.isdigit()})}
 
 
 def rendement_courant(
