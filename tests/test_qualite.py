@@ -282,3 +282,51 @@ def test_un_trou_prime_sur_la_saison():
 def test_limites_sur_une_archive_vide():
     vide = qualite.limites(pd.DataFrame())
     assert vide.empty and list(vide.columns) == qualite.COLONNES_LIMITES
+
+
+def test_variante_sources_remplace_la_ou_les_sources_divergent():
+    """`desaccords` dit QUE les deux sources divergent ; il ne dit pas ce
+    que ça coûte. Cette variante permet de refaire le calcul avec l'autre
+    jeu — sans quoi « 43 couples divergent » ne veut rien dire pour qui
+    lit un rendement total."""
+    div = pd.DataFrame([
+        {"ticker": "BOAC", "date_detachement": "2024-04-25",
+         "montant": 684.0, "exercice": 2023},
+        {"ticker": "AAAA", "date_detachement": "2024-04-25",
+         "montant": 100.0, "exercice": 2023},
+    ])
+    fonda = pd.DataFrame([
+        {"ticker": "BOAC", "date": "2023-12-31",
+         "indicateur": "dividende", "valeur": 342.0},
+        {"ticker": "AAAA", "date": "2023-12-31",
+         "indicateur": "dividende", "valeur": 100.0},
+    ])
+    v = qualite.variante_sources(div, fonda).set_index("ticker")
+    assert v.loc["BOAC", "montant"] == 342.0, "le désaccord n'a pas été repris"
+    assert v.loc["AAAA", "montant"] == 100.0, "une ligne d'accord a bougé"
+
+
+def test_variante_sources_met_la_somme_sur_le_premier_detachement():
+    """sikafinance donne un montant par exercice sans dire comment il se
+    répartit : inventer une seconde date fabriquerait de la donnée. Les
+    acomptes suivants passent donc à zéro et disparaissent."""
+    div = pd.DataFrame([
+        {"ticker": "AAAA", "date_detachement": "2024-04-25",
+         "montant": 60.0, "exercice": 2023},
+        {"ticker": "AAAA", "date_detachement": "2024-10-25",
+         "montant": 60.0, "exercice": 2023},
+    ])
+    fonda = pd.DataFrame([{"ticker": "AAAA", "date": "2023-12-31",
+                           "indicateur": "dividende", "valeur": 50.0}])
+    v = qualite.variante_sources(div, fonda)
+    assert len(v) == 1
+    assert v.iloc[0]["montant"] == 50.0
+    assert v.iloc[0]["date_detachement"] == "2024-04-25"
+
+
+def test_variante_sources_rend_l_original_quand_tout_concorde():
+    div = pd.DataFrame([{"ticker": "AAAA", "date_detachement": "2024-04-25",
+                         "montant": 100.0, "exercice": 2023}])
+    fonda = pd.DataFrame([{"ticker": "AAAA", "date": "2023-12-31",
+                           "indicateur": "dividende", "valeur": 100.0}])
+    pd.testing.assert_frame_equal(qualite.variante_sources(div, fonda), div)

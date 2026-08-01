@@ -27,7 +27,7 @@ import pandas as pd
 import streamlit as st
 
 from brvm import (backtest, db, dividende, features, pedagogie, prediction,
-                  scoring)
+                  qualite, scoring)
 from brvm.config import DEFAUTS
 from brvm.ingestion import brvm_org
 
@@ -1461,6 +1461,25 @@ with onglets[4]:
         fondamentaux=fondamentaux, dividendes=dividendes,
     )
 
+    # LE MÊME CALCUL AVEC L'AUTRE SOURCE DE DIVIDENDES. Les deux ne
+    # s'accordent pas sur 43 exercices, parfois d'un facteur 2, et
+    # personne ne sait laquelle a raison — la chute du cours au
+    # détachement ne départage pas. Afficher un nombre seul là où il
+    # existe un intervalle mesuré affirme plus qu'on ne sait.
+    variante = None
+    if dividendes is not None and not dividendes.empty:
+        autre = qualite.variante_sources(dividendes, fondamentaux)
+        if len(autre) != len(dividendes) or not autre.equals(dividendes):
+            variante = backtest.backtester(
+                cours_filtre, referentiel_filtre,
+                {"analyse": DEFAUTS["analyse"],
+                 "ponderations": DEFAUTS["ponderations"],
+                 "backtest": {**DEFAUTS["backtest"], "positions": positions,
+                              "frais_pourcent": frais,
+                              "impact_pourcent": impact}},
+                fondamentaux=fondamentaux, dividendes=autre,
+            )
+
     if resultat["etapes"].empty:
         _attente(
             "Backtest",
@@ -1472,11 +1491,20 @@ with onglets[4]:
     else:
         m = st.columns(4)
         ecart_bt = resultat["rendement_total"] - resultat["reference_total"]
+        # L'INTERVALLE, PAS LE POINT. Le second chiffre n'est pas une
+        # marge d'erreur statistique : c'est le même calcul avec l'autre
+        # source de dividendes, et l'écart vaut douze points.
+        note = f"{pedagogie.pourcentage(resultat['rendement_annualise'])} par an"
+        if variante is not None:
+            bornes = sorted([variante["rendement_total"],
+                             resultat["rendement_total"]])
+            note += (f" — de {pedagogie.pourcentage(bornes[0])} à "
+                     f"{pedagogie.pourcentage(bornes[1])} selon la source "
+                     "des dividendes")
         _tuile(m[0], "Stratégie",
                pedagogie.pourcentage(resultat["rendement_total"]),
                sens=1 if resultat["rendement_total"] > 0 else -1,
-               note=f"{pedagogie.pourcentage(resultat['rendement_annualise'])} "
-                    "par an")
+               note=note)
         _tuile(m[1], "Référence équipondérée",
                pedagogie.pourcentage(resultat["reference_total"]),
                sens=1 if resultat["reference_total"] > 0 else -1,

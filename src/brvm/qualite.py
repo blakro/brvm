@@ -251,3 +251,47 @@ def limites(cours: pd.DataFrame,
     cause[trou] = "séance précédente à plus d'une semaine"
     hors["cause_probable"] = cause
     return hors[COLONNES_LIMITES].reset_index(drop=True)
+
+
+def variante_sources(dividendes: pd.DataFrame,
+                     fondamentaux: pd.DataFrame) -> pd.DataFrame:
+    """Le calendrier, mais avec les montants de l'AUTRE source là où elles
+    divergent. Rend un tableau de même forme que `dividendes`.
+
+    À QUOI ÇA SERT. `desaccords` dit QUE les deux sources ne s'accordent
+    pas ; il ne dit pas ce que ça coûte. Or « 43 couples divergent » ne
+    veut rien dire pour qui lit un rendement total : il faut refaire le
+    calcul avec l'autre jeu et montrer l'écart. Sur l'archive du
+    01/08/2026, il vaut douze points de rendement total et fait passer
+    l'IC du rendement du simple au double.
+
+    LA SOMME DE L'EXERCICE VA SUR LE PREMIER DÉTACHEMENT, les autres
+    passent à zéro. C'est une convention de calcul, pas une reconstitution
+    de calendrier : sikafinance donne un montant par exercice sans dire
+    comment il se répartit, et l'inventer serait fabriquer des dates.
+    Comme le backtest crédite au détachement, le résultat est légèrement
+    en avance sur la réalité pour les sociétés qui versent en deux fois —
+    l'ordre de grandeur de l'écart, lui, est juste.
+    """
+    if dividendes is None or dividendes.empty:
+        return dividendes if dividendes is not None else pd.DataFrame()
+
+    ecarts = desaccords(dividendes, fondamentaux)
+    if ecarts.empty:
+        return dividendes
+
+    remplace = {(r.ticker, str(r.exercice)): float(r.sikafinance)
+                for r in ecarts.itertuples()}
+    table = dividendes.copy()
+    cles = [(t, str(int(e)) if pd.notna(e) else "")
+            for t, e in zip(table["ticker"], table["exercice"])]
+    premier = ~pd.Series(cles, index=table.index).duplicated()
+
+    montants = []
+    for cle, montant, est_premier in zip(cles, table["montant"], premier):
+        if cle not in remplace:
+            montants.append(montant)
+        else:
+            montants.append(remplace[cle] if est_premier else 0.0)
+    table["montant"] = montants
+    return table[table["montant"] > 0].reset_index(drop=True)
