@@ -587,10 +587,12 @@ PISTES_HISTORIQUE = [
         # d'URL, aucune vérifiée — la page d'historique se sert en
         # « /marches/historiques/SDSC.ci », la cotation peut-être ailleurs.
         "nom": "sikafinance — fiche société",
-        "url": "https://www.sikafinance.com/marches/{chemin}",
-        "parametres": [{"chemin": c} for c in (
-            "cotation/SDSC.ci", "societe/SDSC.ci", "actions/SDSC.ci",
-            "dividendes/SDSC.ci")],
+        # ÉTABLI PAR LA SONDE DU 01/08/2026 : « /marches/societe/TICKER »
+        # existe et rend un tableau 7 × 6 dont les colonnes sont des
+        # années. Reste à savoir ce que portent ses LIGNES — le tableau
+        # est transposé, et l'en-tête seul n'en dit rien.
+        "url": "https://www.sikafinance.com/marches/societe/{t}.ci",
+        "parametres": [{"t": t} for t in ("SDSC", "SNTS", "BOAC")],
     },
 ]
 
@@ -662,6 +664,14 @@ def sonder_historique() -> list[dict]:
                     entree["tableaux"] = len(trouves)
                     entree["dimensions"] = [t.shape for t in trouves]
                     entree["entetes"] = [list(t.columns)[:14] for t in trouves]
+                    # LES INTITULÉS DE LIGNE, PAS SEULEMENT DE COLONNE. La
+                    # fiche société de sikafinance est transposée : ses
+                    # colonnes sont des années, ses LIGNES sont les
+                    # indicateurs. N'imprimer que l'en-tête d'un tableau
+                    # ainsi tourné revient à ne rien voir de son contenu.
+                    entree["premiere_colonne"] = [
+                        [str(v)[:28] for v in t.iloc[:, 0].tolist()[:10]]
+                        for t in trouves]
                     entree["exercices"] = _annees_vues(reponse.text)
                     entree["empreinte"] = _empreinte(reponse.text)
                     # Le calendrier ne porte pas de colonnes « Div. AAAA » :

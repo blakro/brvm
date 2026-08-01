@@ -135,7 +135,10 @@ def _sonder_historique(args) -> int:
             continue
         print(f"  {entree['tableaux']} tableaux : {entree['dimensions']}")
         for i, tete in enumerate(entree["entetes"]):
-            print(f"    [{i}] {tete}")
+            print(f"    [{i}] colonnes {tete}")
+            lignes = (entree.get("premiere_colonne") or [None] * (i + 1))[i]
+            if lignes:
+                print(f"    [{i}] lignes   {lignes}")
         exercices = entree.get("exercices") or []
         print(f"  exercices en colonnes : {exercices or 'aucun'}")
         if "dividendes_lus" in entree:
