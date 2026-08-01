@@ -207,6 +207,19 @@ départage pas, la limite de ±7,5 % empêchant un dividende de 9 % de
 s'ajuster en une séance. Choisir sans savoir reviendrait à préférer une
 source pour la commodité.
 
+**Ce que ce désaccord coûte, mesuré.** L'archive retient les montants de
+brvm.org. Rejouer les mêmes calculs avec ceux de sikafinance donne :
+
+| | apport du dividende | rendement total | IC du rendement |
+|---|---|---|---|
+| brvm.org (archive) | +95,9 % | +53,4 % | +0,086 (t = 1,0) |
+| sikafinance | +84,4 % | +41,8 % | +0,046 (t = 0,5) |
+
+Douze points d'écart sur le rendement total, et un IC qui passe du simple
+au double. **C'est l'incertitude ouverte la plus coûteuse du projet** :
+elle ne vient ni du modèle ni de la méthode, mais d'une question de
+convention que les deux sources ne tranchent pas.
+
 `--retirer` écrit l'archive CSV **et** efface les lignes de la base :
 `importer` étant un INSERT OR REPLACE, nettoyer le seul CSV les laisserait
 en base, et le premier `exporter` les réécrirait sans un mot.
