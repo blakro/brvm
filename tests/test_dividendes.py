@@ -305,3 +305,85 @@ def test_une_ligne_sans_date_de_detachement_est_ecartee():
     ])
     lu = dividendes.lire_dividendes(table.to_html(index=False))
     assert list(lu["nom"]) == ["AVEC DATE"]
+
+
+# --------------------------------------------------------------------
+# Les noms d'époque du calendrier officiel
+# --------------------------------------------------------------------
+
+REFERENTIEL_REEL = pd.DataFrame([
+    ("NSBC", "NSIA BANQUE COTE D'IVOIRE"),
+    ("LNBB", "LOTERIE NATIONALE DU BENIN"),
+    ("BICB", "BANQUE INTERNATIONALE POUR L'INDUSTRIE ET LE COMMERCE DU BENIN"),
+    ("SIBC", "SOCIETE IVOIRIENNE DE BANQUE COTE D'IVOIRE"),
+    ("SDCC", "SODE COTE D'IVOIRE"),
+    ("SDSC", "AFRICA GLOBAL LOGISTICS COTE D'IVOIRE"),
+    ("SEMC", "EVIOSYS PACKAGING SIEM COTE D'IVOIRE"),
+    ("BICC", "BICI COTE D'IVOIRE"),
+    ("SGBC", "SOCIETE GENERALE COTE D'IVOIRE"),
+    ("PALC", "PALM COTE D'IVOIRE"),
+    ("ETIT", "Ecobank Transnational Incorporated TOGO"),
+    ("TTLC", "TOTALENERGIES MARKETING COTE D'IVOIRE"),
+    ("TTLS", "TOTALENERGIES MARKETING SENEGAL"),
+    ("BOAB", "BANK OF AFRICA BENIN"),
+    ("BOAC", "BANK OF AFRICA COTE D'IVOIRE"),
+    ("BOABF", "BANK OF AFRICA BURKINA FASO"),
+    ("BOAM", "BANK OF AFRICA MALI"),
+    ("BOAS", "BANK OF AFRICA SENEGAL"),
+    ("BOAN", "BANK OF AFRICA NIGER"),
+], columns=["ticker", "nom"])
+
+
+def test_les_noms_d_epoque_du_calendrier_sont_apparies():
+    """Les 21 noms que la collecte du 01/08/2026 laissait orphelins.
+
+    Le calendrier remonte à 2018 : il porte les raisons sociales d'époque
+    et des sigles. Aucune similarité ne rapproche « BOLLORE TRANSPORT &
+    LOGISTICS » d'« AFRICA GLOBAL LOGISTICS » — ce n'est pas une variante
+    d'écriture, c'est un changement de nom.
+    """
+    attendu = {
+        "NSBC": "NSBC", "LNB": "LNBB", "BIIC": "BICB", "SIB": "SIBC",
+        "SODECI": "SDCC", "BOLLORE TRANSPORT & LOGISTICS": "SDSC",
+        "CROWN SIEM CI": "SEMC", "BICICI": "BICC", "SGBCI": "SGBC",
+        "SGCI": "SGBC", "PALMCI": "PALC", "ETI TG": "ETIT",
+        "TOTAL CI": "TTLC", "TOTAL SENEGAL": "TTLS",
+        "TOTAL SENEGAL S.A.": "TTLS",
+        "BANK OF AFRICA BN": "BOAB", "BANK OF AFRICA CI": "BOAC",
+        "BANK OF AFRICA BF": "BOABF", "BANK OF AFRICA ML": "BOAM",
+        "BANK OF AFRICA SN": "BOAS", "BANK OF AFRICA NG": "BOAN",
+    }
+    trouve, absents = dividendes.rapprocher(list(attendu), REFERENTIEL_REEL)
+    assert trouve == attendu
+    assert absents == []
+
+
+def test_les_six_bank_of_africa_ne_se_melangent_pas():
+    """Le pire cas du projet : six sœurs au même nom, un pays d'écart.
+
+    Une erreur ici attribuerait le dividende du Bénin au Niger sans
+    qu'aucun contrôle en aval ne puisse le voir.
+    """
+    trouve, _ = dividendes.rapprocher(
+        ["BANK OF AFRICA BN", "BANK OF AFRICA NG"], REFERENTIEL_REEL)
+    assert trouve["BANK OF AFRICA BN"] == "BOAB"
+    assert trouve["BANK OF AFRICA NG"] == "BOAN"
+    assert len(set(trouve.values())) == 2
+
+
+def test_ce_qui_reste_ambigu_reste_refuse():
+    """« TOTAL » seul peut désigner la Côte d'Ivoire ou le Sénégal ; le
+    calendrier écrit les deux ailleurs. Une ligne non appariée se voit
+    dans le rapport, une ligne appariée à tort ne se voit jamais."""
+    _, absents = dividendes.rapprocher(
+        ["TOTAL", "", "AIR LIQUIDE CI"], REFERENTIEL_REEL)
+    assert set(absents) == {"TOTAL", "", "AIR LIQUIDE CI"}
+
+
+def test_un_alias_perime_ne_survit_pas_a_une_radiation():
+    """Si la société sort de la cote, son alias cesse d'apparier — sinon
+    une entrée périmée écrirait un ticker qui n'existe plus."""
+    sans_agl = REFERENTIEL_REEL[REFERENTIEL_REEL["ticker"] != "SDSC"]
+    _, absents = dividendes.rapprocher(
+        ["BOLLORE TRANSPORT & LOGISTICS"], sans_agl)
+    assert absents == ["BOLLORE TRANSPORT & LOGISTICS"]

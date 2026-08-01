@@ -307,16 +307,71 @@ def _sans_pays(nom: str) -> str:
     return norme
 
 
+# ---------------------------------------------------------------------------
+# LES NOMS QUE LE CALENDRIER OFFICIEL EMPLOIE, ET QUE LE RÉFÉRENTIEL IGNORE
+# ---------------------------------------------------------------------------
+# Le calendrier de brvm.org remonte à 2018 : il porte donc les raisons
+# sociales D'ÉPOQUE, et des sigles. Le référentiel, lui, porte les noms
+# d'aujourd'hui. Aucune règle de similarité ne fera le rapprochement entre
+# « BOLLORE TRANSPORT & LOGISTICS » et « AFRICA GLOBAL LOGISTICS » : ce
+# n'est pas une variante d'écriture, c'est un changement de nom.
+#
+# CE TABLEAU EST UN JUGEMENT, PAS UNE DÉDUCTION. Chaque ligne a été
+# vérifiée contre le référentiel du 27/07/2026 ; elles sont écrites ici
+# plutôt que devinées par un algorithme parce qu'un dividende attribué à
+# la mauvaise société ne se voit jamais.
+#
+# LES TROIS CAS ABSENTS SONT ABSENTS EXPRÈS :
+#   « TOTAL »          — TTLC (Côte d'Ivoire) ou TTLS (Sénégal) ? Le
+#                        calendrier écrit les deux ailleurs. Ambigu, donc
+#                        refusé.
+#   « AIR LIQUIDE CI » — radiée, absente de la cote. Rien à quoi
+#                        l'apparier.
+#   nom vide           — une ligne d'en-tête captée par le lecteur.
+ALIAS_SOCIETES = {
+    # Sigles et abréviations
+    "lnb": "LNBB",                    # Loterie Nationale du Bénin
+    "biic": "BICB",                   # Banque Int. pour l'Industrie et le Commerce
+    "sib": "SIBC",                    # Société Ivoirienne de Banque
+    "sodeci": "SDCC",                 # SODE Côte d'Ivoire
+    "bicici": "BICC",                 # BICI Côte d'Ivoire
+    "sgbci": "SGBC",                  # Société Générale Côte d'Ivoire
+    "sgci": "SGBC",                   # idem, autre sigle
+    "palmci": "PALC",                 # Palm Côte d'Ivoire
+    "eti tg": "ETIT",                 # Ecobank Transnational Incorporated Togo
+    # Anciennes raisons sociales
+    "bollore transport logistics": "SDSC",   # → Africa Global Logistics
+    "crown siem ci": "SEMC",                 # → Eviosys Packaging SIEM
+    "total ci": "TTLC",                      # → TotalEnergies Marketing CI
+    "total senegal": "TTLS",                 # → TotalEnergies Marketing Sénégal
+    "total senegal s a": "TTLS",
+    # Bank of Africa, désignée par le code pays à deux lettres
+    "bank of africa bn": "BOAB",      # Bénin
+    "bank of africa ci": "BOAC",      # Côte d'Ivoire
+    "bank of africa bf": "BOABF",     # Burkina Faso
+    "bank of africa ml": "BOAM",      # Mali
+    "bank of africa sn": "BOAS",      # Sénégal
+    "bank of africa ng": "BOAN",      # Niger — la cote n'a pas de BOA Nigeria
+}
+
+
 def rapprocher(noms, referentiel: pd.DataFrame) -> tuple[dict, list]:
     """{nom de la source: ticker}, et la liste de ce qui n'a pas été apparié.
 
-    DEUX RÈGLES, ET LA SECONDE COMPTE AUTANT QUE LA PREMIÈRE.
+    QUATRE RÈGLES, ET LA DERNIÈRE COMPTE AUTANT QUE LES TROIS AUTRES.
 
-    1. On apparie sur le nom débarrassé de son suffixe pays, d'abord à
+    1. `ALIAS_SOCIETES` d'abord : les noms d'époque et les sigles, qu'aucune
+       similarité ne peut retrouver.
+
+    2. Un nom qui EST un ticker s'apparie à lui-même. Le calendrier écrit
+       « NSBC » là où le référentiel écrit « NSIA BANQUE COTE D'IVOIRE » :
+       la source donne parfois le symbole dans la colonne du nom.
+
+    3. On apparie sur le nom débarrassé de son suffixe pays, d'abord à
        l'identique, puis par préfixe — « africa global logist » est un
        préfixe de « africa global logistics ».
 
-    2. DÈS QUE DEUX CANDIDATS CORRESPONDENT, ON REFUSE. Un dividende
+    4. DÈS QUE DEUX CANDIDATS CORRESPONDENT, ON REFUSE. Un dividende
        attribué à la mauvaise société ne se verrait jamais : il n'y a
        aucun contrôle en aval capable de le rattraper. Mieux vaut une
        ligne non appariée, qui se voit dans le rapport, qu'une ligne
@@ -330,14 +385,29 @@ def rapprocher(noms, referentiel: pd.DataFrame) -> tuple[dict, list]:
     # AFRICA BENIN » de ses six sœurs : le nom complet doit donc être
     # essayé en premier, et le nom écourté seulement s'il n'a rien donné.
     complets, ecourtes = {}, {}
+    tickers = set()
     for _, ligne in referentiel.iterrows():
         nom, ticker = str(ligne["nom"]), str(ligne["ticker"])
         complets.setdefault(_normaliser(nom), []).append(ticker)
         ecourtes.setdefault(_sans_pays(nom), []).append(ticker)
+        tickers.add(ticker.upper())
 
     trouve, absents = {}, []
     for nom in dict.fromkeys(noms):
         entier, cible = _normaliser(nom), _sans_pays(nom)
+
+        # Un alias déclaré prime, mais seulement s'il désigne une société
+        # réellement cotée : une entrée périmée ne doit pas survivre en
+        # silence à une radiation.
+        alias = ALIAS_SOCIETES.get(entier)
+        if alias and alias in tickers:
+            trouve[nom] = alias
+            continue
+
+        if str(nom).strip().upper() in tickers:
+            trouve[nom] = str(nom).strip().upper()
+            continue
+
         candidats = complets.get(entier) or ecourtes.get(cible) or []
         if not candidats and len(cible) >= PREFIXE_MINIMUM:
             # Le préfixe ne sert qu'en dernier recours, et seulement
@@ -345,8 +415,8 @@ def rapprocher(noms, referentiel: pd.DataFrame) -> tuple[dict, list]:
             # d'un annuaire.
             candidats = sorted({
                 t for index in (complets, ecourtes)
-                for reference, tickers in index.items()
-                if reference.startswith(cible) for t in tickers
+                for reference, tickers_ in index.items()
+                if reference.startswith(cible) for t in tickers_
             })
         if len(candidats) == 1:
             trouve[nom] = candidats[0]
