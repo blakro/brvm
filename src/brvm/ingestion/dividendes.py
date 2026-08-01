@@ -569,31 +569,28 @@ def sonder(date: str | None = None) -> dict[str, dict]:
 
 PISTES_HISTORIQUE = [
     {
-        "nom": "brvm.org — calendrier paginé",
-        # La piste la plus prometteuse ET la plus utile : le calendrier
-        # officiel porte « Date ex-dividende » et « Montant du dividende
-        # net ». S'il remonte, on obtient de vraies dates de détachement,
-        # strictement mieux que l'exercice seul de sikafinance — le
-        # backtest total-return répartit aujourd'hui le dividende sur
-        # l'exercice faute de savoir quand il tombe.
-        # ÉTABLI PAR LA SONDE DU 31/07/2026 : la pagination fonctionne. Les
-        # six pages essayées ont rendu six contenus différents, dix lignes
-        # chacune, avec « Exercice comptable », « Date ex-dividende » et
-        # « Montant du dividende net ». Reste à savoir jusqu'où elle
-        # remonte — d'où la plage élargie.
+        # OÙ S'ARRÊTE VRAIMENT LE CALENDRIER ? La collecte du 01/08/2026
+        # a parcouru 44 pages puis s'est arrêtée sur une empreinte déjà
+        # vue, et le plus ancien détachement lu date du 24/04/2016. Deux
+        # lectures possibles : le calendrier commence en 2016, ou le site
+        # resert sa dernière page au-delà d'un rang. Les pages 40 à 52
+        # tranchent — si les empreintes se répètent à partir d'un rang
+        # fixe, c'est la seconde.
+        "nom": "brvm.org — la fin de la pagination",
         "url": "https://www.brvm.org/fr/esv/paiement-de-dividendes?page={n}",
-        "parametres": [{"n": n} for n in range(0, 30)],
+        "parametres": [{"n": n} for n in range(40, 53)],
     },
     {
-        # TÉMOIN NÉGATIF, GARDÉ EXPRÈS. La sonde du 31/07/2026 a montré que
-        # sikafinance ignore le paramètre : six orthographes, six réponses
-        # de 49 155 octets au dernier octet près, toujours 2022-2025. Cette
-        # piste ne sert plus à chercher — elle sert à vérifier que le
-        # verdict sait encore dire « identique ». Un contrôle qui ne répond
-        # jamais « rien de neuf » ne prouve rien quand il dit le contraire.
-        "nom": "sikafinance — paramètre d'exercice (témoin négatif)",
-        "url": "https://www.sikafinance.com/marches/dividendes?annee={a}",
-        "parametres": [{"a": a} for a in (2015, 2018)],
+        # LA FICHE SOCIÉTÉ DE SIKAFINANCE. Le tableau large du site donne
+        # quatre exercices pour toutes les valeurs ; une fiche par valeur
+        # en donne peut-être davantage pour une seule. Trois orthographes
+        # d'URL, aucune vérifiée — la page d'historique se sert en
+        # « /marches/historiques/SDSC.ci », la cotation peut-être ailleurs.
+        "nom": "sikafinance — fiche société",
+        "url": "https://www.sikafinance.com/marches/{chemin}",
+        "parametres": [{"chemin": c} for c in (
+            "cotation/SDSC.ci", "societe/SDSC.ci", "actions/SDSC.ci",
+            "dividendes/SDSC.ci")],
     },
 ]
 
