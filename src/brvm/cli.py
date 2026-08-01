@@ -71,7 +71,8 @@ def _dividendes(args) -> int:
               file=sys.stderr)
         return 1
 
-    div, fonda, rapport = source_dividendes.collecter(referentiel)
+    div, fonda, rapport = source_dividendes.collecter(
+        referentiel, pages_max=args.pages)
     for source, detail in rapport.items():
         if source != "non_apparies":
             print(f"  {source:<14} {detail}")
@@ -759,6 +760,12 @@ def construire_analyseur() -> argparse.ArgumentParser:
     )
     div.add_argument("--simulation", action="store_true",
                      help="compter sans écrire")
+    div.add_argument(
+        "--pages", type=int, default=source_dividendes.PAGES_MAX,
+        help="sécurité contre une pagination sans fin du calendrier "
+             "brvm.org ; l'arrêt normal se fait sur une page déjà vue "
+             f"({source_dividendes.PAGES_MAX} par défaut)",
+    )
     div.set_defaults(fonction=_dividendes)
 
     noter = commandes.add_parser(

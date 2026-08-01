@@ -370,9 +370,18 @@ def _date(valeur: object) -> str:
     texte = str(valeur).strip()
     for forme in ("%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d", "%d.%m.%Y", "%d/%m/%y"):
         try:
-            return pd.to_datetime(texte, format=forme).date().isoformat()
+            lu = pd.to_datetime(texte, format=forme)
         except (ValueError, TypeError):
             continue
+        # `pd.to_datetime("")` NE LÈVE PAS : il rend NaT, dont `.isoformat()`
+        # rend la CHAÎNE « NaT ». Elle passait le filtre des dates vides de
+        # `lire_dividendes` et serait devenue une clé primaire
+        # (ticker, « NaT ») dans l'archive. Le calendrier de brvm.org laisse
+        # la date de détachement vide sur près d'une ligne sur deux — la
+        # sonde du 31/07/2026 en montre trois sur ses premières lignes.
+        if pd.isna(lu):
+            return ""
+        return lu.date().isoformat()
 
     # « 4 septembre 2026 », « Lundi, 27 juillet, 2026 ». Le mois est
     # comparé sans accent ni casse, comme partout ailleurs dans le projet.
@@ -608,15 +617,87 @@ def sonder_historique() -> list[dict]:
     return rapport
 
 
-def collecter(referentiel: pd.DataFrame, sources=("sikafinance", "brvm.org")):
+PAGES_MAX = 120
+
+# La pagination du calendrier officiel. Établie par la sonde du 31/07/2026 :
+# trente pages, trente empreintes différentes, dix lignes chacune, et la
+# page 29 était encore sur l'exercice 2018 — le fond n'était pas atteint.
+MOTIF_PAGE = "https://www.brvm.org/fr/esv/paiement-de-dividendes?page={n}"
+
+
+def pages_calendrier(pages_max: int = PAGES_MAX):
+    """Les pages du calendrier officiel, jusqu'au fond. Rend (n, html).
+
+    L'ARRÊT NE SE DÉCIDE PAS SUR UN NOMBRE DE PAGES. brvm.org ne rend pas
+    404 sur un paramètre hors bornes — il a déjà été vu servir la cote
+    entière pour un identifiant de secteur inconnu. Compter les pages
+    reviendrait donc soit à s'arrêter trop tôt, soit à collecter dix fois
+    la même dernière page.
+
+    On s'arrête sur une empreinte déjà rencontrée : c'est le seul signal
+    qui distingue « il y a une suite » de « le site me resert ce que j'ai
+    déjà ». `pages_max` n'est qu'une sécurité contre une pagination
+    infinie, pas la condition d'arrêt attendue.
+    """
+    conf = charger().get("ingestion", {})
+    entetes = {"User-Agent": conf.get("user_agent", "brvm/0.1")}
+    delai = int(conf.get("delai_secondes", 30))
+    pause = float(conf.get("delai_entre_requetes_s", 1.5))
+
+    vues: set[str] = set()
+    for n in range(pages_max):
+        reponse = requests.get(MOTIF_PAGE.format(n=n), headers=entetes,
+                               timeout=delai)
+        if not reponse.ok:
+            return
+        empreinte = _empreinte(reponse.text)
+        if empreinte in vues:
+            return
+        vues.add(empreinte)
+        yield n, reponse.text
+        time.sleep(pause)
+
+
+def collecter(referentiel: pd.DataFrame, sources=("sikafinance", "brvm.org"),
+              pages_max: int = PAGES_MAX):
     """Calendriers et historique, appariés aux tickers. Rend (div, fonda, rapport).
 
     Les deux calendriers sont réunis : brvm.org est la source primaire et
     porte l'exercice comptable, sikafinance porte le rendement. Une même
     (société, date de détachement) vue des deux côtés ne compte qu'une fois.
+
+    brvm.org est parcouru page à page. Sa première page ne porte que les
+    détachements à venir — dix lignes, l'exercice en cours ; c'est la
+    pagination qui donne l'historique, et sans elle le calendrier officiel
+    n'apporte rien qu'on n'ait déjà.
     """
     calendriers, mesures, rapport = [], [], {}
     for source in sources:
+        if source == "brvm.org":
+            lots, pages = [], 0
+            try:
+                for _, html in pages_calendrier(pages_max):
+                    pages += 1
+                    try:
+                        lots.append(lire_dividendes(html))
+                    except SourceIllisible:
+                        # Une page sans tableau lisible n'arrête pas le
+                        # parcours : la mise en page varie d'une page à
+                        # l'autre — la 28 porte une colonne « Date
+                        # ex-coupon » que les autres n'ont pas.
+                        continue
+            except Exception as erreur:  # noqa: BLE001
+                rapport[source] = (f"interrompu après {pages} pages — "
+                                   f"{type(erreur).__name__} : {erreur}")
+            if lots:
+                calendriers.append(pd.concat(lots, ignore_index=True))
+                rapport.setdefault(
+                    source,
+                    f"{pages} pages, {len(calendriers[-1])} détachements")
+            else:
+                rapport.setdefault(source, f"{pages} pages, aucun détachement")
+            continue
+
         try:
             html = _telecharger(source)
         except Exception as erreur:  # noqa: BLE001

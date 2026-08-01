@@ -275,3 +275,33 @@ def test_empreinte_distingue_deux_contenus_et_pas_deux_habillages():
     # Même tableau, page habillée autrement : même empreinte.
     habille = "<div class='x'>bruit</div>" + une + "<footer>2026</footer>"
     assert dividendes._empreinte(habille) == dividendes._empreinte(une)
+
+
+def test_date_vide_ne_devient_pas_la_chaine_NaT():
+    """Le piège que la sonde du 31/07/2026 a montré en vrai.
+
+    `pd.to_datetime("")` ne lève pas : il rend NaT, dont `.isoformat()`
+    rend la chaîne « NaT ». Elle passait le filtre des dates vides et
+    serait devenue une clé primaire (ticker, « NaT ») dans l'archive — le
+    calendrier officiel laisse la date de détachement vide sur près d'une
+    ligne sur deux.
+    """
+    for vide in ("", "  ", "-", "NaT"):
+        assert dividendes._date(vide) == "", f"{vide!r} a produit une date"
+
+
+def test_une_ligne_sans_date_de_detachement_est_ecartee():
+    """Elle ne peut pas rejoindre `dividendes`, dont la clé est
+    (ticker, date_detachement). L'écrire avec une date vide fabriquerait
+    une clé qui ne désigne rien."""
+    table = pd.DataFrame([
+        {"Emetteur": "AVEC DATE", "Exercice comptable": "2018",
+         "Date de paiement": "23 juillet 2019",
+         "Date ex-dividende": "19 juillet 2019",
+         "Montant du dividende net": "31,5 FCFA"},
+        {"Emetteur": "SANS DATE", "Exercice comptable": "2018",
+         "Date de paiement": "17 juillet 2019", "Date ex-dividende": "",
+         "Montant du dividende net": "182,9 FCFA"},
+    ])
+    lu = dividendes.lire_dividendes(table.to_html(index=False))
+    assert list(lu["nom"]) == ["AVEC DATE"]
