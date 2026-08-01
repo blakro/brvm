@@ -829,3 +829,91 @@ def collecter(referentiel: pd.DataFrame, sources=("sikafinance", "brvm.org"),
 def fondamentaux(date: str) -> pd.DataFrame:
     """Les fondamentaux d'une séance, prêts pour la table `fondamentaux`."""
     return lire_fondamentaux(_telecharger("abourse", date), date)
+
+
+# --- Sonde des avis officiels ---------------------------------------------
+#
+# LE CALENDRIER PORTE UNE COLONNE « Avis » DONT LE TEXTE EST « Télécharger ».
+# Le lecteur n'extrait que du texte : l'adresse cachée derrière est donc
+# jetée depuis le début. Si elle mène à l'avis publié par la Bourse, ce
+# serait la première fois que ce projet confronte une donnée à un DOCUMENT
+# PRIMAIRE et non à une seconde source secondaire — de quoi trancher les
+# 43 désaccords qui valent douze points de rendement total.
+#
+# RIEN N'EST ACQUIS. Le témoin de test est une capture synthétique sans
+# aucun lien. Que « Télécharger » soit une ancre, que sa cible réponde, et
+# que ce soit un PDF, sont trois hypothèses distinctes ; la sonde les
+# tranche dans cet ordre et dit laquelle échoue.
+
+MOTIF_CALENDRIER = "https://www.brvm.org/fr/esv/paiement-de-dividendes?page={n}"
+
+
+def _liens_avis(html: str) -> list[dict]:
+    """Les lignes du calendrier portant une ancre, avec son adresse.
+
+    Le texte entier de la ligne est rendu avec le lien : une ancre n'a pas
+    d'intitulé de colonne, et l'appariement doit être vérifié par un
+    humain plutôt que supposé par un sélecteur.
+    """
+    soupe = BeautifulSoup(html, "html.parser")
+    trouves = []
+    for table in soupe.find_all("table"):
+        for ligne in table.find_all("tr"):
+            ancres = [a for a in ligne.find_all("a") if a.get("href")]
+            if not ancres:
+                continue
+            cellules = [c.get_text(" ", strip=True)
+                        for c in ligne.find_all(["td", "th"])]
+            # Une ligne de calendrier porte au moins l'émetteur, deux dates
+            # et un montant : quatre cellules non vides.
+            if sum(1 for c in cellules if c) < 4:
+                continue
+            trouves.append({"ligne": " | ".join(cellules)[:110],
+                            "liens": [a.get("href") for a in ancres]})
+    return trouves
+
+
+def sonder_avis(pages: int = 2) -> dict:
+    """Les avis officiels sont-ils atteignables ? N'écrit rien, ne lève pas."""
+    conf = charger().get("ingestion", {})
+    entetes = {"User-Agent": conf.get("user_agent", "brvm/0.1")}
+    delai = int(conf.get("delai_secondes", 30))
+    pause = float(conf.get("delai_entre_requetes_s", 1.5))
+
+    rapport: dict = {"pages": [], "avis": []}
+    adresses: list[str] = []
+    for n in range(pages):
+        url = MOTIF_CALENDRIER.format(n=n)
+        entree = {"url": url}
+        try:
+            reponse = requests.get(url, headers=entetes, timeout=delai)
+            entree["code"] = reponse.status_code
+            if reponse.ok:
+                lignes = _liens_avis(reponse.text)
+                entree["lignes_avec_lien"] = len(lignes)
+                entree["exemples"] = lignes[:3]
+                for lien in lignes:
+                    adresses.extend(lien["liens"])
+        except Exception as erreur:  # noqa: BLE001
+            entree["echec"] = f"{type(erreur).__name__} - {erreur}"
+        rapport["pages"].append(entree)
+        time.sleep(pause)
+
+    # Deux cibles suffisent : si la premiere est un PDF, la seconde dit si
+    # c'est la regle ou l'exception.
+    for adresse in list(dict.fromkeys(adresses))[:2]:
+        complet = (adresse if adresse.startswith("http")
+                   else "https://www.brvm.org" + adresse)
+        entree = {"url": complet}
+        try:
+            reponse = requests.get(complet, headers=entetes, timeout=delai)
+            entree["code"] = reponse.status_code
+            entree["type"] = reponse.headers.get("Content-Type", "?")
+            entree["octets"] = len(reponse.content)
+            entree["est_pdf"] = reponse.content[:5] == b"%PDF-"
+        except Exception as erreur:  # noqa: BLE001
+            entree["echec"] = f"{type(erreur).__name__} - {erreur}"
+        rapport["avis"].append(entree)
+        time.sleep(pause)
+    return rapport
+

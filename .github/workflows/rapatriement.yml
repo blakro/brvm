@@ -95,6 +95,17 @@ jobs:
         continue-on-error: true
         run: python -m brvm sonder-historique
 
+      # LES DEUX SOURCES DE DIVIDENDES DIVERGENT SUR 43 EXERCICES, parfois
+      # d'un facteur 2, et l'écart vaut douze points de rendement total.
+      # Aucune ne peut trancher l'autre, et la chute du cours au
+      # détachement ne départage pas — la limite de ±7,5 % empêche un
+      # dividende de 9 % de s'ajuster en une séance. Un avis publié par la
+      # Bourse serait le premier document primaire du projet.
+      - name: Sonder les avis officiels
+        if: inputs.sonde
+        continue-on-error: true
+        run: python -m brvm sonder-avis
+
       # Les dividendes se collectent avec le rapatriement : deux pages, pas
       # deux mille appels. Les sociétés non appariées à un ticker ne sont
       # pas écrites, elles sont listées dans le journal.

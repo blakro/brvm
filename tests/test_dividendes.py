@@ -387,3 +387,39 @@ def test_un_alias_perime_ne_survit_pas_a_une_radiation():
     _, absents = dividendes.rapprocher(
         ["BOLLORE TRANSPORT & LOGISTICS"], sans_agl)
     assert absents == ["BOLLORE TRANSPORT & LOGISTICS"]
+
+
+# --------------------------------------------------------------------
+# Les avis officiels
+# --------------------------------------------------------------------
+
+def test_liens_avis_rend_la_ligne_avec_son_adresse():
+    """Une ancre n'a pas d'intitulé de colonne : le texte entier de la
+    ligne accompagne le lien pour qu'un humain vérifie l'appariement au
+    lieu de le supposer."""
+    temoin = ("<table><tr><th>Emetteur</th><th>Exercice</th>"
+              "<th>Date de paiement</th><th>Date ex-dividende</th>"
+              "<th>Montant</th><th>Avis</th></tr>"
+              "<tr><td>NESTLE CI</td><td>2025</td><td>7 septembre 2026</td>"
+              "<td>4 septembre 2026</td><td>420 FCFA</td>"
+              "<td><a href='/f/avis.pdf'>Télécharger</a></td></tr></table>")
+    lignes = dividendes._liens_avis(temoin)
+    assert len(lignes) == 1
+    assert lignes[0]["liens"] == ["/f/avis.pdf"]
+    assert "NESTLE CI" in lignes[0]["ligne"]
+    assert "420 FCFA" in lignes[0]["ligne"]
+
+
+def test_liens_avis_ignore_les_ancres_de_navigation():
+    """Le thème du site truffe la page d'ancres — menu, pied de page,
+    pagination. Une ligne de calendrier porte au moins l'émetteur, deux
+    dates et un montant : en deçà de quatre cellules, ce n'est pas une."""
+    bruit = ("<table><tr><td><a href='/menu'>Accueil</a></td></tr></table>")
+    assert dividendes._liens_avis(bruit) == []
+
+
+def test_liens_avis_ignore_une_ligne_sans_ancre():
+    """Toutes les lignes du calendrier n'ont pas d'avis publié."""
+    sans = ("<table><tr><td>NESTLE CI</td><td>2025</td><td>7 sept</td>"
+            "<td>4 sept</td><td>420 FCFA</td><td></td></tr></table>")
+    assert dividendes._liens_avis(sans) == []

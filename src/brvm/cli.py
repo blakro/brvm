@@ -105,6 +105,48 @@ def _dividendes(args) -> int:
     return 0
 
 
+def _sonder_avis(args) -> int:
+    """Les avis officiels de détachement sont-ils atteignables ?
+
+    L'enjeu : les deux sources de dividendes divergent sur 43 exercices,
+    parfois d'un facteur 2, et l'écart vaut douze points de rendement
+    total. Aucune des deux ne peut trancher l'autre. Un avis publié par
+    la Bourse, lui, le pourrait — ce serait le premier document primaire
+    du projet.
+    """
+    rapport = source_dividendes.sonder_avis(pages=args.pages)
+    for page in rapport["pages"]:
+        print(f"\n=== {page['url']} ===")
+        if "echec" in page:
+            print(f"  ÉCHEC : {page['echec']}")
+            continue
+        print(f"  HTTP {page['code']}, "
+              f"{page.get('lignes_avec_lien', 0)} lignes portant une ancre")
+        for exemple in page.get("exemples", []):
+            print(f"    {exemple['ligne']}")
+            for lien in exemple["liens"]:
+                print(f"      → {lien}")
+
+    print("\n=== les cibles ===")
+    if not rapport["avis"]:
+        print("  aucune ancre à suivre : la colonne « Avis » n'est pas un "
+              "lien,\n  ou le tableau ne porte pas d'ancre du tout. La piste "
+              "s'arrête ici.")
+    for avis in rapport["avis"]:
+        print(f"  {avis['url']}")
+        if "echec" in avis:
+            print(f"    ÉCHEC : {avis['echec']}")
+            continue
+        print(f"    HTTP {avis['code']}, {avis.get('octets', 0)} octets, "
+              f"type {avis.get('type', '?')}, "
+              f"PDF {'oui' if avis.get('est_pdf') else 'NON'}")
+
+    print("\nRien n'a été écrit. Trois hypothèses distinctes : que "
+          "« Télécharger » soit\nune ancre, que sa cible réponde, et que ce "
+          "soit un PDF. Le journal dit\nlaquelle échoue.")
+    return 0
+
+
 def _sonder_historique(args) -> int:
     """Quelles pistes mènent aux exercices anciens ? Journal seul, rien d'écrit.
 
@@ -822,6 +864,18 @@ def construire_analyseur() -> argparse.ArgumentParser:
                     "exercices ; c'est ce journal qui dira comment remonter.",
     )
     sonder_histo.set_defaults(fonction=_sonder_historique)
+
+    sonder_av = commandes.add_parser(
+        "sonder-avis",
+        help="les avis officiels de détachement sont-ils atteignables",
+        description="Suit la colonne « Avis » du calendrier officiel. "
+                    "N'écrit rien. Les deux sources de dividendes divergent "
+                    "sur 43 exercices ; un avis publié par la Bourse est le "
+                    "seul document capable de les départager.",
+    )
+    sonder_av.add_argument("--pages", type=int, default=2,
+                           help="pages de calendrier à examiner (2 par défaut)")
+    sonder_av.set_defaults(fonction=_sonder_avis)
 
     div = commandes.add_parser(
         "dividendes",
