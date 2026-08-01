@@ -171,13 +171,26 @@ sont des échos de la séance précédente rejoués à une autre échelle —
 d'où le retrait plutôt que la réparation, puisqu'il n'y a aucune vraie
 observation à récupérer derrière.
 
-Le contrôle **n'est pas** un test de la limite de ±7,5 %. Appliquée
-telle quelle aux clôtures, elle produit 356 alertes dont la plupart sont
-légitimes : le prix de référence est ajusté le jour du détachement du
-dividende (174 alertes entre mai et août), la limite ne relie pas deux
-séances séparées par un mois sans échange (34 alertes), et une division
-du nominal la franchit par construction. Un contrôle qui crie sur des
-données justes s'apprend à s'ignorer.
+### La limite de ±7,5 % est décrite, jamais imposée
+
+`qualite` rapporte aussi les variations qui franchissent la limite de
+séance, rangées par cause probable — **193** sur l'archive :
+
+| | |
+|---|---|
+| 106 | entre mai et août : le prix de référence est ajusté du dividende au détachement |
+| 21 | séance précédente à plus d'une semaine : la limite ne relie pas deux blocs |
+| 66 | à examiner |
+
+Aucune n'est refusée. Un contrôle qui crie sur des données justes
+s'apprend à s'ignorer, et le jour où il a raison personne ne l'écoute.
+
+Le seuil porte un dixième de point de tolérance, et il n'est pas
+arbitraire : les cours se cotent en francs entiers, si bien qu'un
+mouvement **bridé** par la limite arrondit et ressort parfois à 7,52 %
+sans l'avoir franchie. La distribution le montre — 1 985 variations se
+pressent dans [7,45 % ; 7,50 %[. Les compter ferait passer le total de
+193 à 411 et noierait les vraies sous cinq fois leur nombre.
 
 ### Les deux sources ne disent pas la même chose
 

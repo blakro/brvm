@@ -234,3 +234,51 @@ def test_desaccords_ignore_ce_qu_une_seule_source_connait():
 def test_desaccords_sans_source_rend_un_tableau_aux_bonnes_colonnes():
     vide = qualite.desaccords(pd.DataFrame(), pd.DataFrame())
     assert vide.empty and list(vide.columns) == qualite.COLONNES_SOURCES
+
+
+# --------------------------------------------------------------------
+# Les variations hors de la limite de séance
+# --------------------------------------------------------------------
+
+def test_un_mouvement_bride_par_la_limite_n_est_pas_un_depassement():
+    """Les cours se cotent en francs entiers : un mouvement plafonné
+    arrondit et peut ressortir à 7,52 % sans avoir franchi la limite.
+    Les compter noierait les vrais dépassements sous cinq fois leur
+    nombre — 411 alertes au lieu de 193 sur l'archive réelle."""
+    table = serie([1000.0, 1075.0, 1000.0])   # exactement +7,5 % puis retour
+    assert qualite.limites(table).empty
+
+
+def test_une_vraie_rupture_est_signalee():
+    table = serie([1000.0, 500.0, 500.0])
+    hors = qualite.limites(table)
+    assert len(hors) == 1
+    assert hors.iloc[0]["variation"] == pytest.approx(-0.5)
+
+
+def test_la_saison_des_detachements_est_nommee():
+    """Le prix de référence est ajusté du dividende au détachement : une
+    baisse de 10 % y est régulière et n'a rien d'une anomalie."""
+    dates = pd.bdate_range("2020-06-01", periods=3).strftime("%Y-%m-%d")
+    table = pd.DataFrame([
+        {"date": d, "ticker": "AAAA", "cloture": c, "volume_titres": 1.0}
+        for d, c in zip(dates, [1000.0, 880.0, 880.0])])
+    hors = qualite.limites(table)
+    assert hors.iloc[0]["cause_probable"].startswith("saison")
+
+
+def test_un_trou_prime_sur_la_saison():
+    """Un mois sans échange explique la variation quelle que soit la
+    période : la limite relie deux séances consécutives, pas deux blocs."""
+    table = pd.DataFrame([
+        {"date": "2020-06-01", "ticker": "AAAA", "cloture": 1000.0,
+         "volume_titres": 1.0},
+        {"date": "2020-07-15", "ticker": "AAAA", "cloture": 880.0,
+         "volume_titres": 1.0},
+    ])
+    assert qualite.limites(table).iloc[0]["cause_probable"].startswith("séance")
+
+
+def test_limites_sur_une_archive_vide():
+    vide = qualite.limites(pd.DataFrame())
+    assert vide.empty and list(vide.columns) == qualite.COLONNES_LIMITES

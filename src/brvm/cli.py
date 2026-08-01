@@ -573,6 +573,28 @@ def _veille(args) -> int:
     return 0
 
 
+def _limites() -> None:
+    """Les variations hors ±7,5 %, rangées par cause probable.
+
+    Décrites, jamais refusées : le prix de référence est ajusté du
+    dividende au détachement, la limite ne relie pas deux séances séparées
+    d'un mois, et une division du nominal la franchit par construction.
+    """
+    hors = qualite.limites(pd.read_csv(db.chemin_archive("cours")))
+    if hors.empty:
+        print("\nAucune variation hors de la limite de ±7,5 %.")
+        return
+    print(f"\n{len(hors)} variations franchissent ±7,5 %, par cause "
+          "probable :\n")
+    for cause, lot in hors.groupby("cause_probable"):
+        print(f"  {len(lot):>4}  {cause}")
+    print("\nAucune n'est refusée : la limite s'applique au prix de "
+          "référence, qui est\najusté du dividende au détachement, et elle "
+          "ne relie pas deux séances\nséparées d'un mois. Un contrôle qui "
+          "crie sur des données justes s'apprend\nà s'ignorer — voir "
+          "« séances fantômes » pour la seule signature sans doute.")
+
+
 def _desaccords() -> None:
     """Ce sur quoi les deux sources de dividendes ne s'accordent pas.
 
@@ -627,6 +649,7 @@ def _qualite(args) -> int:
     print(f"{len(archive)} lignes contrôlées ← {chemin}")
     if suspects.empty:
         print("aucune séance fantôme.")
+        _limites()
         _desaccords()
         return 0
 
@@ -638,6 +661,7 @@ def _qualite(args) -> int:
         print(f"  {ticker:<6} {len(lot):>3} lignes  {facteurs}  "
               f"{lot['date'].min()} → {lot['date'].max()}")
 
+    _limites()
     _desaccords()
 
     if not args.retirer:

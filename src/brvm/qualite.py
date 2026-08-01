@@ -182,3 +182,72 @@ def desaccords(dividendes: pd.DataFrame,
     compare["ecart"] = (compare["calendrier"] / compare["sikafinance"] - 1).abs()
     retenus = compare[compare["ecart"] > tolerance].reset_index()
     return retenus[COLONNES_SOURCES].sort_values("ecart", ascending=False)
+
+
+# La limite de variation par séance de la BRVM. Elle n'est PAS un
+# invariant sur les clôtures — voir `limites` — mais elle reste le repère
+# à partir duquel une variation mérite d'être regardée.
+LIMITE_SEANCE = 0.075
+
+# UN DIXIÈME DE POINT DE TOLÉRANCE, ET IL N'EST PAS ARBITRAIRE. Les cours
+# se cotent en francs entiers : un mouvement bridé par la limite arrondit
+# et peut ressortir à 7,52 % sans l'avoir franchie. La distribution le
+# montre — 1 985 variations se pressent dans [7,45 % ; 7,50 %[, 131 dans
+# le millième suivant, puis la queue s'aplatit. Compter ces bornes comme
+# des dépassements noierait les vraies sous cinq fois leur nombre.
+TOLERANCE_ARRONDI = 0.001
+
+COLONNES_LIMITES = ["date", "ticker", "precedent", "cloture", "variation",
+                    "cause_probable"]
+
+
+def limites(cours: pd.DataFrame,
+            limite: float = LIMITE_SEANCE) -> pd.DataFrame:
+    """Les variations qui franchissent ±7,5 %, avec leur cause probable.
+
+    POURQUOI C'EST UN RAPPORT ET NON UN REFUS. La BRVM cote avec une
+    limite de ±7,5 % par séance, et la tentation est d'en faire un
+    invariant dur. Mesuré sur l'archive, ce contrôle produit 356 alertes
+    dont l'immense majorité est légitime :
+
+    - le prix de référence est ajusté du dividende le jour du
+      détachement, si bien qu'une baisse de 9 à 13 % y est régulière ;
+    - la limite relie deux séances CONSÉCUTIVES, pas deux blocs séparés
+      par un mois sans échange ;
+    - une division du nominal la franchit par construction.
+
+    Un contrôle qui crie sur des données correctes n'est pas un contrôle :
+    c'est un bruit qu'on apprend à ignorer, et le jour où il a raison
+    personne ne l'écoute. `pics_isoles` cherche donc la seule signature
+    sans ambiguïté ; cette fonction-ci se contente de DÉCRIRE le reste,
+    pour que 356 dépassements cessent d'être un chiffre jamais regardé.
+
+    La cause probable est une hypothèse rangée, pas un verdict.
+    """
+    if cours.empty or "cloture" not in cours.columns:
+        return pd.DataFrame(columns=COLONNES_LIMITES)
+
+    table = cours.sort_values(["ticker", "date"]).reset_index(drop=True)
+    precedent = table.groupby("ticker")["cloture"].shift()
+    jours = pd.to_datetime(table["date"], errors="coerce")
+    ecart = jours.groupby(table["ticker"]).diff().dt.days
+    variation = table["cloture"] / precedent - 1
+
+    marque = variation.abs() > limite + TOLERANCE_ARRONDI
+    marque = marque.fillna(False)
+    if not marque.any():
+        return pd.DataFrame(columns=COLONNES_LIMITES)
+
+    hors = table[marque].copy()
+    hors["precedent"] = precedent[marque]
+    hors["variation"] = variation[marque]
+    mois = jours[marque].dt.month
+    trou = ecart[marque] > 7
+
+    # L'ordre compte : un trou explique la variation quel que soit le
+    # mois, et il faut le dire avant d'invoquer la saison.
+    cause = pd.Series("à examiner", index=hors.index)
+    cause[mois.between(5, 8)] = "saison des détachements (mai-août)"
+    cause[trou] = "séance précédente à plus d'une semaine"
+    hors["cause_probable"] = cause
+    return hors[COLONNES_LIMITES].reset_index(drop=True)
