@@ -128,6 +128,7 @@ python -m brvm verifier        # diagnostic des sélecteurs, sans rien écrire
 python -m brvm ingerer         # enregistre la séance publiée par brvm.org
 python -m brvm referentiel     # met à jour ticker / nom / secteur
 python -m brvm sonder          # un appel réel à l'API sikafinance
+python -m brvm sonder-historique  # jusqu'où remonte le calendrier
 python -m brvm rapatrier --debut 2015-01-01 --fin 2026-07-27
 python -m brvm sonder-dividendes   # ce que rendent les trois sources
 python -m brvm dividendes      # calendriers et historique → archive
