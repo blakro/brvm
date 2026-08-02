@@ -94,8 +94,9 @@ jobs:
               entete = f.readline().rstrip("\n")
               connues = {cle(l): l for l in
                          (x.rstrip("\n") for x in f) if l.strip()}
-          print(f"archive versée : {len(connues)} lignes, dernière séance "
-                f"{max((d for d, _ in connues), default='—')}")
+          derniere = max((d for d, _ in connues), default="")
+          print(f"archive versée : {len(connues)} lignes, "
+                f"dernière séance {derniere or '—'}")
 
           combien = int(os.environ.get("EXECUTIONS") or 20)
           runs = json.loads(lire(
@@ -118,11 +119,49 @@ jobs:
                           print(f"  {art['name']} : pas de cours.csv")
                           continue
                       texte = z.read(noms[0]).decode("utf-8")
-                  ajout = {cle(l): l for l in texte.splitlines()[1:]
-                           if l.strip() and cle(l) not in connues}
+                      # LE RÉFÉRENTIEL EN ENTIER, ET SEULEMENT LE PLUS
+                      # RÉCENT. `derniere_vue` ne se déduit pas des cours :
+                      # une société peut être cotée sans échanger. C'est
+                      # une table réécrite, pas un incrément — un diff ne
+                      # dirait pas ce qui en a disparu. Les exécutions
+                      # arrivent de la plus récente à la plus ancienne :
+                      # le premier référentiel rencontré est le bon.
+                      refs = [n for n in z.namelist()
+                              if n.endswith("referentiel.csv")]
+                      if refs and not os.path.exists("referentiel.csv"):
+                          with open("referentiel.csv", "w",
+                                    encoding="utf-8") as f:
+                              f.write(z.read(refs[0]).decode("utf-8"))
+                          print(f"  {art['name']} : référentiel retenu "
+                              f"({run['created_at'][:10]})")
+                  absentes = {cle(l): l for l in texte.splitlines()[1:]
+                              if l.strip() and cle(l) not in connues}
+                  # SEULES LES SÉANCES POSTÉRIEURES À L'ARCHIVE SONT VERSÉES,
+                  # ET CE GARDE-FOU A SERVI DÈS LE PREMIER PASSAGE. Un
+                  # artefact plus ancien qu'une correction porte l'archive
+                  # d'AVANT : celui du 28 juillet contenait encore les 38
+                  # séances fantômes retirées le 29, et le versement les
+                  # aurait ressuscitées sans que rien ne le dise — la panne
+                  # exacte contre laquelle `db.effacer_cours` a été écrit.
+                  #
+                  # Une ligne absente et antérieure à la dernière séance
+                  # versée n'est donc jamais un retard : c'est une donnée
+                  # que le dépôt a délibérément écartée, ou qu'un
+                  # rapatriement doit reprendre en entier. Elle est
+                  # signalée, jamais réémise.
+                  ajout = {(d, t): l for (d, t), l in absentes.items()
+                           if d > derniere}
+                  ecartees = len(absentes) - len(ajout)
                   dates = sorted({d for d, _ in ajout})
                   print(f"  {art['name']} ({run['created_at'][:10]}) : "
                         f"{len(ajout)} lignes neuves {dates or ''}")
+                  if ecartees:
+                      anciennes = sorted({d for d, _ in absentes
+                                          if d <= derniere})
+                      print(f"      {ecartees} lignes ÉCARTÉES car pas "
+                            f"postérieures à {derniere} — archive d'avant "
+                            f"une correction : {anciennes[0]}…"
+                            f"{anciennes[-1]}")
                   nouvelles.update(ajout)
 
           if not nouvelles:
@@ -153,8 +192,11 @@ jobs:
             echo "rien à écrire"
             exit 0
           fi
-          echo "--- increment sha256 $(sha256sum increment.csv | cut -c1-16) \
-          lignes $(wc -l < increment.csv) ---"
-          echo "--- increment base64 gzip ---"
-          gzip -9 -c increment.csv | base64 -w0
-          echo
+          for f in increment referentiel; do
+            [ -s "$f.csv" ] || continue
+            echo "--- $f sha256 $(sha256sum "$f.csv" | cut -c1-16) \
+          lignes $(wc -l < "$f.csv") ---"
+            echo "--- $f base64 gzip ---"
+            gzip -9 -c "$f.csv" | base64 -w0
+            echo
+          done
