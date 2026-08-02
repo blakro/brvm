@@ -43,7 +43,7 @@ jobs:
           EXECUTIONS: ${{ inputs.executions }}
         run: |
           python - <<'PY'
-          import io, json, os, urllib.request, zipfile
+          import io, json, os, urllib.error, urllib.request, zipfile
 
           DEPOT = os.environ["DEPOT"]
           RACINE = f"https://api.github.com/repos/{DEPOT}"
@@ -51,10 +51,31 @@ jobs:
                      "Accept": "application/vnd.github+json"}
 
 
-          def lire(url: str) -> bytes:
-              requete = urllib.request.Request(url, headers=ENTETES)
-              with urllib.request.urlopen(requete, timeout=120) as reponse:
-                  return reponse.read()
+          # LE PIÈGE, RENCONTRÉ AU PREMIER PASSAGE. Télécharger un artefact
+          # renvoie une redirection vers un stockage tiers, et urllib
+          # réémet l'en-tête `Authorization` en la suivant : le stockage la
+          # refuse — « HTTP 401 : Server failed to authenticate ». Le jeton
+          # GitHub n'a de toute façon rien à faire chez un tiers ; l'URL
+          # signée qu'on reçoit porte déjà son autorisation.
+          class SansRedirection(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, *_args, **_kwargs):
+                  return None
+
+
+          OUVREUR = urllib.request.build_opener(SansRedirection())
+
+
+          def lire(url: str, authentifie: bool = True) -> bytes:
+              requete = urllib.request.Request(
+                  url, headers=ENTETES if authentifie else {})
+              try:
+                  with OUVREUR.open(requete, timeout=120) as reponse:
+                      return reponse.read()
+              except urllib.error.HTTPError as erreur:
+                  suite = erreur.headers.get("Location") if erreur.headers else None
+                  if erreur.code in (301, 302, 303, 307, 308) and suite:
+                      return lire(suite, authentifie=False)
+                  raise
 
 
           # L'ARCHIVE VERSÉE FAIT FOI. Une séance déjà dans le CSV du dépôt
