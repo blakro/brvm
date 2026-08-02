@@ -601,7 +601,37 @@ if cours_filtre.empty:
     st.stop()
 referentiel_filtre = referentiel[referentiel["ticker"].isin(retenus)]
 
-onglets = st.tabs(["Marché", "Valeur", "Classement", "Prédiction",
+# CINQ ONGLETS, ET « PRÉDICTION » N'EN EST PLUS UN. Un onglet est une
+# promesse : il annonce qu'il y a quelque chose à voir. Or le modèle
+# appris mesure un IC de −0,045 — pire que la référence, pire que le
+# hasard. Lui donner le même rang qu'au marché lui prêtait une autorité
+# que la mesure lui refuse, et le message rouge à l'intérieur ne la
+# reprenait pas : on lit la structure avant le texte. Il devient une
+# section du classement, ce qu'il est.
+# LE RÉSULTAT LE MIEUX ÉTABLI DU PROJET N'AVAIT AUCUNE PLACE À L'ÉCRAN.
+# Il vivait dans le README et dans un message rouge au fond d'un onglet,
+# pendant que la plus grosse tuile affichait un rendement gonflé par le
+# biais du survivant. La hiérarchie visuelle disait donc l'inverse de la
+# force de la preuve. Il passe devant les onglets, avec ce qui le fonde :
+# le nombre de tests et de périodes disjointes, sans quoi ce serait une
+# opinion de plus.
+_constat = st.container(border=True)
+_constat.markdown(
+    f'<div class="tuile-label" style="color:{ENCRE}">Ce que onze ans et '
+    'demi de cotation disent</div>'
+    f'<div style="margin-top:.4rem;line-height:1.55;color:{ENCRE}">'
+    '<b>Aucun facteur de prix ne bat le hasard.</b> Momentum, tendance, '
+    'volatilité et liquidité sont indiscernables du bruit sur 144 cases '
+    'balayées et 148 périodes disjointes. Le seul effet qui survit à la '
+    'correction du test multiple — le retournement à un mois — rapporte '
+    'moins que les frais qu\'il coûte.</div>'
+    f'<div class="tuile-note" style="margin-top:.5rem">C\'est la mesure la '
+    'plus solide de ce tableau de bord. Tout rendement positif affiché '
+    'plus bas repose, lui, sur un univers sans les sociétés radiées.</div>',
+    unsafe_allow_html=True)
+st.write("")
+
+onglets = st.tabs(["Marché", "Valeur", "Classement",
                    "Backtest", "Données"])
 
 
@@ -1251,7 +1281,11 @@ with onglets[2]:
 
 
 # --- Prédiction -----------------------------------------------------------
-with onglets[3]:
+# Deuxième entrée dans l'onglet du classement : la section s'y ajoute à
+# la suite, sans réindenter deux cents lignes pour un changement de rang.
+with onglets[2]:
+    st.divider()
+    st.subheader("Et si on apprenait le classement ?")
     st.caption(
         "Probabilité de **surperformer le marché sur trois mois** — pas de "
         "prévoir un cours. La BRVM cote par fixing, avec une limite de "
@@ -1441,7 +1475,7 @@ with onglets[3]:
 
 
 # --- Backtest -------------------------------------------------------------
-with onglets[4]:
+with onglets[3]:
     st.caption(
         "Ce qu'aurait donné le classement s'il avait été suivi dans le "
         "passé — frais compris. Un bon résultat ici ne promet rien : il dit "
@@ -1489,7 +1523,7 @@ with onglets[4]:
             "que le hasard de sa fenêtre.",
         )
     else:
-        m = st.columns(4)
+        m = st.columns(5)
         ecart_bt = resultat["rendement_total"] - resultat["reference_total"]
         # L'INTERVALLE, PAS LE POINT. Le second chiffre n'est pas une
         # marge d'erreur statistique : c'est le même calcul avec l'autre
@@ -1501,19 +1535,37 @@ with onglets[4]:
             note += (f" — de {pedagogie.pourcentage(bornes[0])} à "
                      f"{pedagogie.pourcentage(bornes[1])} selon la source "
                      "des dividendes")
-        _tuile(m[0], "Stratégie",
+        # L'ÉCART EN TÊTE, LE NIVEAU ENSUITE. Le niveau ne dit rien : un
+        # marché qui monte de 12 % l'an rend n'importe quelle stratégie
+        # brillante. C'est l'écart à la référence qui dit s'il y a quelque
+        # chose, et il était relégué en troisième position derrière deux
+        # nombres flatteurs.
+        # L'ÉCART SE DIT PAR AN, PAS EN CUMULÉ. Soustraire deux rendements
+        # cumulés sur onze ans et demi donnait « −186,9 % », ce qui est
+        # exact et illisible : ça se lit comme perdre 186 % de sa mise,
+        # une impossibilité. Le rendu de l'app l'a montré ; l'arithmétique
+        # seule ne l'aurait pas dit.
+        ecart_an = (resultat["rendement_annualise"]
+                    - resultat["reference_annualisee"])
+        _tuile(m[0], "Écart au marché",
+               pedagogie.pourcentage(ecart_an) + " par an",
+               sens=1 if ecart_an > 0 else -1,
+               note="c'est le seul chiffre qui dise si la règle apporte "
+                    "quelque chose — "
+                    f"{pedagogie.pourcentage(ecart_bt)} en cumulé")
+        _tuile(m[1], "Stratégie",
                pedagogie.pourcentage(resultat["rendement_total"]),
                sens=1 if resultat["rendement_total"] > 0 else -1,
                note=note)
-        _tuile(m[1], "Référence équipondérée",
+        _tuile(m[2], "Référence équipondérée",
                pedagogie.pourcentage(resultat["reference_total"]),
                sens=1 if resultat["reference_total"] > 0 else -1,
                note=f"{pedagogie.pourcentage(resultat['reference_annualisee'])} "
                     "par an — c'est elle qu'il faut battre")
-        _tuile(m[2], "Perte maximale",
+        _tuile(m[3], "Perte maximale",
                pedagogie.pourcentage(resultat["perte_max"], signe=False),
                note="plus forte baisse depuis un sommet", teinte=BAISSE)
-        _tuile(m[3], "Coût cumulé",
+        _tuile(m[4], "Coût cumulé",
                pedagogie.pourcentage(resultat["cout_cumule"], signe=False),
                sens=-1,
                note=f"{resultat['rotation_moyenne']:.0%} de rotation moyenne")
@@ -1652,7 +1704,7 @@ with onglets[4]:
 
 
 # --- Données --------------------------------------------------------------
-with onglets[5]:
+with onglets[4]:
     etat = st.columns(3)
     _tuile(etat[0], "Séances en archive", f"{seances}", teinte=SERIE_1,
            note=f"{cours['date'].min()} → {cours['date'].max()}")
