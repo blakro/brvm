@@ -29,7 +29,11 @@ dependencies = [
 Source = "https://github.com/blakro/brvm"
 
 [project.optional-dependencies]
-dev = ["pytest>=7"]
+dev = ["pytest>=7", "pypdf>=4"]
+# Lecture des avis officiels de détachement — voir `sonder-avis`. Sert
+# UNIQUEMENT à confronter un montant de dividende à son document
+# d'origine ; son absence coûte cette vérification et rien d'autre.
+avis = ["pypdf>=4"]
 # Interface web. Streamlit Community Cloud installe requirements.txt,
 # pas cet extra ; il sert à retrouver le même environnement en local.
 web = ["streamlit>=1.49", "altair>=5.5"]

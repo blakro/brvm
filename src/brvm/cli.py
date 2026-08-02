@@ -105,6 +105,40 @@ def _dividendes(args) -> int:
     return 0
 
 
+def _texte_avis(args) -> int:
+    """Vide le texte des premiers avis. Étape obligée avant l'extracteur.
+
+    La formulation d'un avis de la Bourse est inconnue. Écrire le motif
+    qui en tirera le montant avant d'avoir vu le document reviendrait à
+    deviner — ce que ce projet s'interdit depuis son premier sélecteur.
+    """
+    rapport = source_dividendes.sonder_texte_avis(
+        combien=args.combien, pages_calendrier=args.pages)
+    if not rapport:
+        print("aucun avis atteint.", file=sys.stderr)
+        return 1
+    for avis in rapport:
+        print(f"\n=== {avis['ligne']} ===")
+        print(f"  {avis['url']}")
+        if "echec" in avis:
+            print(f"  ÉCHEC : {avis['echec']}")
+            continue
+        if not avis.get("lecture_disponible"):
+            print("  pypdf absent : le PDF est là, son texte reste illisible.")
+            continue
+        print(f"  {avis['octets']} octets → {avis['caracteres']} caractères")
+        if avis["caracteres"] == 0:
+            print("  AUCUN TEXTE : probablement un scan sans couche texte. "
+                  "Un avis\n  ancien peut l'être même si les récents ne le "
+                  "sont pas.")
+            continue
+        print("  --- texte ---")
+        for ligne in avis["texte"].splitlines():
+            if ligne.strip():
+                print(f"  | {ligne.strip()[:100]}")
+    return 0
+
+
 def _sonder_avis(args) -> int:
     """Les avis officiels de détachement sont-ils atteignables ?
 
@@ -876,6 +910,17 @@ def construire_analyseur() -> argparse.ArgumentParser:
     sonder_av.add_argument("--pages", type=int, default=2,
                            help="pages de calendrier à examiner (2 par défaut)")
     sonder_av.set_defaults(fonction=_sonder_avis)
+
+    texte_av = commandes.add_parser(
+        "texte-avis",
+        help="vider le texte des avis officiels, pour écrire l'extracteur",
+        description="N'écrit rien. La formulation d'un avis est inconnue : "
+                    "ce journal est ce qui permettra d'en tirer le montant "
+                    "sans le deviner.",
+    )
+    texte_av.add_argument("--combien", type=int, default=2)
+    texte_av.add_argument("--pages", type=int, default=1)
+    texte_av.set_defaults(fonction=_texte_avis)
 
     div = commandes.add_parser(
         "dividendes",

@@ -423,3 +423,26 @@ def test_liens_avis_ignore_une_ligne_sans_ancre():
     sans = ("<table><tr><td>NESTLE CI</td><td>2025</td><td>7 sept</td>"
             "<td>4 sept</td><td>420 FCFA</td><td></td></tr></table>")
     assert dividendes._liens_avis(sans) == []
+
+
+def test_le_paquet_s_importe_meme_sans_lecteur_pdf():
+    """Une dépendance FACULTATIVE ne doit jamais emporter le paquet.
+
+    `pypdf` charge `cryptography`, dont l'extension Rust peut PANIQUER à
+    l'import quand l'environnement est bancal — c'est arrivé dans le
+    conteneur de développement. Une panique pyo3 dérive de
+    `BaseException` : un `except ImportError`, ni même un
+    `except Exception`, ne l'aurait vue passer.
+    """
+    assert isinstance(dividendes.LECTURE_PDF_DISPONIBLE, bool)
+    # Le module est là, importable, quel que soit l'état de pypdf.
+    assert callable(dividendes.texte_avis)
+
+
+def test_texte_avis_rend_le_vide_plutot_que_de_lever():
+    """Une chaîne vide est un FAIT — « rien à lire » — et non un échec
+    muet : les avis anciens peuvent être des scans sans couche texte, et
+    l'appelant doit pouvoir le distinguer d'une panne."""
+    assert dividendes.texte_avis(b"<html>pas un pdf</html>") == ""
+    assert dividendes.texte_avis(b"%PDF-1.4 en-tete sans contenu") == ""
+    assert dividendes.texte_avis(b"") == ""

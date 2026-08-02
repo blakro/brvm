@@ -62,7 +62,9 @@ jobs:
           python-version: "3.11"
           cache: pip
 
-      - run: python -m pip install --upgrade pip && pip install -e .
+      # L'extra « avis » apporte pypdf, qui ne sert qu'à lire les avis
+      # officiels de détachement. Il est facultatif partout ailleurs.
+      - run: python -m pip install --upgrade pip && pip install -e ".[avis]"
 
       # Un appel, et les deux questions qui ne peuvent pas être tranchées
       # hors ligne : ce que mesure « Volume », et si l'OHLC est cohérent.
@@ -105,6 +107,15 @@ jobs:
         if: inputs.sonde
         continue-on-error: true
         run: python -m brvm sonder-avis
+
+      # ÉTAPE OBLIGÉE AVANT D'ÉCRIRE L'EXTRACTEUR. La formulation d'un
+      # avis de la Bourse est inconnue : « Montant du dividende net »,
+      # « dividende unitaire », un tableau ? Écrire le motif avant
+      # d'avoir vu le document reviendrait à deviner.
+      - name: Vider le texte des avis
+        if: inputs.sonde
+        continue-on-error: true
+        run: python -m brvm texte-avis --combien 2
 
       # Les dividendes se collectent avec le rapatriement : deux pages, pas
       # deux mille appels. Les sociétés non appariées à un ticker ne sont

@@ -917,3 +917,99 @@ def sonder_avis(pages: int = 2) -> dict:
         time.sleep(pause)
     return rapport
 
+
+# LECTURE DES AVIS — DÉPENDANCE OPTIONNELLE, COMME SCIKIT-LEARN. `pypdf`
+# ne sert qu'ici, à confronter un montant à son document officiel. Son
+# absence coûte cette vérification et rien d'autre : ni l'ingestion, ni
+# l'analyse, ni l'app n'en dépendent.
+# `except Exception` ET NON `except ImportError`, ET CE N'EST PAS DE LA
+# PARANOÏA. `pypdf` charge `cryptography`, dont l'extension Rust peut
+# PANIQUER à l'import quand l'environnement est bancal — c'est arrivé dans
+# le conteneur de développement, et une panique n'est pas une ImportError.
+# Un garde-fou trop étroit aurait laissé une dépendance facultative
+# emporter tout le paquet, exactement ce que l'import optionnel de
+# scikit-learn avait été écrit pour empêcher.
+try:
+    from pypdf import PdfReader
+
+    LECTURE_PDF_DISPONIBLE = True
+except BaseException as _erreur:  # noqa: BLE001 — voir ci-dessus
+    # ATTRAPER `BaseException` EST NORMALEMENT UNE FAUTE. Ici c'est la
+    # seule option correcte : la panique de pyo3 en dérive directement, et
+    # un `except Exception` ne la voit pas — vérifié dans le conteneur de
+    # développement, où le paquet entier refusait de s'importer à cause
+    # d'une dépendance FACULTATIVE. C'est précisément ce que l'import
+    # optionnel de scikit-learn avait été écrit pour empêcher.
+    #
+    # Les deux interruptions qui ne doivent jamais être avalées sont
+    # relancées : un Ctrl-C pendant un import reste un Ctrl-C.
+    if isinstance(_erreur, (KeyboardInterrupt, SystemExit)):
+        raise
+    PdfReader = None
+    LECTURE_PDF_DISPONIBLE = False
+
+
+def texte_avis(contenu: bytes, pages: int = 2) -> str:
+    """Le texte d'un avis, ou une chaîne vide s'il n'y en a pas.
+
+    UNE CHAÎNE VIDE N'EST PAS UN ÉCHEC MUET, C'EST UN FAIT : les avis
+    anciens peuvent être des scans sans couche texte. L'appelant doit
+    pouvoir distinguer « rien à lire » de « pas lu », d'où le retour vide
+    plutôt qu'une exception.
+    """
+    if not LECTURE_PDF_DISPONIBLE or contenu[:5] != b"%PDF-":
+        return ""
+    import io
+    try:
+        lecteur = PdfReader(io.BytesIO(contenu))
+        return "\n".join((page.extract_text() or "")
+                          for page in lecteur.pages[:pages])
+    except Exception:  # noqa: BLE001 - un PDF malforme est un fait
+        return ""
+
+
+def sonder_texte_avis(combien: int = 2, pages_calendrier: int = 1) -> list[dict]:
+    """Vide le texte des premiers avis rencontrés. N'écrit rien.
+
+    ÉTAPE OBLIGÉE AVANT D'ÉCRIRE UN EXTRACTEUR. La formulation d'un avis
+    de la Bourse est inconnue : « Montant du dividende net », « dividende
+    unitaire », un tableau ? Écrire le motif avant d'avoir vu le document
+    reviendrait à deviner, et c'est exactement ce que ce projet s'interdit
+    depuis son premier sélecteur.
+    """
+    conf = charger().get("ingestion", {})
+    entetes = {"User-Agent": conf.get("user_agent", "brvm/0.1")}
+    delai = int(conf.get("delai_secondes", 30))
+    pause = float(conf.get("delai_entre_requetes_s", 1.5))
+
+    adresses = []
+    for n in range(pages_calendrier):
+        try:
+            reponse = requests.get(MOTIF_CALENDRIER.format(n=n),
+                                   headers=entetes, timeout=delai)
+            if reponse.ok:
+                for entree in _liens_avis(reponse.text):
+                    for lien in entree["liens"]:
+                        adresses.append((entree["ligne"], lien))
+        except Exception:  # noqa: BLE001
+            pass
+        time.sleep(pause)
+
+    rapport = []
+    for ligne, adresse in adresses[:combien]:
+        complet = (adresse if adresse.startswith("http")
+                   else "https://www.brvm.org" + adresse)
+        entree = {"ligne": ligne, "url": complet,
+                  "lecture_disponible": LECTURE_PDF_DISPONIBLE}
+        try:
+            reponse = requests.get(complet, headers=entetes, timeout=delai)
+            entree["octets"] = len(reponse.content)
+            texte = texte_avis(reponse.content)
+            entree["caracteres"] = len(texte)
+            entree["texte"] = texte[:1600]
+        except Exception as erreur:  # noqa: BLE001
+            entree["echec"] = f"{type(erreur).__name__} - {erreur}"
+        rapport.append(entree)
+        time.sleep(pause)
+    return rapport
+
