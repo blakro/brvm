@@ -840,10 +840,24 @@ def fondamentaux(date: str) -> pd.DataFrame:
 # PRIMAIRE et non à une seconde source secondaire — de quoi trancher les
 # 43 désaccords qui valent douze points de rendement total.
 #
-# RIEN N'EST ACQUIS. Le témoin de test est une capture synthétique sans
-# aucun lien. Que « Télécharger » soit une ancre, que sa cible réponde, et
-# que ce soit un PDF, sont trois hypothèses distinctes ; la sonde les
-# tranche dans cet ordre et dit laquelle échoue.
+# CE QUE LA SONDE DU 02/08/2026 A ÉTABLI, ET POURQUOI LA PISTE EST CLOSE.
+# Les trois hypothèses tiennent : « Télécharger » est bien une ancre — dix
+# par page —, la cible répond en 200, et c'est un vrai PDF de 340 Ko. Son
+# adresse porte même la date, le numéro d'avis, l'exercice et la société,
+# si bien que l'appariement avec la ligne se vérifie à l'œil.
+#
+# MAIS LES AVIS SONT DES SCANS. `pypdf` en tire ZÉRO caractère sur les deux
+# essayés : 341 540 octets pour une page, c'est une image. Le montant y est
+# lisible par un œil humain, pas par un programme. En tirer le chiffre
+# demanderait de la reconnaissance optique, donc une dépendance lourde ET
+# la validation de cette reconnaissance sur des montants — un chiffre mal
+# lu par l'OCR serait exactement l'erreur silencieuse que tout ce module
+# s'attache à rendre bruyante.
+#
+# Le désaccord entre les deux sources reste donc ouvert, et l'app
+# l'affiche sous forme d'intervalle plutôt que de le trancher. La sonde
+# reste livrée pour qu'on n'ait pas à refaire le chemin, et parce que la
+# Bourse peut publier du texte un jour.
 
 MOTIF_CALENDRIER = "https://www.brvm.org/fr/esv/paiement-de-dividendes?page={n}"
 

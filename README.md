@@ -207,6 +207,18 @@ départage pas, la limite de ±7,5 % empêchant un dividende de 9 % de
 s'ajuster en une séance. Choisir sans savoir reviendrait à préférer une
 source pour la commodité.
 
+**Pourquoi l'avis officiel ne tranche pas.** Le calendrier lie chaque
+détachement à l'avis publié par la Bourse, et ces PDF sont bien
+atteignables — leur adresse porte la date, le numéro d'avis, l'exercice
+et la société. Mais ce sont des **scans sans couche texte** : zéro
+caractère extractible sur 340 Ko. Le montant y est lisible par un œil,
+pas par un programme. En tirer le chiffre demanderait de la
+reconnaissance optique et la validation de cette reconnaissance sur des
+montants — un chiffre mal lu serait exactement l'erreur silencieuse que
+ce projet s'attache à rendre bruyante. `brvm sonder-avis` et
+`brvm texte-avis` restent livrés pour qu'on n'ait pas à refaire le
+chemin.
+
 **Ce que ce désaccord coûte, mesuré.** L'archive retient les montants de
 brvm.org. Rejouer les mêmes calculs avec ceux de sikafinance donne :
 
