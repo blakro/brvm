@@ -4,7 +4,7 @@ Les cours de la [Bourse Régionale des Valeurs Mobilières](https://www.brvm.org
 — 47 sociétés cotées, huit pays de l'UEMOA — collectés, archivés et
 analysés, avec un tableau de bord web comme point d'entrée.
 
-**112 725 lignes, 2 996 séances, du 2 janvier 2015 au 27 juillet 2026.**
+**112 913 lignes, 3 000 séances, du 2 janvier 2015 au 31 juillet 2026.**
 Ouverture, plus haut, plus bas, clôture et volumes pour chaque valeur et
 chaque séance, plus **309 détachements de dividendes datés, onze
 exercices (2015-2025), 41 sociétés** — dont **254 exploitables** : les
@@ -129,7 +129,7 @@ python -m brvm ingerer         # enregistre la séance publiée par brvm.org
 python -m brvm referentiel     # met à jour ticker / nom / secteur
 python -m brvm sonder          # un appel réel à l'API sikafinance
 python -m brvm sonder-historique  # jusqu'où remonte le calendrier
-python -m brvm rapatrier --debut 2015-01-01 --fin 2026-07-27
+python -m brvm rapatrier --debut 2015-01-01 --fin 2026-07-31
 python -m brvm sonder-dividendes   # ce que rendent les trois sources
 python -m brvm dividendes      # calendriers et historique → archive
 ```
@@ -382,6 +382,22 @@ environnements d'exécution ne peuvent pas atteindre. `ingestion.yml`
 son journal, entre `--- DÉBUT INCRÉMENT CSV ---` et `--- FIN INCRÉMENT
 CSV ---`. Il suffit alors de lire le journal pour verser la séance.
 L'artefact reste la voie normale et complète ; le journal est le filet.
+
+Quand le retard porte sur PLUSIEURS jours, relire autant de journaux à la
+ligne près devient l'occasion d'une erreur silencieuse. `versement.yml`
+fait alors faire le téléchargement au runner — lui atteint le stockage —
+et réémet dans son journal les seules lignes absentes de l'archive
+versée, compressées et accompagnées d'une empreinte : la lecture se
+vérifie au lieu de se supposer.
+
+Il n'en réémet **que les séances postérieures à la dernière séance
+versée**, et ce garde-fou a servi dès le premier passage. Un artefact
+plus ancien qu'une correction porte l'archive d'AVANT : celui du
+28 juillet contenait encore les 38 séances fantômes retirées le 29, et un
+versement naïf les aurait ressuscitées sans que rien ne le dise. Une
+ligne absente mais antérieure à l'archive n'est jamais un retard — c'est
+une donnée que le dépôt a délibérément écartée. Elle est signalée,
+jamais réémise.
 
 Le prix est réel et assumé : **l'archive n'avance plus toute seule**.
 C'est précisément ce que `veille.yml` surveille — elle ouvre une issue
@@ -732,7 +748,7 @@ commodités.
 ## Ce qui manque, et ce qui a été réglé
 
 **Réglé aujourd'hui.** L'archive contenait une séance ; elle en contient
-2 996. Le backtest et la prédiction refusaient de conclure ; ils
+3 000. Le backtest et la prédiction refusaient de conclure ; ils
 concluent, et leur conclusion est négative — ce qui est un résultat. Les
 dividendes n'existaient pas en base ; ils y sont.
 
