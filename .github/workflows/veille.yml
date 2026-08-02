@@ -33,42 +33,114 @@ jobs:
           python -m brvm veille --tolerance 5 | tee rapport.txt
           echo "code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
 
+      # Le contrôle précédent ne voit une source cassée qu'INDIRECTEMENT,
+      # en constatant que l'archive cesse d'avancer — avec jusqu'à cinq
+      # jours ouvrés de retard. `tests.yml` lance bien `verifier`, mais sur
+      # le témoin figé du dépôt : il ne verrait pas brvm.org changer de
+      # mise en page aujourd'hui. Celui-ci lit la PAGE VIVANTE.
+      - name: Les sélecteurs tiennent-ils sur la page vivante ?
+        id: selecteurs
+        continue-on-error: true
+        run: |
+          # Trois essais espacés. Une page injoignable une fois n'est pas
+          # un sélecteur cassé, et une alerte qui se déclenche sur dix
+          # minutes de maintenance cesse d'être lue — ce que ce workflow
+          # existe précisément pour éviter.
+          code=1
+          for essai in 1 2 3; do
+            if python -m brvm verifier > selecteurs.txt 2>&1; then
+              code=0
+              break
+            fi
+            [ "$essai" = 3 ] || sleep 120
+          done
+          cat selecteurs.txt
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
       # Une seule issue ouverte à la fois : la rouvrir chaque semaine
       # transformerait l'alerte en bruit, ce que ce contrôle existe
       # justement pour éviter.
-      - name: Ouvrir une alerte si l'archive est figée
-        if: steps.controle.outputs.code != '0'
+      - name: Ouvrir une alerte si un contrôle a lâché
+        if: steps.controle.outputs.code != '0' || steps.selecteurs.outputs.code != '0'
         uses: actions/github-script@v7
+        env:
+          CODE_ARCHIVE: ${{ steps.controle.outputs.code }}
+          CODE_SELECTEURS: ${{ steps.selecteurs.outputs.code }}
         with:
           script: |
             const fs = require('fs');
-            const rapport = fs.readFileSync('rapport.txt', 'utf8');
-            const titre = "Archive figée : l'ingestion n'avance plus";
+            const figee = process.env.CODE_ARCHIVE !== '0';
+            const casses = process.env.CODE_SELECTEURS !== '0';
+            // Le titre ne sert qu'à la création : la recherche se fait sur
+            // le label. Il nomme donc la panne la plus grave des deux.
+            const titre = figee
+              ? "Archive figée : l'ingestion n'avance plus"
+              : "Sélecteurs cassés : la page source a changé";
             const ouvertes = await github.rest.issues.listForRepo({
               owner: context.repo.owner, repo: context.repo.repo,
               state: 'open', labels: 'veille',
             });
-            const corps = [
-              "Le contrôle hebdomadaire n'a vu aucune nouvelle séance.",
-              '', '```', rapport.trim(), '```', '',
-              "`ingestion.yml` ne rougit pas sur un échec isolé — jour férié,",
-              "séance non close et maintenance du site sont des cas normaux.",
-              "Cette issue est le contre-poids : elle ne se déclenche que",
-              "lorsque la donnée cesse d'avancer.",
-              '',
-              "DEUX CAUSES POSSIBLES, ET LA PREMIÈRE EST LA PLUS PROBABLE.",
-              '',
-              "1. Des artefacts attendent d'être versés. Depuis que les",
-              "   actions ne committent plus — un runner ne sait pas signer,",
-              "   et l'historique doit rester vérifiable — chaque séance est",
-              "   déposée en artefact et versée depuis une session. Regardez",
-              "   l'onglet Actions : si `ingestion quotidienne` réussit et",
-              "   publie des artefacts `archive-…`, il n'y a rien de cassé,",
-              "   seulement du travail en attente.",
-              '',
-              "2. La collecte elle-même échoue. `python -m brvm verifier` dit",
-              "   si les sélecteurs tiennent encore.",
-            ].join('\n');
+
+            const lignes = [];
+            if (figee) {
+              const rapport = fs.readFileSync('rapport.txt', 'utf8');
+              lignes.push(
+                "## L'archive n'avance plus",
+                '',
+                "Le contrôle hebdomadaire n'a vu aucune nouvelle séance.",
+                '', '```', rapport.trim(), '```', '',
+                "`ingestion.yml` ne rougit pas sur un échec isolé — jour férié,",
+                "séance non close et maintenance du site sont des cas normaux.",
+                "Cette issue est le contre-poids : elle ne se déclenche que",
+                "lorsque la donnée cesse d'avancer.",
+                '',
+                "DEUX CAUSES POSSIBLES, ET LA PREMIÈRE EST LA PLUS PROBABLE",
+                "— sauf si la section suivante existe, auquel cas c'est la",
+                "seconde, et elle est déjà diagnostiquée.",
+                '',
+                "1. Des artefacts attendent d'être versés. Depuis que les",
+                "   actions ne committent plus — un runner ne sait pas signer,",
+                "   et l'historique doit rester vérifiable — chaque séance est",
+                "   déposée en artefact et versée depuis une session. Regardez",
+                "   l'onglet Actions : si `ingestion quotidienne` réussit et",
+                "   publie des artefacts `archive-…`, il n'y a rien de cassé,",
+                "   seulement du travail en attente.",
+                '',
+                "2. La collecte elle-même échoue. `python -m brvm verifier` dit",
+                "   si les sélecteurs tiennent encore.",
+                '');
+            }
+            if (casses) {
+              const diagnostic = fs.readFileSync('selecteurs.txt', 'utf8');
+              lignes.push(
+                "## La page vivante ne se lit plus",
+                '',
+                "`brvm verifier` a échoué trois fois de suite sur",
+                "`brvm.org`, à deux minutes d'intervalle. Le diagnostic du",
+                "dernier essai :",
+                '', '```', diagnostic.trim(), '```', '',
+                "Ce contrôle est le seul à lire la page VIVANTE :",
+                "`tests.yml` lance le même diagnostic sur le témoin figé du",
+                "dépôt, et resterait donc vert pendant que le site change.",
+                '',
+                "Deux lectures, que la ligne `echec` sépare :",
+                '',
+                "- `page inaccessible` — le site est injoignable depuis un",
+                "  runner GitHub. Trois échecs espacés rendent la panne",
+                "  passagère peu probable, mais elle reste possible ;",
+                "  relancer le workflow tranche.",
+                "- toute autre valeur — la mise en page a bougé. La ligne",
+                "  `entetes_rencontres` donne les intitulés réellement",
+                "  présents : c'est à partir d'eux que se corrige",
+                "  `ALIAS_COLONNES` dans `ingestion/brvm_org.py`. Ne",
+                "  réécrivez pas un sélecteur sans cette ligne sous les yeux.",
+                '',
+                "Rejouez ensuite le témoin : `tests/donnees/cote_brvm_*.html`",
+                "doit être remplacé par la page du jour, sans quoi les tests",
+                "continueront de valider une mise en page disparue.",
+                '');
+            }
+            const corps = lignes.join('\n');
 
             if (ouvertes.data.length > 0) {
               await github.rest.issues.createComment({
@@ -82,11 +154,13 @@ jobs:
               });
             }
 
-      # Le contrôle est vert : on referme l'alerte au lieu de la laisser
-      # traîner. Une issue ouverte sur un problème résolu use la confiance
-      # aussi sûrement qu'une alerte manquante.
+      # Les DEUX contrôles sont verts : on referme l'alerte au lieu de la
+      # laisser traîner. Une issue ouverte sur un problème résolu use la
+      # confiance aussi sûrement qu'une alerte manquante. Il faut bien les
+      # deux — refermer sur l'archive seule effacerait le diagnostic des
+      # sélecteurs, qui est la moitié la plus difficile à reconstituer.
       - name: Refermer l'alerte si tout est reparti
-        if: steps.controle.outputs.code == '0'
+        if: steps.controle.outputs.code == '0' && steps.selecteurs.outputs.code == '0'
         uses: actions/github-script@v7
         with:
           script: |
@@ -98,7 +172,8 @@ jobs:
               await github.rest.issues.createComment({
                 owner: context.repo.owner, repo: context.repo.repo,
                 issue_number: issue.number,
-                body: "L'archive avance de nouveau — fermeture automatique.",
+                body: "L'archive avance de nouveau et la page source se lit "
+                    + "— fermeture automatique.",
               });
               await github.rest.issues.update({
                 owner: context.repo.owner, repo: context.repo.repo,

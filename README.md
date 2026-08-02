@@ -416,6 +416,16 @@ cinq jours ouvrés sans nouvelle séance, elle ouvre une issue — une seule,
 commentée les semaines suivantes plutôt que rouverte, et refermée
 automatiquement dès que l'archive repart.
 
+Ce contrôle-là ne voit une source cassée qu'indirectement, et avec cinq
+jours de retard. `veille.yml` lance donc aussi `brvm verifier` **sur la
+page vivante**, le même lundi. La distinction est le tout du dispositif :
+`tests.yml` lance le même diagnostic, mais sur le témoin figé du dépôt —
+il resterait vert pendant que brvm.org change de mise en page. Trois
+essais espacés de deux minutes séparent la panne passagère du sélecteur
+cassé ; l'issue reprend alors la ligne `entetes_rencontres`, seule base
+admissible pour corriger `ALIAS_COLONNES`. Il faut que **les deux**
+contrôles soient verts pour que l'alerte se referme.
+
 ### Le référentiel est historisé, et ce n'est pas cosmétique
 
 `referentiel` porte `premiere_vue` et `derniere_vue`, et **aucune ligne
