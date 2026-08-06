@@ -41,9 +41,9 @@ Ce projet fait trois choses :
 1. **Il collecte.** Chaque soir, un robot lit la cote publiée sur
    brvm.org et enregistre les cours du jour.
 2. **Il archive.** Tout est conservé dans des fichiers texte versionnés
-   dans ce dépôt Git — **112 913 lignes, 3 000 séances, du 2 janvier 2015
-   au 31 juillet 2026**, plus **309 versements de dividendes** sur
-   41 sociétés.
+   dans ce dépôt Git, mis à jour chaque jour de séance — à ce jour
+   **112 913 lignes, 3 000 séances, du 2 janvier 2015 au 31 juillet
+   2026**, plus **309 versements de dividendes** sur 41 sociétés.
 3. **Il analyse.** Une application web affiche le marché, la fiche de
    chaque valeur, un classement, et les résultats des tests statistiques.
 
