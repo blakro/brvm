@@ -169,34 +169,52 @@ def construire_echantillon(
     # construction des fenêtres glissantes — voir features.traits_glissants.
     matrices = features.traits_glissants(cours, conf)
 
-    lignes = []
-    for i in range(besoin - 1, len(dates) - horizon):
-        date = dates[i]
-        traits = pd.DataFrame(
-            {nom: matrices[nom].loc[date] for nom in TRAITS}
-        ).dropna(subset=["momentum", "tendance", "volatilite"])
-        if traits.empty:
-            continue
+    # UNE SEULE TABLE PLUTÔT QUE DEUX MILLE SEPT CENTS. La boucle bâtissait
+    # un `DataFrame` par séance, puis les concaténait : seize secondes, et
+    # payées deux fois par l'app puisque `valider` et `predire` construisent
+    # chacun le même échantillon. Les traits, le rendement futur et le rang
+    # dans la séance se calculent d'un bloc, la séance devenant une clé de
+    # regroupement — la coupe temporelle est inchangée, c'est toujours
+    # `traits_glissants` qui la garantit.
+    fenetre = dates[besoin - 1:len(dates) - horizon]
 
-        futur = prix.iloc[i + horizon] / prix.iloc[i] - 1
-        futur = futur.replace([np.inf, -np.inf], np.nan).reindex(traits.index)
-        valides = futur.dropna()
-        if len(valides) < 4:
-            continue
+    # `shift(-horizon)` décale de N LIGNES, donc de N séances : c'est bien
+    # `prix.iloc[i + horizon]` face à `prix.iloc[i]`, et non un décalage de
+    # jours calendaires.
+    futur = (prix.shift(-horizon) / prix - 1).replace([np.inf, -np.inf],
+                                                      np.nan)
 
-        bloc = pd.DataFrame({t: _rangs(traits.loc[valides.index, t])
-                             for t in TRAITS})
-        bloc["cible"] = (valides > valides.median()).astype(int)
-        # Le rendement réalisé est conservé tel quel : c'est lui qui sert à
-        # l'IC, qui mesure l'ordre prédit et non une frontière binaire.
-        bloc["rendement_futur"] = valides.to_numpy()
-        bloc["date"] = date
-        bloc["ticker"] = valides.index
-        lignes.append(bloc)
-
-    if not lignes:
+    colonnes = {nom: matrices[nom].reindex(fenetre).stack(future_stack=True)
+                for nom in TRAITS}
+    colonnes["rendement_futur"] = futur.reindex(fenetre).stack(
+        future_stack=True)
+    table = pd.concat(colonnes, axis=1)
+    table = table.dropna(subset=["momentum", "tendance", "volatilite",
+                                 "rendement_futur"])
+    if table.empty:
         return pd.DataFrame()
-    return pd.concat(lignes, ignore_index=True)
+
+    table.index.names = ["date", "ticker"]
+    table = table.reset_index()
+
+    # Moins de quatre valeurs cotées, et la médiane de la séance ne sépare
+    # plus rien : la séance est écartée, comme dans la boucle d'origine.
+    seance = table.groupby("date")["rendement_futur"]
+    table = table[seance.transform("size") >= 4]
+    if table.empty:
+        return pd.DataFrame()
+
+    seance = table.groupby("date")
+    bloc = pd.DataFrame({t: seance[t].rank(pct=True) for t in TRAITS})
+    bloc["cible"] = (table["rendement_futur"]
+                     > seance["rendement_futur"].transform("median")
+                     ).astype(int)
+    # Le rendement réalisé est conservé tel quel : c'est lui qui sert à
+    # l'IC, qui mesure l'ordre prédit et non une frontière binaire.
+    bloc["rendement_futur"] = table["rendement_futur"]
+    bloc["date"] = table["date"]
+    bloc["ticker"] = table["ticker"]
+    return bloc.reset_index(drop=True)
 
 
 def _ic(scores: pd.Series, rendements: pd.Series) -> float:

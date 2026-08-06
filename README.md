@@ -215,6 +215,25 @@ hiérarchie visuelle doit dire la force de la preuve.
 Chaque tableau s'exporte en CSV, et chaque graphique a son jumeau
 tabulaire. Une infobulle ne doit jamais être le seul accès à un chiffre.
 
+### L'onglet ouvert reste ouvert
+
+Streamlit rejoue tout le script à chaque clic. Deux conséquences, toutes
+deux corrigées :
+
+- **L'onglet ne se perd plus.** Il est retenu d'une relance à l'autre, et
+  écrit dans l'URL — donc il survit aussi au rechargement de la page, et
+  `?onglet=Backtest` se partage tel quel. Les réglages avancés d'un onglet
+  survivent de même à un aller-retour par un autre.
+- **Seul l'onglet visible se calcule.** Les quatre autres étaient
+  entièrement recalculés à chaque interaction : 176 secondes entre deux
+  rendus, pour un affichage qui n'en montre qu'un cinquième. Les résultats
+  sont en outre gardés en mémoire tant que l'archive ne change pas.
+
+Ouvrir l'app demande aujourd'hui **2,7 secondes**, et une interaction
+**deux à cinq dixièmes**. Seule la première ouverture du classement coûte
+une dizaine de secondes — c'est la validation glissante du modèle appris,
+annoncée par son message d'attente et gardée ensuite.
+
 ### Les couleurs
 
 Le mode sombre est une palette **choisie**, pas un inversement
