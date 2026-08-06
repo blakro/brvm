@@ -467,6 +467,97 @@ def lire_en_direct():
         return None, f"{type(erreur).__name__} — {detail}"
 
 
+# --- Calculs lourds, gardés d'une relance à l'autre ------------------------
+#
+# STREAMLIT REJOUE TOUT LE SCRIPT À CHAQUE CLIC, et rien ici ne s'en
+# souvenait. Taper une lettre dans la recherche relançait la validation du
+# modèle, sa prédiction, le backtest deux fois et le signal de dividende :
+# 176 secondes mesurées entre deux rendus, pour un résultat identique au
+# précédent puisque aucune de ces entrées n'avait bougé.
+#
+# Les tables passent en `_table` : le tiret bas dit à Streamlit de ne PAS
+# les empreinter, car hacher cent mille lignes à chaque appel rendrait une
+# partie de ce qu'on économise. Ce sont `archive` et `univers` qui font la
+# clé — l'empreinte des quatre tables et la liste des valeurs retenues par
+# le filtre — et elles déterminent entièrement les tables passées à côté.
+#
+# L'EMPREINTE PORTE LES QUATRE TABLES, PAS SEULEMENT LES COURS. Dividendes
+# et fondamentaux s'importent par une commande distincte de l'ingestion
+# quotidienne : une clé qui n'aurait regardé que `cours.csv` aurait servi
+# un backtest calculé sur les dividendes de la veille sans rien signaler.
+#
+# PAS DE DÉLAI DE PÉREMPTION ICI, ET C'EST VOULU. Une durée de vie ferait
+# recalculer à date fixe un résultat qui n'a pas bougé : la clé porte déjà
+# l'empreinte de l'archive, donc un résultat périmé est un résultat dont la
+# clé a changé. C'est `charger_archive` qui décide de la fraîcheur, en un
+# seul endroit. `max_entries` borne ce que le filtre peut faire accumuler.
+
+def _empreinte(*tables: pd.DataFrame) -> tuple:
+    """Empreinte bon marché d'un jeu de tables.
+
+    Nombre de lignes et somme de chaque colonne chiffrée : des agrégats qui
+    coûtent quelques millisecondes sur cent mille lignes et changent dès
+    qu'une valeur change — qu'une séance s'ajoute, qu'un montant se corrige
+    ou que la cote lue en direct vienne s'y greffer. C'est une clé de
+    mémoire, pas une signature : elle n'a rien à authentifier.
+    """
+    return tuple(
+        (len(table),
+         *(float(table[colonne].sum(skipna=True))
+           for colonne in table.select_dtypes("number").columns))
+        for table in tables
+    )
+
+
+@st.cache_data(max_entries=8, show_spinner=False)
+def calculer_classement(_cours, _referentiel, archive, univers, reglages):
+    return scoring.noter(features.calculer(_cours, reglages),
+                         _referentiel, reglages)
+
+
+@st.cache_data(max_entries=8, show_spinner="Rejeu de l'historique…")
+def calculer_backtest(_cours, _referentiel, _fondamentaux, _dividendes,
+                      archive, univers, positions, frais, impact,
+                      source="archive"):
+    """`source` ne sert qu'à distinguer les deux jeux de dividendes.
+
+    Le même backtest est rejoué avec l'autre source pour en donner
+    l'intervalle ; sans ce mot dans la clé, le second appel lirait le
+    résultat du premier et les deux bornes seraient identiques.
+    """
+    return backtest.backtester(
+        _cours, _referentiel,
+        {"analyse": DEFAUTS["analyse"], "ponderations": DEFAUTS["ponderations"],
+         "backtest": {**DEFAUTS["backtest"], "positions": positions,
+                      "frais_pourcent": frais, "impact_pourcent": impact}},
+        fondamentaux=_fondamentaux, dividendes=_dividendes,
+    )
+
+
+@st.cache_data(max_entries=8, show_spinner="Validation du modèle appris…")
+def valider_modele(_cours, _referentiel, archive, univers):
+    return prediction.valider(_cours, referentiel=_referentiel)
+
+
+@st.cache_data(max_entries=8, show_spinner="Application du modèle…")
+def appliquer_modele(_cours, _referentiel, archive, univers):
+    return prediction.predire(_cours, referentiel=_referentiel)
+
+
+@st.cache_data(max_entries=8, show_spinner=False)
+def signal_dividende(_cours, _dividendes, archive, univers, cibles):
+    return dividende.signal(_cours, _dividendes, tickers=list(cibles))
+
+
+@st.cache_data(max_entries=8, show_spinner=False)
+def variante_dividendes(_dividendes, _fondamentaux, archive):
+    """L'autre source de dividendes, si elle diffère — sinon None."""
+    autre = qualite.variante_sources(_dividendes, _fondamentaux)
+    if len(autre) == len(_dividendes) and autre.equals(_dividendes):
+        return None
+    return autre
+
+
 cours, referentiel, dividendes, fondamentaux = charger_archive()
 if referentiel.empty:
     referentiel = brvm_org.referentiel_amorce()
@@ -502,9 +593,9 @@ with titre_2:
         lire_en_direct.clear()
         direct, echec = lire_en_direct()
 
-# Replié par défaut, et ce n'est pas un détail : changer d'onglet ne relance
-# pas le script côté Streamlit, donc un dépliant ouvert le reste sur les six
-# onglets et leur mange le premier écran.
+# Replié par défaut, et ce n'est pas un détail : ce dépliant est au-dessus
+# des onglets, donc ouvert il le reste sur les cinq et leur mange le premier
+# écran.
 with st.expander("Première visite ? Comment lire cette app, et trois choses "
                  "à savoir sur la BRVM"):
     st.markdown(
@@ -601,6 +692,12 @@ if cours_filtre.empty:
     st.stop()
 referentiel_filtre = referentiel[referentiel["ticker"].isin(retenus)]
 
+# La clé des calculs gardés en mémoire. L'archive et le filtre : rien
+# d'autre n'entre dans les tables qu'ils reçoivent, donc rien d'autre n'a
+# besoin d'entrer dans la clé.
+ARCHIVE = _empreinte(cours, referentiel, dividendes, fondamentaux)
+UNIVERS = tuple(sorted(retenus))
+
 # CINQ ONGLETS, ET « PRÉDICTION » N'EN EST PLUS UN. Un onglet est une
 # promesse : il annonce qu'il y a quelque chose à voir. Or le modèle
 # appris mesure un IC de −0,045 — pire que la référence, pire que le
@@ -631,8 +728,31 @@ _constat.markdown(
     unsafe_allow_html=True)
 st.write("")
 
-onglets = st.tabs(["Marché", "Valeur", "Classement",
-                   "Backtest", "Données"])
+# LES ONGLETS TIENNENT LEUR RANG, ET C'EST DEUX CORRECTIONS EN UNE.
+#
+# Sans `key`, des onglets ne mémorisent rien : toute interaction qui
+# relance le script — le bouton « Actualiser », une puce de secteur, un
+# curseur — les ramenait au premier. On lisait le backtest, on actualisait,
+# on se retrouvait sur le marché.
+#
+# Sans `on_change="rerun"`, Streamlit exécute LE CORPS DES CINQ ONGLETS à
+# chaque relance, y compris les quatre qu'on ne regarde pas. Le classement
+# entraîne un modèle, le backtest rejoue onze ans et demi : le premier
+# rendu demandait 187 secondes pour afficher une page qui n'en montre
+# qu'un cinquième. `.open` laisse sauter ce qui est caché, et l'attente
+# d'ouverture tombe à 2,7 s.
+_LIBELLES = ["Marché", "Valeur", "Classement", "Backtest", "Données"]
+
+# Le rang survit aussi au rechargement du navigateur, qui vide la session :
+# il est écrit dans l'URL, ce qui rend au passage chaque onglet partageable.
+_demande = st.query_params.get("onglet")
+if "onglet" not in st.session_state and _demande in _LIBELLES:
+    st.session_state["onglet"] = _demande
+
+onglets = st.tabs(_LIBELLES, key="onglet", on_change="rerun")
+
+if st.query_params.get("onglet") != st.session_state["onglet"]:
+    st.query_params["onglet"] = st.session_state["onglet"]
 
 
 def _variations(table: pd.DataFrame) -> pd.DataFrame:
@@ -648,1115 +768,1142 @@ def _variations(table: pd.DataFrame) -> pd.DataFrame:
 
 
 # --- Marché ---------------------------------------------------------------
-with onglets[0]:
-    jour = _variations(cours_filtre)
-    connues = jour["variation"].dropna()
+if onglets[0].open:
+    with onglets[0]:
+        jour = _variations(cours_filtre)
+        connues = jour["variation"].dropna()
 
-    # LE HÉROS : un seul chiffre par vue, celui qui résume la séance. Ici
-    # la capitalisation échangée — c'est la mesure d'activité du marché,
-    # et la seule qui se lise sans contexte.
-    echange = jour["volume_fcfa"].sum(skipna=True)
-    heros_1, heros_2 = st.columns([2, 3])
-    with heros_1:
-        recentes = (cours_filtre.groupby("date")["volume_fcfa"].sum()
-                    .tail(12).tolist())
-        st.markdown(
-            f'<div class="tuile-label">Échangé le {pedagogie.jour(derniere)}'
-            f'</div><div class="heros">{pedagogie.montant(echange)}</div>'
-            f'<div class="tuile-note">12 dernières séances</div>'
-            + _etincelle(recentes, largeur=180, hauteur=34),
-            unsafe_allow_html=True)
-    with heros_2:
-        if not connues.empty:
-            hausses = int((connues > 0).sum())
-            baisses = int((connues < 0).sum())
-            stables = len(connues) - hausses - baisses
-            # La largeur du marché en une barre : une médiane positive
-            # portée par trois valeurs ne dit pas la même chose qu'une
-            # hausse partagée, et un empilement le montre sans le dire.
-            total = max(1, len(connues))
-            segments = [(hausses, HAUSSE, "en hausse"),
-                        (stables, MUET, "stables"),
-                        (baisses, BAISSE, "en baisse")]
-            # `flex` ET NON `width` : dans une rangée flex, une largeur en
-            # pourcentage n'est qu'une base que le conteneur réajuste, et
-            # les segments s'affichaient à des proportions fausses — 17,
-            # 2 et 28 valeurs rendues comme 45 %, 5 % et 48 % au lieu de
-            # 36 %, 4 % et 60 %. Une barre de répartition qui ment sur la
-            # répartition est pire qu'une absence de barre.
-            barre = "".join(
-                f'<div style="flex:{n} 0 0;background:{c};height:12px;'
-                f'border-radius:3px" title="{n} {m}"></div>'
-                for n, c, m in segments if n
-            )
+        # LE HÉROS : un seul chiffre par vue, celui qui résume la séance. Ici
+        # la capitalisation échangée — c'est la mesure d'activité du marché,
+        # et la seule qui se lise sans contexte.
+        echange = jour["volume_fcfa"].sum(skipna=True)
+        heros_1, heros_2 = st.columns([2, 3])
+        with heros_1:
+            recentes = (cours_filtre.groupby("date")["volume_fcfa"].sum()
+                        .tail(12).tolist())
             st.markdown(
-                '<div class="tuile-label">Largeur du marché</div>'
-                # Le trou de 2 px à la couleur du plan sépare les segments :
-                # c'est le vide qui distingue, jamais un contour.
-                f'<div style="display:flex;gap:2px;margin-top:.55rem">{barre}</div>'
-                f'<div class="tuile-note">{hausses} en hausse · '
-                f'{stables} stables · {baisses} en baisse, '
-                f'sur {len(connues)} valeurs</div>',
+                f'<div class="tuile-label">Échangé le {pedagogie.jour(derniere)}'
+                f'</div><div class="heros">{pedagogie.montant(echange)}</div>'
+                f'<div class="tuile-note">12 dernières séances</div>'
+                + _etincelle(recentes, largeur=180, hauteur=34),
                 unsafe_allow_html=True)
-
-    st.write("")
-    tuiles = st.columns(4)
-    _tuile(tuiles[0], "Séance", pedagogie.jour(derniere),
-           note=f"{seances} séances en archive", teinte=SERIE_1)
-    mediane = None if connues.empty else connues.median()
-    _tuile(tuiles[1], "Variation médiane", pedagogie.pourcentage(mediane),
-           sens=0 if mediane is None else (1 if mediane > 0 else -1),
-           note="sur les valeurs ayant coté")
-    # Douze séances de contexte derrière le chiffre du jour : une valeur
-    # seule ne dit pas si elle sort de l'ordinaire.
-    plus_traitee = jour.loc[jour["volume_fcfa"].idxmax()] \
-        if jour["volume_fcfa"].notna().any() else None
-    # La teinte suit l'intensité : plus une valeur pèse dans la séance,
-    # plus sa tuile est foncée. Une grandeur, donc la rampe.
-    _tuile(tuiles[2], "Plus échangée",
-           "—" if plus_traitee is None else str(plus_traitee["ticker"]),
-           note=("aucun échange"
-                 if plus_traitee is None else
-                 f"{pedagogie.montant(plus_traitee['volume_fcfa'])} · "
-                 f"{(plus_traitee['volume_fcfa'] / echange):.0%} du marché"),
-           teinte=(SERIE_1 if plus_traitee is None
-                   else _teinte(float(plus_traitee["volume_fcfa"]) / echange * 3)))
-    _tuile(tuiles[3], "Valeurs suivies", f"{jour['ticker'].nunique()}",
-           teinte=SERIE_1,
-           note=("toutes les sociétés cotées"
-                 if len(retenus) == len(referentiel)
-                 else f"{len(referentiel) - len(retenus)} écartées par le filtre"))
-
-    # --- Les secteurs, avant le détail ------------------------------------
-    if not connues.empty and jour["secteur"].notna().any():
-        st.markdown("## Par secteur")
-        par_secteur = (
-            jour.dropna(subset=["variation", "secteur"])
-            .groupby("secteur")
-            .agg(variation=("variation", "median"),
-                 valeurs=("ticker", "size"),
-                 hausses=("variation", lambda v: float((v > 0).mean())))
-            .sort_values("variation", ascending=False)
-            .reset_index()
-        )
-        # Les sept secteurs de la BRVM tiennent sur une rangée ; au-delà,
-        # ce serait une grille et le rang cesserait de se lire.
-        cartes = st.columns(max(1, len(par_secteur)))
-        for colonne, ligne in zip(cartes, par_secteur.itertuples()):
-            _carte_secteur(colonne, ligne.secteur, ligne.variation,
-                           int(ligne.valeurs), float(ligne.hausses))
-        st.write("")
-
-    # Les tuiles disent la même chose, mais il faut les lire ensemble pour
-    # l'entendre. La phrase le fait à la place du lecteur.
-    if connues.empty:
-        st.markdown(
-            f"À la séance du **{pedagogie.jour(derniere)}**, "
-            f"{jour['ticker'].nunique()} valeurs sont cotées et il s'est "
-            f"échangé {pedagogie.montant(echange)}. Aucune variation n'est "
-            "calculable : il n'y a qu'une séance en archive, donc rien à "
-            "quoi comparer. La deuxième suffira."
-        )
-    else:
-        hausses, baisses = int((connues > 0).sum()), int((connues < 0).sum())
-        stables = len(connues) - hausses - baisses
-        st.markdown(
-            f"À la séance du **{pedagogie.jour(derniere)}**, sur "
-            f"{len(connues)} valeurs : **{hausses} montent**, "
-            f"**{baisses} baissent**, "
-            + (f"{stables} sont inchangées" if stables != 1
-               else "1 est inchangée")
-            + f". Il s'est échangé {pedagogie.montant(echange)} en tout."
-        )
-
-    if not connues.empty:
-        classees = jour.dropna(subset=["variation"]).sort_values("variation")
-        # TÊTE ET QUEUE PLUTÔT QUE TOUT. Quarante-sept lignes à 22 px font
-        # plus de mille pixels : le graphique n'était jamais vu en entier,
-        # et son milieu — les valeurs qui n'ont presque pas bougé — est
-        # justement ce qu'on ne regarde pas. Les extrêmes tiennent dans un
-        # écran ; le reste s'ouvre au clic, et le tableau plus bas porte
-        # toujours les 47.
-        tout_montrer = st.toggle(
-            f"Afficher les {len(classees)} valeurs", value=False,
-            key="marche_tout",
-            help="Par défaut, les dix plus fortes hausses et les dix plus "
-                 "fortes baisses.")
-        if tout_montrer or len(classees) <= 20:
-            visibles, note = classees, f"{len(classees)} valeurs"
-        else:
-            visibles = pd.concat([classees.head(10), classees.tail(10)])
-            note = (f"dix plus fortes baisses et dix plus fortes hausses, "
-                    f"sur {len(classees)} valeurs")
-        panneau = _panneau(
-            f"Variation de la séance du {pedagogie.jour(derniere)}", note)
-        panneau.altair_chart(
-            alt.Chart(visibles)
-            .mark_bar(cornerRadiusEnd=4, height=14)
-            .encode(
-                # Axe en haut : le graphique fait plusieurs écrans, une
-                # échelle en bas obligerait à l'aller-retour.
-                x=alt.X("variation:Q", title="variation",
-                        axis=alt.Axis(format="+.1%", orient="top")),
-                # labelOverlap=False : sinon Vega masque un libellé sur deux
-                # et la moitié des barres devient inidentifiable.
-                y=alt.Y("ticker:N", sort=alt.SortField("variation", "descending"),
-                        title=None, axis=alt.Axis(labelOverlap=False)),
-                color=alt.condition(alt.datum.variation >= 0,
-                                    alt.value(HAUSSE), alt.value(BAISSE)),
-                tooltip=[
-                    alt.Tooltip("ticker:N", title="Symbole"),
-                    alt.Tooltip("nom:N", title="Société"),
-                    alt.Tooltip("cloture:Q", title="Clôture", format=",.0f"),
-                    alt.Tooltip("variation:Q", title="Variation", format="+.2%"),
-                    alt.Tooltip("secteur:N", title="Secteur"),
-                ],
-            )
-            .properties(height=max(240, 22 * len(visibles))),
-            width="stretch",
-        )
-    colonnes = ["ticker", "nom", "secteur", "cloture"]
-    if not connues.empty:
-        colonnes.append("variation")
-    colonnes += ["volume_titres", "volume_fcfa"]
-
-    tableau = jour[colonnes].sort_values("ticker").copy()
-    # Trente séances de contexte DANS le tableau : sans elles, chaque ligne
-    # est un instantané et rien ne dit si la valeur du jour est ordinaire.
-    # C'est aussi ce qui distingue une grille d'un terminal.
-    fenetre = cours_filtre[cours_filtre["date"] > dates_triees[-30]] \
-        if len(dates_triees) > 30 else cours_filtre
-    trente = (fenetre.sort_values("date").groupby("ticker")["cloture"]
-              .apply(list).to_dict())
-    tableau["tendance"] = tableau["ticker"].map(trente)
-    ordre = ["ticker", "nom", "secteur", "tendance", "cloture"]
-    ordre += [c for c in colonnes if c not in ordre]
-
-    # LE TABLEAU CESSE D'ÊTRE GRIS. La variation prend un fond divergent,
-    # le volume un fond séquentiel : on lit la structure de la séance en
-    # balayant la grille, sans comparer quarante-sept nombres de tête.
-    # L'opacité plafonne à 22 % — au-delà, le texte de la cellule perdrait
-    # son contraste, et c'est le confort de lecture qui décide, pas
-    # l'envie de couleur.
-    peint = tableau[ordre].style
-    if "variation" in ordre:
-        peint = peint.map(_fond_divergent, subset=["variation"])
-    plafond_volume = float(tableau["volume_fcfa"].max() or 0)
-    peint = peint.map(lambda v: _fond_sequentiel(v, plafond_volume),
-                      subset=["volume_fcfa"])
-    st.dataframe(
-        peint, width="stretch", hide_index=True,
-        column_config={
-            "ticker": st.column_config.TextColumn("Symbole"),
-            "nom": st.column_config.TextColumn("Société"),
-            "secteur": st.column_config.TextColumn("Secteur"),
-            "tendance": st.column_config.LineChartColumn(
-                "30 séances", width="small",
-                help="Clôtures des trente dernières séances. Sans axe : "
-                     "c'est une texture, pas un graphique."),
-            # `format="percent"` et non « %+.2f%% » : le format printf ne
-            # multiplie pas par cent, et affichait « -0,02 % » là où la
-            # valeur baissait de 2 %. Cent fois trop petit, sans rien qui
-            # le signale — le graphique juste au-dessus disait autre chose.
-            "cloture": st.column_config.NumberColumn("Clôture",
-                                                     format="localized"),
-            "variation": st.column_config.NumberColumn("Var.",
-                                                       format="percent"),
-            # « localized » suit la locale du lecteur : un francophone lit
-            # « 1 042 625 » et non « 1,042,625 ».
-            "volume_titres": st.column_config.NumberColumn("Titres",
-                                                           format="localized"),
-            # Nombre et non barre : la cellule porte déjà un fond dont
-            # la densité dit le poids, et superposer les deux ferait
-            # encoder la même grandeur deux fois.
-            "volume_fcfa": st.column_config.NumberColumn(
-                "Échangé (FCFA)", format="localized"),
-        },
-    )
-    # L'export garde les colonnes chiffrées : une liste de clôtures ne se
-    # met pas dans un CSV.
-    _telecharger(jour[colonnes], f"brvm_{derniere}.csv", "dl_marche")
-    _glossaire("fixing", "limite", "liquidite")
-
-
-# --- Valeur ---------------------------------------------------------------
-with onglets[1]:
-    noms = referentiel.set_index("ticker")["nom"]
-    choix = st.selectbox(
-        "Valeur", sorted(cours_filtre["ticker"].unique()),
-        format_func=lambda t: f"{t} — {noms.get(t, '')}",
-    )
-
-    serie = cours_filtre[cours_filtre["ticker"] == choix].sort_values("date")
-    fiche = referentiel[referentiel["ticker"] == choix]
-    dernier = serie.iloc[-1]
-
-    div_valeur = (dividendes[dividendes["ticker"] == choix]
-                  if not dividendes.empty else pd.DataFrame())
-
-    # Le secteur est un libellé, pas une mesure : dans une tuile il se fait
-    # tronquer — « Consommation Dis… » ne distingue plus les deux secteurs
-    # de consommation. Il passe donc en légende, où il tient en entier.
-    st.caption(
-        f"**{fiche['nom'].iloc[0] if not fiche.empty else choix}** · "
-        f"{fiche['secteur'].iloc[0] if not fiche.empty else 'secteur inconnu'}"
-    )
-
-    faits = st.columns(3)
-    variation = (dernier["cloture"] / serie["cloture"].iloc[-2] - 1
-                 if len(serie) >= 2 else None)
-    # Douze séances de contexte : un cours seul ne dit pas s'il sort de
-    # l'ordinaire.
-    _tuile(faits[0], "Clôture", pedagogie.montant(dernier["cloture"]),
-           delta=pedagogie.pourcentage(variation) + " sur la séance"
-                 if variation is not None else "",
-           sens=0 if variation is None else (1 if variation > 0 else -1),
-           etincelle=_etincelle(serie["cloture"].tail(12).tolist()))
-    # Même arrondi que la phrase juste en dessous : deux écritures du même
-    # montant à trois lignes d'écart donnent à croire à deux montants.
-    _tuile(faits[1], "Volume échangé",
-           pedagogie.montant(dernier["volume_fcfa"]),
-           note="sur la dernière séance")
-    _tuile(faits[2], "Dividendes connus", f"{len(div_valeur)}",
-           note="détachements datés en archive")
-
-    # La même information en toutes lettres. Trois tuiles se lisent vite
-    # quand on sait quoi y chercher ; sinon ce sont trois nombres nus.
-    morceaux = [
-        f"**{fiche['nom'].iloc[0] if not fiche.empty else choix}** vaut "
-        f"{pedagogie.montant(dernier['cloture'])} à la clôture du "
-        f"{pedagogie.jour(derniere)}"
-    ]
-    if len(serie) >= 2:
-        veille = serie["cloture"].iloc[-2]
-        if pd.notna(veille) and veille > 0:
-            morceaux.append(
-                "soit "
-                + pedagogie.pourcentage(dernier["cloture"] / veille - 1)
-                + " sur la séance"
-            )
-    # Reculs en séances : un mois, un trimestre, un an de cotation.
-    for pas, mot in [(21, "un mois"), (63, "trois mois"), (250, "un an")]:
-        if len(serie) > pas:
-            passe = serie["cloture"].iloc[-1 - pas]
-            if pd.notna(passe) and passe > 0:
-                morceaux.append(
-                    pedagogie.pourcentage(dernier["cloture"] / passe - 1)
-                    + f" sur {mot}"
+        with heros_2:
+            if not connues.empty:
+                hausses = int((connues > 0).sum())
+                baisses = int((connues < 0).sum())
+                stables = len(connues) - hausses - baisses
+                # La largeur du marché en une barre : une médiane positive
+                # portée par trois valeurs ne dit pas la même chose qu'une
+                # hausse partagée, et un empilement le montre sans le dire.
+                total = max(1, len(connues))
+                segments = [(hausses, HAUSSE, "en hausse"),
+                            (stables, MUET, "stables"),
+                            (baisses, BAISSE, "en baisse")]
+                # `flex` ET NON `width` : dans une rangée flex, une largeur en
+                # pourcentage n'est qu'une base que le conteneur réajuste, et
+                # les segments s'affichaient à des proportions fausses — 17,
+                # 2 et 28 valeurs rendues comme 45 %, 5 % et 48 % au lieu de
+                # 36 %, 4 % et 60 %. Une barre de répartition qui ment sur la
+                # répartition est pire qu'une absence de barre.
+                barre = "".join(
+                    f'<div style="flex:{n} 0 0;background:{c};height:12px;'
+                    f'border-radius:3px" title="{n} {m}"></div>'
+                    for n, c, m in segments if n
                 )
-    volume = dernier["volume_fcfa"]
-    morceaux.append(
-        "aucun échange lors de cette séance" if pd.isna(volume) or volume == 0
-        else f"{pedagogie.montant(volume)} échangés dans la séance"
-    )
-    st.markdown(", ".join(morceaux) + ".")
+                st.markdown(
+                    '<div class="tuile-label">Largeur du marché</div>'
+                    # Le trou de 2 px à la couleur du plan sépare les segments :
+                    # c'est le vide qui distingue, jamais un contour.
+                    f'<div style="display:flex;gap:2px;margin-top:.55rem">{barre}</div>'
+                    f'<div class="tuile-note">{hausses} en hausse · '
+                    f'{stables} stables · {baisses} en baisse, '
+                    f'sur {len(connues)} valeurs</div>',
+                    unsafe_allow_html=True)
 
-    if len(serie) >= 2:
-        # LE CURSEUR EST LE POINT, PAS L'ORNEMENT. Sur 2 876 séances, un
-        # point fait moins d'un demi-pixel de large : viser une infobulle
-        # est impossible, et une courbe sans lecture ponctuelle n'est
-        # qu'une silhouette. La sélection porte sur l'abscisse la plus
-        # proche du curseur, quelle que soit la hauteur de la souris.
-        survol = alt.selection_point(nearest=True, on="pointermove",
-                                     fields=["date"], empty=False)
-        base_cours = alt.Chart(serie).encode(
-            x=alt.X("date:T", title=None,
-                    axis=alt.Axis(format="%d/%m/%y", tickCount=8)),
-            # Format SI (« 22k ») : « 22,000 » est une convention
-            # anglaise, et l'app affiche « 14 229 » juste au-dessus.
-            y=alt.Y("cloture:Q", title="clôture (FCFA)",
-                    scale=alt.Scale(zero=False),
-                    axis=alt.Axis(format="~s")),
-        )
-        infobulle = [
-            alt.Tooltip("date:T", title="Séance", format="%d/%m/%Y"),
-            alt.Tooltip("cloture:Q", title="Clôture", format=",.0f"),
-            alt.Tooltip("volume_titres:Q", title="Titres", format=",.0f"),
-        ]
-        # La zone de capture est transparente et couvre toute la hauteur :
-        # une cible de survol doit être plus grande que la marque.
-        capteur = (base_cours.mark_rule(strokeWidth=24, opacity=0)
-                   .encode(tooltip=infobulle).add_params(survol))
-        trait = base_cours.mark_rule(color=MUET, strokeWidth=1).transform_filter(survol)
-        point = (base_cours.mark_point(size=80, filled=True, color=SERIE_1,
-                                       stroke=SURFACE, strokeWidth=2)
-                 .transform_filter(survol))
-        # Le lavis sous la courbe : la teinte de la série à faible
-        # opacité, jamais un aplat saturé. Il donne du corps à une ligne
-        # de 2 px sans rien ajouter à ce qu'elle dit.
-        aire = base_cours.mark_area(
-            line=False,
-            color=alt.Gradient(
-                gradient="linear", x1=0, x2=0, y1=1, y2=0,
-                stops=[alt.GradientStop(color=_lavis(SERIE_1, 0.0), offset=0),
-                       alt.GradientStop(color=_lavis(SERIE_1, 0.28), offset=1)]))
-        _panneau(f"{choix} — cours de clôture",
-                 f"{len(serie)} séances, {serie['date'].iloc[0]} → "
-                 f"{serie['date'].iloc[-1]}").altair_chart(
-            (aire + base_cours.mark_line(strokeWidth=2, color=SERIE_1)
-             + capteur + trait + point)
-            # Une série de plusieurs années ne se lit pas d'un bloc.
-            .properties(height=320),
-            width="stretch",
-        )
-        st.caption("Survolez la courbe pour lire une séance.")
-    else:
-        st.info(f"Une seule séance en base pour {choix} : pas d'historique à "
-                "tracer. Le graphique apparaîtra dès la deuxième.")
+        st.write("")
+        tuiles = st.columns(4)
+        _tuile(tuiles[0], "Séance", pedagogie.jour(derniere),
+               note=f"{seances} séances en archive", teinte=SERIE_1)
+        mediane = None if connues.empty else connues.median()
+        _tuile(tuiles[1], "Variation médiane", pedagogie.pourcentage(mediane),
+               sens=0 if mediane is None else (1 if mediane > 0 else -1),
+               note="sur les valeurs ayant coté")
+        # Douze séances de contexte derrière le chiffre du jour : une valeur
+        # seule ne dit pas si elle sort de l'ordinaire.
+        plus_traitee = jour.loc[jour["volume_fcfa"].idxmax()] \
+            if jour["volume_fcfa"].notna().any() else None
+        # La teinte suit l'intensité : plus une valeur pèse dans la séance,
+        # plus sa tuile est foncée. Une grandeur, donc la rampe.
+        _tuile(tuiles[2], "Plus échangée",
+               "—" if plus_traitee is None else str(plus_traitee["ticker"]),
+               note=("aucun échange"
+                     if plus_traitee is None else
+                     f"{pedagogie.montant(plus_traitee['volume_fcfa'])} · "
+                     f"{(plus_traitee['volume_fcfa'] / echange):.0%} du marché"),
+               teinte=(SERIE_1 if plus_traitee is None
+                       else _teinte(float(plus_traitee["volume_fcfa"]) / echange * 3)))
+        _tuile(tuiles[3], "Valeurs suivies", f"{jour['ticker'].nunique()}",
+               teinte=SERIE_1,
+               note=("toutes les sociétés cotées"
+                     if len(retenus) == len(referentiel)
+                     else f"{len(referentiel) - len(retenus)} écartées "
+                          "par le filtre"))
 
-    mesures = fondamentaux[fondamentaux["ticker"] == choix] \
-        if not fondamentaux.empty else pd.DataFrame()
-    if not mesures.empty:
-        st.subheader("Dividendes par exercice")
-        large = (mesures.pivot_table(index="date", columns="indicateur",
-                                     values="valeur", aggfunc="first")
-                 .reset_index().sort_values("date", ascending=False))
-        large["date"] = large["date"].str[:4]
-        st.dataframe(
-            large, width="stretch", hide_index=True,
-            column_config={
-                "date": st.column_config.TextColumn("Exercice"),
-                "dividende": st.column_config.NumberColumn(
-                    "Dividende net", format="%.2f", help="Par action, en FCFA."),
-                "rendement": st.column_config.NumberColumn(
-                    "Rendement", format="%.2f %%"),
-            },
-        )
-        st.caption(
-            "Un exercice absent du tableau est un exercice sans versement "
-            "publié — pas un dividende nul : « n'a pas versé » et « on ne "
-            "sait pas » ne sont pas la même chose."
-        )
-
-    if not div_valeur.empty:
-        st.subheader("Détachements à venir")
-        st.dataframe(div_valeur.sort_values("date_detachement", ascending=False),
-                     width="stretch", hide_index=True)
-
-    _telecharger(serie, f"{choix}.csv", "dl_valeur")
-    _glossaire("dividende", "rendement", "liquidite", "sgi")
-
-
-# --- Classement -----------------------------------------------------------
-with onglets[2]:
-    st.caption(
-        "Momentum « 12-1 », filtré par liquidité et neutralisé par secteur. "
-        "**Les pondérations n'ont été calibrées sur rien** : une liste de "
-        "valeurs à examiner, pas un signal validé."
-    )
-    # Repliés : six curseurs en tête d'onglet, c'est un pupitre dont un
-    # lecteur qui découvre le sujet ne peut pas connaître les bons réglages,
-    # et qui modifient silencieusement le classement affiché en dessous. Les
-    # valeurs par défaut sont celles de la configuration du projet.
-    with st.expander("Réglages avancés"):
-        reg_1, reg_2 = st.columns([1, 2])
-        with reg_1:
-            seuil = st.number_input(
-                "Volume médian minimal (FCFA)", min_value=0, step=100_000,
-                value=int(DEFAUTS["analyse"]["volume_median_min_fcfa"]),
-                help="Une valeur qui ne s'échange pas ne se vend pas non plus.",
+        # --- Les secteurs, avant le détail ------------------------------------
+        if not connues.empty and jour["secteur"].notna().any():
+            st.markdown("## Par secteur")
+            par_secteur = (
+                jour.dropna(subset=["variation", "secteur"])
+                .groupby("secteur")
+                .agg(variation=("variation", "median"),
+                     valeurs=("ticker", "size"),
+                     hausses=("variation", lambda v: float((v > 0).mean())))
+                .sort_values("variation", ascending=False)
+                .reset_index()
             )
-            # Le maximum suit le référentiel : une introduction en bourse
-            # de plus, et un plafond écrit en dur rendrait la dernière
-            # valeur inatteignable sans que rien ne le signale.
-            plafond = max(5, len(referentiel))
-            combien = st.slider("Lignes affichées", 5, plafond, min(15, plafond))
-        with reg_2:
-            poids = {
-                "momentum":
-                    st.slider("Poids du momentum", -1.0, 1.0, 0.5, 0.05),
-                "tendance":
-                    st.slider("Poids de la tendance", -1.0, 1.0, 0.3, 0.05),
-                "volatilite":
-                    st.slider("Poids de la volatilité", -1.0, 1.0, -0.2, 0.05),
-            }
+            # Les sept secteurs de la BRVM tiennent sur une rangée ; au-delà,
+            # ce serait une grille et le rang cesserait de se lire.
+            cartes = st.columns(max(1, len(par_secteur)))
+            for colonne, ligne in zip(cartes, par_secteur.itertuples()):
+                _carte_secteur(colonne, ligne.secteur, ligne.variation,
+                               int(ligne.valeurs), float(ligne.hausses))
+            st.write("")
 
-    reglages = {"analyse": {**DEFAUTS["analyse"],
-                            "volume_median_min_fcfa": seuil},
-                "ponderations": poids}
-    classement = scoring.noter(features.calculer(cours_filtre, reglages),
-                               referentiel_filtre, reglages)
-
-    requis = reglages["analyse"]["fenetre_momentum"] + 1
-    if classement.empty and seances < requis:
-        _attente(
-            "Classement",
-            seances, requis,
-            "Le momentum se mesure sur un an de cotation. Calculé sur moins, "
-            "il aurait toutes les apparences d'un momentum sans rien "
-            "mesurer — d'où le refus plutôt qu'une approximation. "
-            "L'archive gagne une séance par jour ouvré.",
-        )
-    elif classement.empty:
-        # L'ARCHIVE EST SUFFISANTE : C'EST LE FILTRE QUI A TOUT ÉCARTÉ. Le
-        # compteur d'attente affichait ici « 2 996 sur 251 séances
-        # nécessaires », jauge pleine, tableau absent — il accusait
-        # l'historique d'un vide que l'utilisateur venait de créer lui-même
-        # en montant le seuil. Un refus doit nommer sa vraie cause, sinon
-        # il se lit comme une panne.
-        st.warning(
-            f"**Aucune valeur ne passe le filtre de liquidité.** Le seuil "
-            f"est réglé à {pedagogie.montant(seuil)} de volume médian "
-            f"quotidien ; aucune des {len(referentiel_filtre)} sociétés "
-            f"suivies n'échange autant. Abaissez-le dans « Réglages "
-            f"avancés » — le défaut du projet est "
-            f"{pedagogie.montant(DEFAUTS['analyse']['volume_median_min_fcfa'])}."
-        )
-    else:
-        # Le rang est ce qui se comprend sans rien savoir ; le score n'a pas
-        # d'unité et ne se compare pas d'un jour à l'autre. `scoring` le
-        # calcule déjà — il suffit de le mettre en tête de tableau.
-        classement = classement[
-            ["rang"] + [c for c in classement.columns if c != "rang"]
-        ]
-        tete = classement.head(combien)
-        total = len(classement)
-        st.markdown(
-            f"{total} valeurs passent le filtre de liquidité et sont "
-            f"classées. En tête : "
-            + ", ".join(
-                f"**{ligne.ticker}** ({pedagogie.ordinal(ligne.rang)})"
-                for ligne in tete.head(3).itertuples()
+        # Les tuiles disent la même chose, mais il faut les lire ensemble pour
+        # l'entendre. La phrase le fait à la place du lecteur.
+        if connues.empty:
+            st.markdown(
+                f"À la séance du **{pedagogie.jour(derniere)}**, "
+                f"{jour['ticker'].nunique()} valeurs sont cotées et il s'est "
+                f"échangé {pedagogie.montant(echange)}. Aucune variation n'est "
+                "calculable : il n'y a qu'une séance en archive, donc rien à "
+                "quoi comparer. La deuxième suffira."
             )
-            + f" sur {total}. Le score n'a pas d'unité — seul l'ordre compte."
-        )
-        # POINTS ET NON BARRES. Une barre part obligatoirement de zéro, et
-        # sur des scores compris entre 90 et 111 les quinze barres
-        # paraissent identiques. Tronquer l'axe pour « voir la
-        # différence » exagérerait des écarts que le score ne prétend pas
-        # porter — il n'a pas d'unité, seul son ordre compte. Le point,
-        # lui, ne réclame pas de ligne de base : il situe sans quantifier.
-        base_score = alt.Chart(tete).encode(
-            y=alt.Y("ticker:N", sort="-x", title=None,
-                    axis=alt.Axis(labelOverlap=False)),
-            x=alt.X("score:Q", title="score (sans unité)",
-                    scale=alt.Scale(zero=False, nice=True)),
-        )
-        _panneau("Score composite",
-                 f"{len(tete)} premières sur {total} classées · "
-                 "aucun des traits qui le composent ne bat le hasard").altair_chart(
-            (base_score.mark_rule(color=GRILLE, strokeWidth=1)
-             .encode(x2=alt.X2("minimum:Q"))
-             .transform_calculate(minimum=str(float(tete["score"].min())))
-             + base_score
-            # Le score est une grandeur continue : la rampe d'une seule
-            # teinte est faite pour cela, et elle dit « combien » sans
-            # jamais prétendre dire « lequel ».
-            .mark_point(size=130, filled=True, stroke=SURFACE, strokeWidth=2)
-            .encode(
-                color=alt.Color("score:Q", legend=None,
-                                scale=alt.Scale(range=RAMPE)),
-                tooltip=[
-                    alt.Tooltip("rang:Q", title="Rang"),
-                    alt.Tooltip("ticker:N", title="Symbole"),
-                    alt.Tooltip("nom:N", title="Société"),
-                    alt.Tooltip("score:Q", title="Score", format=".1f"),
-                    alt.Tooltip("momentum:Q", title="Momentum", format="+.1%"),
-                    alt.Tooltip("secteur:N", title="Secteur"),
-                ],
-            )).properties(height=max(240, 26 * len(tete))),
-            width="stretch",
-        )
-        # Le tableau reprend la rampe du graphique au-dessus : même
-        # grandeur, même encodage. Les voir se contredire coûterait plus
-        # cher que de ne pas colorer du tout.
-        peint_rang = tete.style.map(
-            lambda v: _fond_sequentiel(v - float(tete["score"].min()),
-                                       float(tete["score"].max()
-                                             - tete["score"].min()) or 1),
-            subset=["score"])
-        for trait in ("momentum", "tendance"):
-            if trait in tete.columns:
-                peint_rang = peint_rang.map(
-                    lambda v: _fond_divergent(v, plafond=1.5), subset=[trait])
-        st.dataframe(
-            peint_rang, width="stretch", hide_index=True,
-            column_config={
-                "rang": st.column_config.NumberColumn(
-                    "Rang", format="%d", help=f"Sur {total} valeurs classées."),
-                "ticker": st.column_config.TextColumn("Symbole"),
-                "nom": st.column_config.TextColumn("Société"),
-                "secteur": st.column_config.TextColumn("Secteur"),
-                "cloture": st.column_config.NumberColumn(
-                    "Clôture", format="%.0f", help="En FCFA."),
-                # Les traits sont des proportions : les afficher en 0,5733
-                # oblige le lecteur à faire la conversion de tête.
-                "momentum": st.column_config.NumberColumn(
-                    "Momentum", format="percent",
-                    help="Hausse accumulée sur l'année, dernier mois exclu."),
-                "tendance": st.column_config.NumberColumn(
-                    "Tendance", format="percent",
-                    help="Écart entre moyenne courte et moyenne longue."),
-                "volatilite": st.column_config.NumberColumn(
-                    "Volatilité", format="percent",
-                    help="Ampleur habituelle des écarts, en rythme annuel."),
-                "liquidite": st.column_config.NumberColumn(
-                    "Liquidité", format="localized",
-                    help="Montant médian échangé par séance, en FCFA."),
-                "score": st.column_config.NumberColumn(
-                    "Score", format="%.1f",
-                    help="Sans unité : seul l'ordre qu'il produit compte."),
-            },
-        )
-        _telecharger(classement, "classement.csv", "dl_classement")
+        else:
+            hausses, baisses = int((connues > 0).sum()), int((connues < 0).sum())
+            stables = len(connues) - hausses - baisses
+            st.markdown(
+                f"À la séance du **{pedagogie.jour(derniere)}**, sur "
+                f"{len(connues)} valeurs : **{hausses} montent**, "
+                f"**{baisses} baissent**, "
+                + (f"{stables} sont inchangées" if stables != 1
+                   else "1 est inchangée")
+                + f". Il s'est échangé {pedagogie.montant(echange)} en tout."
+            )
 
-    # LE RENDEMENT PASSE DEVANT, ET C'EST LA DONNÉE QUI L'A DÉCIDÉ. Sur
-    # les quatre exercices connus, le dividende médian vaut 7 à 10 % par
-    # an, tous les ans ; le cours, lui, va de -1,6 % à +61,4 %. Le
-    # classement par momentum ordonne le quart bruyant du rendement, et
-    # aucun trait de prix ne bat le hasard sur 11,5 ans.
-    st.subheader("Rendement du dividende")
-    rendements = fondamentaux[fondamentaux["indicateur"] == "rendement"]
-    if rendements.empty:
-        st.info(
-            "Aucun rendement en archive. `brvm dividendes` lit les "
-            "calendriers de brvm.org et de sikafinance, et le tableau "
-            "pluriannuel de ce dernier."
-        )
-    else:
-        dernier_exercice = rendements["date"].max()
-        recent = (rendements[rendements["date"] == dernier_exercice]
-                  .merge(referentiel_filtre[["ticker", "nom", "secteur"]],
-                         on="ticker", how="inner")
-                  .sort_values("valeur", ascending=False))
-        st.markdown(
-            f"Exercice **{dernier_exercice[:4]}**, {len(recent)} sociétés. "
-            f"Rendement médian **{pedagogie.pourcentage(recent['valeur'].median() / 100, signe=False)}** — "
-            "à comparer aux 2,8 % l'an que rapporte le cours seul sur onze "
-            "ans. **Sur ce marché, le dividende est l'essentiel du "
-            "rendement**, et le classement ci-dessus n'en tient aucun compte."
-        )
-        if not recent.empty:
-            tete = recent.head(15)
-            _panneau(f"Rendement du dividende — exercice {dernier_exercice[:4]}",
-                     "la part du rendement qui existe réellement sur ce "
-                     "marché").altair_chart(
-                alt.Chart(tete)
-                .mark_bar(cornerRadiusEnd=4, height=16)
+        if not connues.empty:
+            classees = jour.dropna(subset=["variation"]).sort_values("variation")
+            # TÊTE ET QUEUE PLUTÔT QUE TOUT. Quarante-sept lignes à 22 px font
+            # plus de mille pixels : le graphique n'était jamais vu en entier,
+            # et son milieu — les valeurs qui n'ont presque pas bougé — est
+            # justement ce qu'on ne regarde pas. Les extrêmes tiennent dans un
+            # écran ; le reste s'ouvre au clic, et le tableau plus bas porte
+            # toujours les 47.
+            tout_montrer = st.toggle(
+                f"Afficher les {len(classees)} valeurs", value=False,
+                key="marche_tout",
+                help="Par défaut, les dix plus fortes hausses et les dix plus "
+                     "fortes baisses.")
+            if tout_montrer or len(classees) <= 20:
+                visibles, note = classees, f"{len(classees)} valeurs"
+            else:
+                visibles = pd.concat([classees.head(10), classees.tail(10)])
+                note = (f"dix plus fortes baisses et dix plus fortes hausses, "
+                        f"sur {len(classees)} valeurs")
+            panneau = _panneau(
+                f"Variation de la séance du {pedagogie.jour(derniere)}", note)
+            panneau.altair_chart(
+                alt.Chart(visibles)
+                .mark_bar(cornerRadiusEnd=4, height=14)
                 .encode(
-                    x=alt.X("valeur:Q", title="rendement du dividende (%)"),
-                    # Rampe orange : c'est la seconde grandeur continue
-                    # affichée en même temps que le score, et deux rampes
-                    # simultanées prennent chacune leur propre teinte.
-                    color=alt.Color(
-                        "valeur:Q", legend=None,
-                        scale=alt.Scale(range=["#f7c9b4", "#eb6834", "#a83c17"]
-                                        if not SOMBRE else
-                                        ["#7a3016", "#d95926", "#f0a883"])),
-                    y=alt.Y("ticker:N", sort="-x", title=None,
-                            axis=alt.Axis(labelOverlap=False)),
+                    # Axe en haut : le graphique fait plusieurs écrans, une
+                    # échelle en bas obligerait à l'aller-retour.
+                    x=alt.X("variation:Q", title="variation",
+                            axis=alt.Axis(format="+.1%", orient="top")),
+                    # labelOverlap=False : sinon Vega masque un libellé sur deux
+                    # et la moitié des barres devient inidentifiable.
+                    y=alt.Y("ticker:N", sort=alt.SortField("variation", "descending"),
+                            title=None, axis=alt.Axis(labelOverlap=False)),
+                    color=alt.condition(alt.datum.variation >= 0,
+                                        alt.value(HAUSSE), alt.value(BAISSE)),
                     tooltip=[
                         alt.Tooltip("ticker:N", title="Symbole"),
                         alt.Tooltip("nom:N", title="Société"),
-                        alt.Tooltip("valeur:Q", title="Rendement",
-                                    format=".2f"),
+                        alt.Tooltip("cloture:Q", title="Clôture", format=",.0f"),
+                        alt.Tooltip("variation:Q", title="Variation", format="+.2%"),
                         alt.Tooltip("secteur:N", title="Secteur"),
                     ],
                 )
-                .properties(height=max(220, 24 * len(tete))),
+                .properties(height=max(240, 22 * len(visibles))),
                 width="stretch",
             )
+        colonnes = ["ticker", "nom", "secteur", "cloture"]
+        if not connues.empty:
+            colonnes.append("variation")
+        colonnes += ["volume_titres", "volume_fcfa"]
+
+        tableau = jour[colonnes].sort_values("ticker").copy()
+        # Trente séances de contexte DANS le tableau : sans elles, chaque ligne
+        # est un instantané et rien ne dit si la valeur du jour est ordinaire.
+        # C'est aussi ce qui distingue une grille d'un terminal.
+        fenetre = cours_filtre[cours_filtre["date"] > dates_triees[-30]] \
+            if len(dates_triees) > 30 else cours_filtre
+        trente = (fenetre.sort_values("date").groupby("ticker")["cloture"]
+                  .apply(list).to_dict())
+        tableau["tendance"] = tableau["ticker"].map(trente)
+        ordre = ["ticker", "nom", "secteur", "tendance", "cloture"]
+        ordre += [c for c in colonnes if c not in ordre]
+
+        # LE TABLEAU CESSE D'ÊTRE GRIS. La variation prend un fond divergent,
+        # le volume un fond séquentiel : on lit la structure de la séance en
+        # balayant la grille, sans comparer quarante-sept nombres de tête.
+        # L'opacité plafonne à 22 % — au-delà, le texte de la cellule perdrait
+        # son contraste, et c'est le confort de lecture qui décide, pas
+        # l'envie de couleur.
+        peint = tableau[ordre].style
+        if "variation" in ordre:
+            peint = peint.map(_fond_divergent, subset=["variation"])
+        plafond_volume = float(tableau["volume_fcfa"].max() or 0)
+        peint = peint.map(lambda v: _fond_sequentiel(v, plafond_volume),
+                          subset=["volume_fcfa"])
+        st.dataframe(
+            peint, width="stretch", hide_index=True,
+            column_config={
+                "ticker": st.column_config.TextColumn("Symbole"),
+                "nom": st.column_config.TextColumn("Société"),
+                "secteur": st.column_config.TextColumn("Secteur"),
+                "tendance": st.column_config.LineChartColumn(
+                    "30 séances", width="small",
+                    help="Clôtures des trente dernières séances. Sans axe : "
+                         "c'est une texture, pas un graphique."),
+                # `format="percent"` et non « %+.2f%% » : le format printf ne
+                # multiplie pas par cent, et affichait « -0,02 % » là où la
+                # valeur baissait de 2 %. Cent fois trop petit, sans rien qui
+                # le signale — le graphique juste au-dessus disait autre chose.
+                "cloture": st.column_config.NumberColumn("Clôture",
+                                                         format="localized"),
+                "variation": st.column_config.NumberColumn("Var.",
+                                                           format="percent"),
+                # « localized » suit la locale du lecteur : un francophone lit
+                # « 1 042 625 » et non « 1,042,625 ».
+                "volume_titres": st.column_config.NumberColumn("Titres",
+                                                               format="localized"),
+                # Nombre et non barre : la cellule porte déjà un fond dont
+                # la densité dit le poids, et superposer les deux ferait
+                # encoder la même grandeur deux fois.
+                "volume_fcfa": st.column_config.NumberColumn(
+                    "Échangé (FCFA)", format="localized"),
+            },
+        )
+        # L'export garde les colonnes chiffrées : une liste de clôtures ne se
+        # met pas dans un CSV.
+        _telecharger(jour[colonnes], f"brvm_{derniere}.csv", "dl_marche")
+        _glossaire("fixing", "limite", "liquidite")
+
+
+# --- Valeur ---------------------------------------------------------------
+if onglets[1].open:
+    with onglets[1]:
+        noms = referentiel.set_index("ticker")["nom"]
+        choix = st.selectbox(
+            "Valeur", sorted(cours_filtre["ticker"].unique()),
+            format_func=lambda t: f"{t} — {noms.get(t, '')}",
+        )
+
+        serie = cours_filtre[cours_filtre["ticker"] == choix].sort_values("date")
+        fiche = referentiel[referentiel["ticker"] == choix]
+        dernier = serie.iloc[-1]
+
+        div_valeur = (dividendes[dividendes["ticker"] == choix]
+                      if not dividendes.empty else pd.DataFrame())
+
+        # Le secteur est un libellé, pas une mesure : dans une tuile il se fait
+        # tronquer — « Consommation Dis… » ne distingue plus les deux secteurs
+        # de consommation. Il passe donc en légende, où il tient en entier.
+        st.caption(
+            f"**{fiche['nom'].iloc[0] if not fiche.empty else choix}** · "
+            f"{fiche['secteur'].iloc[0] if not fiche.empty else 'secteur inconnu'}"
+        )
+
+        faits = st.columns(3)
+        variation = (dernier["cloture"] / serie["cloture"].iloc[-2] - 1
+                     if len(serie) >= 2 else None)
+        # Douze séances de contexte : un cours seul ne dit pas s'il sort de
+        # l'ordinaire.
+        _tuile(faits[0], "Clôture", pedagogie.montant(dernier["cloture"]),
+               delta=pedagogie.pourcentage(variation) + " sur la séance"
+                     if variation is not None else "",
+               sens=0 if variation is None else (1 if variation > 0 else -1),
+               etincelle=_etincelle(serie["cloture"].tail(12).tolist()))
+        # Même arrondi que la phrase juste en dessous : deux écritures du même
+        # montant à trois lignes d'écart donnent à croire à deux montants.
+        _tuile(faits[1], "Volume échangé",
+               pedagogie.montant(dernier["volume_fcfa"]),
+               note="sur la dernière séance")
+        _tuile(faits[2], "Dividendes connus", f"{len(div_valeur)}",
+               note="détachements datés en archive")
+
+        # La même information en toutes lettres. Trois tuiles se lisent vite
+        # quand on sait quoi y chercher ; sinon ce sont trois nombres nus.
+        morceaux = [
+            f"**{fiche['nom'].iloc[0] if not fiche.empty else choix}** vaut "
+            f"{pedagogie.montant(dernier['cloture'])} à la clôture du "
+            f"{pedagogie.jour(derniere)}"
+        ]
+        if len(serie) >= 2:
+            veille = serie["cloture"].iloc[-2]
+            if pd.notna(veille) and veille > 0:
+                morceaux.append(
+                    "soit "
+                    + pedagogie.pourcentage(dernier["cloture"] / veille - 1)
+                    + " sur la séance"
+                )
+        # Reculs en séances : un mois, un trimestre, un an de cotation.
+        for pas, mot in [(21, "un mois"), (63, "trois mois"), (250, "un an")]:
+            if len(serie) > pas:
+                passe = serie["cloture"].iloc[-1 - pas]
+                if pd.notna(passe) and passe > 0:
+                    morceaux.append(
+                        pedagogie.pourcentage(dernier["cloture"] / passe - 1)
+                        + f" sur {mot}"
+                    )
+        volume = dernier["volume_fcfa"]
+        morceaux.append(
+            "aucun échange lors de cette séance" if pd.isna(volume) or volume == 0
+            else f"{pedagogie.montant(volume)} échangés dans la séance"
+        )
+        st.markdown(", ".join(morceaux) + ".")
+
+        if len(serie) >= 2:
+            # LE CURSEUR EST LE POINT, PAS L'ORNEMENT. Sur 2 876 séances, un
+            # point fait moins d'un demi-pixel de large : viser une infobulle
+            # est impossible, et une courbe sans lecture ponctuelle n'est
+            # qu'une silhouette. La sélection porte sur l'abscisse la plus
+            # proche du curseur, quelle que soit la hauteur de la souris.
+            survol = alt.selection_point(nearest=True, on="pointermove",
+                                         fields=["date"], empty=False)
+            base_cours = alt.Chart(serie).encode(
+                x=alt.X("date:T", title=None,
+                        axis=alt.Axis(format="%d/%m/%y", tickCount=8)),
+                # Format SI (« 22k ») : « 22,000 » est une convention
+                # anglaise, et l'app affiche « 14 229 » juste au-dessus.
+                y=alt.Y("cloture:Q", title="clôture (FCFA)",
+                        scale=alt.Scale(zero=False),
+                        axis=alt.Axis(format="~s")),
+            )
+            infobulle = [
+                alt.Tooltip("date:T", title="Séance", format="%d/%m/%Y"),
+                alt.Tooltip("cloture:Q", title="Clôture", format=",.0f"),
+                alt.Tooltip("volume_titres:Q", title="Titres", format=",.0f"),
+            ]
+            # La zone de capture est transparente et couvre toute la hauteur :
+            # une cible de survol doit être plus grande que la marque.
+            capteur = (base_cours.mark_rule(strokeWidth=24, opacity=0)
+                       .encode(tooltip=infobulle).add_params(survol))
+            trait = (base_cours.mark_rule(color=MUET, strokeWidth=1)
+                     .transform_filter(survol))
+            point = (base_cours.mark_point(size=80, filled=True, color=SERIE_1,
+                                           stroke=SURFACE, strokeWidth=2)
+                     .transform_filter(survol))
+            # Le lavis sous la courbe : la teinte de la série à faible
+            # opacité, jamais un aplat saturé. Il donne du corps à une ligne
+            # de 2 px sans rien ajouter à ce qu'elle dit.
+            aire = base_cours.mark_area(
+                line=False,
+                color=alt.Gradient(
+                    gradient="linear", x1=0, x2=0, y1=1, y2=0,
+                    stops=[alt.GradientStop(color=_lavis(SERIE_1, 0.0), offset=0),
+                           alt.GradientStop(color=_lavis(SERIE_1, 0.28), offset=1)]))
+            _panneau(f"{choix} — cours de clôture",
+                     f"{len(serie)} séances, {serie['date'].iloc[0]} → "
+                     f"{serie['date'].iloc[-1]}").altair_chart(
+                (aire + base_cours.mark_line(strokeWidth=2, color=SERIE_1)
+                 + capteur + trait + point)
+                # Une série de plusieurs années ne se lit pas d'un bloc.
+                .properties(height=320),
+                width="stretch",
+            )
+            st.caption("Survolez la courbe pour lire une séance.")
+        else:
+            st.info(f"Une seule séance en base pour {choix} : pas d'historique à "
+                    "tracer. Le graphique apparaîtra dès la deuxième.")
+
+        mesures = fondamentaux[fondamentaux["ticker"] == choix] \
+            if not fondamentaux.empty else pd.DataFrame()
+        if not mesures.empty:
+            st.subheader("Dividendes par exercice")
+            large = (mesures.pivot_table(index="date", columns="indicateur",
+                                         values="valeur", aggfunc="first")
+                     .reset_index().sort_values("date", ascending=False))
+            large["date"] = large["date"].str[:4]
             st.dataframe(
-                recent[["ticker", "nom", "secteur", "valeur"]],
-                width="stretch", hide_index=True,
+                large, width="stretch", hide_index=True,
                 column_config={
+                    "date": st.column_config.TextColumn("Exercice"),
+                    "dividende": st.column_config.NumberColumn(
+                        "Dividende net", format="%.2f", help="Par action, en FCFA."),
+                    "rendement": st.column_config.NumberColumn(
+                        "Rendement", format="%.2f %%"),
+                },
+            )
+            st.caption(
+                "Un exercice absent du tableau est un exercice sans versement "
+                "publié — pas un dividende nul : « n'a pas versé » et « on ne "
+                "sait pas » ne sont pas la même chose."
+            )
+
+        if not div_valeur.empty:
+            st.subheader("Détachements à venir")
+            st.dataframe(div_valeur.sort_values("date_detachement", ascending=False),
+                         width="stretch", hide_index=True)
+
+        _telecharger(serie, f"{choix}.csv", "dl_valeur")
+        _glossaire("dividende", "rendement", "liquidite", "sgi")
+
+
+# --- Classement -----------------------------------------------------------
+if onglets[2].open:
+    with onglets[2]:
+        st.caption(
+            "Momentum « 12-1 », filtré par liquidité et neutralisé par secteur. "
+            "**Les pondérations n'ont été calibrées sur rien** : une liste de "
+            "valeurs à examiner, pas un signal validé."
+        )
+        # Repliés : six curseurs en tête d'onglet, c'est un pupitre dont un
+        # lecteur qui découvre le sujet ne peut pas connaître les bons réglages,
+        # et qui modifient silencieusement le classement affiché en dessous. Les
+        # valeurs par défaut sont celles de la configuration du projet.
+        #
+        # `persist_state` : un onglet caché n'est plus exécuté, et Streamlit
+        # oublie les réglages des widgets qu'il ne voit pas. Sans cela, un
+        # aller-retour par l'onglet Marché remettait les six curseurs à leur
+        # valeur d'usine — sans rien dire, alors que le classement affiché en
+        # dessous, lui, changeait.
+        with st.expander("Réglages avancés"):
+            reg_1, reg_2 = st.columns([1, 2])
+            with reg_1:
+                seuil = st.number_input(
+                    "Volume médian minimal (FCFA)", min_value=0, step=100_000,
+                    value=int(DEFAUTS["analyse"]["volume_median_min_fcfa"]),
+                    key="cl_seuil", persist_state="session",
+                    help="Une valeur qui ne s'échange pas ne se vend pas non plus.",
+                )
+                # Le maximum suit le référentiel : une introduction en bourse
+                # de plus, et un plafond écrit en dur rendrait la dernière
+                # valeur inatteignable sans que rien ne le signale.
+                plafond = max(5, len(referentiel))
+                combien = st.slider("Lignes affichées", 5, plafond,
+                                    min(15, plafond),
+                                    key="cl_lignes", persist_state="session")
+            with reg_2:
+                poids = {
+                    "momentum":
+                        st.slider("Poids du momentum", -1.0, 1.0, 0.5, 0.05,
+                                  key="cl_momentum", persist_state="session"),
+                    "tendance":
+                        st.slider("Poids de la tendance", -1.0, 1.0, 0.3, 0.05,
+                                  key="cl_tendance", persist_state="session"),
+                    "volatilite":
+                        st.slider("Poids de la volatilité", -1.0, 1.0, -0.2,
+                                  0.05, key="cl_volatilite",
+                                  persist_state="session"),
+                }
+
+        reglages = {"analyse": {**DEFAUTS["analyse"],
+                                "volume_median_min_fcfa": seuil},
+                    "ponderations": poids}
+        classement = calculer_classement(cours_filtre, referentiel_filtre,
+                                         ARCHIVE, UNIVERS, reglages)
+
+        requis = reglages["analyse"]["fenetre_momentum"] + 1
+        if classement.empty and seances < requis:
+            _attente(
+                "Classement",
+                seances, requis,
+                "Le momentum se mesure sur un an de cotation. Calculé sur moins, "
+                "il aurait toutes les apparences d'un momentum sans rien "
+                "mesurer — d'où le refus plutôt qu'une approximation. "
+                "L'archive gagne une séance par jour ouvré.",
+            )
+        elif classement.empty:
+            # L'ARCHIVE EST SUFFISANTE : C'EST LE FILTRE QUI A TOUT ÉCARTÉ. Le
+            # compteur d'attente affichait ici « 2 996 sur 251 séances
+            # nécessaires », jauge pleine, tableau absent — il accusait
+            # l'historique d'un vide que l'utilisateur venait de créer lui-même
+            # en montant le seuil. Un refus doit nommer sa vraie cause, sinon
+            # il se lit comme une panne.
+            st.warning(
+                f"**Aucune valeur ne passe le filtre de liquidité.** Le seuil "
+                f"est réglé à {pedagogie.montant(seuil)} de volume médian "
+                f"quotidien ; aucune des {len(referentiel_filtre)} sociétés "
+                f"suivies n'échange autant. Abaissez-le dans « Réglages "
+                f"avancés » — le défaut du projet est "
+                f"{pedagogie.montant(DEFAUTS['analyse']['volume_median_min_fcfa'])}."
+            )
+        else:
+            # Le rang est ce qui se comprend sans rien savoir ; le score n'a pas
+            # d'unité et ne se compare pas d'un jour à l'autre. `scoring` le
+            # calcule déjà — il suffit de le mettre en tête de tableau.
+            classement = classement[
+                ["rang"] + [c for c in classement.columns if c != "rang"]
+            ]
+            tete = classement.head(combien)
+            total = len(classement)
+            st.markdown(
+                f"{total} valeurs passent le filtre de liquidité et sont "
+                f"classées. En tête : "
+                + ", ".join(
+                    f"**{ligne.ticker}** ({pedagogie.ordinal(ligne.rang)})"
+                    for ligne in tete.head(3).itertuples()
+                )
+                + f" sur {total}. Le score n'a pas d'unité — seul l'ordre compte."
+            )
+            # POINTS ET NON BARRES. Une barre part obligatoirement de zéro, et
+            # sur des scores compris entre 90 et 111 les quinze barres
+            # paraissent identiques. Tronquer l'axe pour « voir la
+            # différence » exagérerait des écarts que le score ne prétend pas
+            # porter — il n'a pas d'unité, seul son ordre compte. Le point,
+            # lui, ne réclame pas de ligne de base : il situe sans quantifier.
+            base_score = alt.Chart(tete).encode(
+                y=alt.Y("ticker:N", sort="-x", title=None,
+                        axis=alt.Axis(labelOverlap=False)),
+                x=alt.X("score:Q", title="score (sans unité)",
+                        scale=alt.Scale(zero=False, nice=True)),
+            )
+            _panneau("Score composite",
+                     f"{len(tete)} premières sur {total} classées · "
+                     "aucun des traits qui le composent ne bat le hasard").altair_chart(
+                (base_score.mark_rule(color=GRILLE, strokeWidth=1)
+                 .encode(x2=alt.X2("minimum:Q"))
+                 .transform_calculate(minimum=str(float(tete["score"].min())))
+                 + base_score
+                # Le score est une grandeur continue : la rampe d'une seule
+                # teinte est faite pour cela, et elle dit « combien » sans
+                # jamais prétendre dire « lequel ».
+                .mark_point(size=130, filled=True, stroke=SURFACE, strokeWidth=2)
+                .encode(
+                    color=alt.Color("score:Q", legend=None,
+                                    scale=alt.Scale(range=RAMPE)),
+                    tooltip=[
+                        alt.Tooltip("rang:Q", title="Rang"),
+                        alt.Tooltip("ticker:N", title="Symbole"),
+                        alt.Tooltip("nom:N", title="Société"),
+                        alt.Tooltip("score:Q", title="Score", format=".1f"),
+                        alt.Tooltip("momentum:Q", title="Momentum", format="+.1%"),
+                        alt.Tooltip("secteur:N", title="Secteur"),
+                    ],
+                )).properties(height=max(240, 26 * len(tete))),
+                width="stretch",
+            )
+            # Le tableau reprend la rampe du graphique au-dessus : même
+            # grandeur, même encodage. Les voir se contredire coûterait plus
+            # cher que de ne pas colorer du tout.
+            peint_rang = tete.style.map(
+                lambda v: _fond_sequentiel(v - float(tete["score"].min()),
+                                           float(tete["score"].max()
+                                                 - tete["score"].min()) or 1),
+                subset=["score"])
+            for trait in ("momentum", "tendance"):
+                if trait in tete.columns:
+                    peint_rang = peint_rang.map(
+                        lambda v: _fond_divergent(v, plafond=1.5), subset=[trait])
+            st.dataframe(
+                peint_rang, width="stretch", hide_index=True,
+                column_config={
+                    "rang": st.column_config.NumberColumn(
+                        "Rang", format="%d", help=f"Sur {total} valeurs classées."),
                     "ticker": st.column_config.TextColumn("Symbole"),
                     "nom": st.column_config.TextColumn("Société"),
                     "secteur": st.column_config.TextColumn("Secteur"),
-                    "valeur": st.column_config.NumberColumn(
-                        "Rendement", format="%.2f %%",
-                        help="Dividende de l'exercice rapporté au cours."),
+                    "cloture": st.column_config.NumberColumn(
+                        "Clôture", format="%.0f", help="En FCFA."),
+                    # Les traits sont des proportions : les afficher en 0,5733
+                    # oblige le lecteur à faire la conversion de tête.
+                    "momentum": st.column_config.NumberColumn(
+                        "Momentum", format="percent",
+                        help="Hausse accumulée sur l'année, dernier mois exclu."),
+                    "tendance": st.column_config.NumberColumn(
+                        "Tendance", format="percent",
+                        help="Écart entre moyenne courte et moyenne longue."),
+                    "volatilite": st.column_config.NumberColumn(
+                        "Volatilité", format="percent",
+                        help="Ampleur habituelle des écarts, en rythme annuel."),
+                    "liquidite": st.column_config.NumberColumn(
+                        "Liquidité", format="localized",
+                        help="Montant médian échangé par séance, en FCFA."),
+                    "score": st.column_config.NumberColumn(
+                        "Score", format="%.1f",
+                        help="Sans unité : seul l'ordre qu'il produit compte."),
                 },
             )
-            _telecharger(recent, "rendements.csv", "dl_rendements")
-        st.caption(
-            "Quatre exercices seulement sont publiés : c'est assez pour "
-            "voir que le dividende domine, beaucoup trop peu pour mesurer "
-            "s'il prédit quoi que ce soit — quatre dates ne font pas une "
-            "validation."
-        )
+            _telecharger(classement, "classement.csv", "dl_classement")
 
-    _glossaire("momentum", "tendance", "volatilite", "liquidite", "score",
-               "rang", "dividende", "rendement", "frais")
+        # LE RENDEMENT PASSE DEVANT, ET C'EST LA DONNÉE QUI L'A DÉCIDÉ. Sur
+        # les quatre exercices connus, le dividende médian vaut 7 à 10 % par
+        # an, tous les ans ; le cours, lui, va de -1,6 % à +61,4 %. Le
+        # classement par momentum ordonne le quart bruyant du rendement, et
+        # aucun trait de prix ne bat le hasard sur 11,5 ans.
+        st.subheader("Rendement du dividende")
+        rendements = fondamentaux[fondamentaux["indicateur"] == "rendement"]
+        if rendements.empty:
+            st.info(
+                "Aucun rendement en archive. `brvm dividendes` lit les "
+                "calendriers de brvm.org et de sikafinance, et le tableau "
+                "pluriannuel de ce dernier."
+            )
+        else:
+            dernier_exercice = rendements["date"].max()
+            recent = (rendements[rendements["date"] == dernier_exercice]
+                      .merge(referentiel_filtre[["ticker", "nom", "secteur"]],
+                             on="ticker", how="inner")
+                      .sort_values("valeur", ascending=False))
+            st.markdown(
+                f"Exercice **{dernier_exercice[:4]}**, {len(recent)} sociétés. "
+                "Rendement médian **"
+                + pedagogie.pourcentage(recent["valeur"].median() / 100,
+                                        signe=False)
+                + "** — "
+                "à comparer aux 2,8 % l'an que rapporte le cours seul sur onze "
+                "ans. **Sur ce marché, le dividende est l'essentiel du "
+                "rendement**, et le classement ci-dessus n'en tient aucun compte."
+            )
+            if not recent.empty:
+                tete = recent.head(15)
+                _panneau(f"Rendement du dividende — exercice {dernier_exercice[:4]}",
+                         "la part du rendement qui existe réellement sur ce "
+                         "marché").altair_chart(
+                    alt.Chart(tete)
+                    .mark_bar(cornerRadiusEnd=4, height=16)
+                    .encode(
+                        x=alt.X("valeur:Q", title="rendement du dividende (%)"),
+                        # Rampe orange : c'est la seconde grandeur continue
+                        # affichée en même temps que le score, et deux rampes
+                        # simultanées prennent chacune leur propre teinte.
+                        color=alt.Color(
+                            "valeur:Q", legend=None,
+                            scale=alt.Scale(range=["#f7c9b4", "#eb6834", "#a83c17"]
+                                            if not SOMBRE else
+                                            ["#7a3016", "#d95926", "#f0a883"])),
+                        y=alt.Y("ticker:N", sort="-x", title=None,
+                                axis=alt.Axis(labelOverlap=False)),
+                        tooltip=[
+                            alt.Tooltip("ticker:N", title="Symbole"),
+                            alt.Tooltip("nom:N", title="Société"),
+                            alt.Tooltip("valeur:Q", title="Rendement",
+                                        format=".2f"),
+                            alt.Tooltip("secteur:N", title="Secteur"),
+                        ],
+                    )
+                    .properties(height=max(220, 24 * len(tete))),
+                    width="stretch",
+                )
+                st.dataframe(
+                    recent[["ticker", "nom", "secteur", "valeur"]],
+                    width="stretch", hide_index=True,
+                    column_config={
+                        "ticker": st.column_config.TextColumn("Symbole"),
+                        "nom": st.column_config.TextColumn("Société"),
+                        "secteur": st.column_config.TextColumn("Secteur"),
+                        "valeur": st.column_config.NumberColumn(
+                            "Rendement", format="%.2f %%",
+                            help="Dividende de l'exercice rapporté au cours."),
+                    },
+                )
+                _telecharger(recent, "rendements.csv", "dl_rendements")
+            st.caption(
+                "Quatre exercices seulement sont publiés : c'est assez pour "
+                "voir que le dividende domine, beaucoup trop peu pour mesurer "
+                "s'il prédit quoi que ce soit — quatre dates ne font pas une "
+                "validation."
+            )
+
+        _glossaire("momentum", "tendance", "volatilite", "liquidite", "score",
+                   "rang", "dividende", "rendement", "frais")
 
 
 # --- Prédiction -----------------------------------------------------------
 # Deuxième entrée dans l'onglet du classement : la section s'y ajoute à
 # la suite, sans réindenter deux cents lignes pour un changement de rang.
-with onglets[2]:
-    st.divider()
-    st.subheader("Et si on apprenait le classement ?")
-    st.caption(
-        "Probabilité de **surperformer le marché sur trois mois** — pas de "
-        "prévoir un cours. La BRVM cote par fixing, avec une limite de "
-        "±7,5 % : un modèle entraîné sur le lendemain apprendrait "
-        "« demain ≈ aujourd'hui » et produirait un backtest inexécutable."
-    )
-    validation = prediction.valider(cours_filtre, referentiel=referentiel_filtre)
-
-    if validation.get("motif"):
-        # L'apprentissage manque, le reste de l'app tient debout. On le dit
-        # sans dramatiser : le composite est la référence, et elle est là.
-        st.warning(prediction.expliquer(validation))
+if onglets[2].open:
+    with onglets[2]:
+        st.divider()
+        st.subheader("Et si on apprenait le classement ?")
         st.caption(
-            "Le classement composite reste disponible dans l'onglet "
-            "**Classement** — c'est lui qui part en production quand le "
-            "modèle appris ne le devance pas."
+            "Probabilité de **surperformer le marché sur trois mois** — pas de "
+            "prévoir un cours. La BRVM cote par fixing, avec une limite de "
+            "±7,5 % : un modèle entraîné sur le lendemain apprendrait "
+            "« demain ≈ aujourd'hui » et produirait un backtest inexécutable."
         )
-    elif validation["periodes"].empty:
-        _attente(
-            "Prédiction",
-            validation["lignes"], validation["lignes_minimum"],
-            "Une observation, c'est une valeur à une date, avec son sort "
-            "connu trois mois plus tard. Chaque séance en apporte une "
-            "quarantaine — mais il faut d'abord un an de cotation avant que "
-            "la première soit calculable.",
-            unite="observation",
-        )
-    else:
-        # L'IC se cite de mémoire, son incertitude non : la tuile porte
-        # donc l'intervalle en légende, là où le chiffre ne peut pas
-        # partir sans lui.
-        m, c = validation["mesure"], validation["mesure_composite"]
-        # L'intervalle passe en légende et non en `delta` : Streamlit dessine
-        # une flèche devant un delta, et une incertitude n'a pas de sens de
-        # variation — « ↑ ± 0,117 » se lit comme une hausse.
-        mesures = st.columns(3)
-        # L'intervalle passe en note et non en écart : Streamlit dessine
-        # une flèche devant un delta, et une incertitude n'a pas de sens
-        # de variation.
-        _tuile(mesures[0], "IC du modèle", f"{validation['ic']:+.3f}",
-               note=f"± {2 * m['erreur_type']:.3f} · t = {m['t']:+.1f} · "
-                    + ("significatif" if m["significatif"]
-                       else "indiscernable du hasard"))
-        _tuile(mesures[1], "IC du composite",
-               f"{validation['ic_composite']:+.3f}",
-               note=f"± {2 * c['erreur_type']:.3f} · t = {c['t']:+.1f} · "
-                    + ("significatif" if c["significatif"]
-                       else "indiscernable du hasard"))
-        _tuile(mesures[2], "Écart", f"{validation['ecart']:+.3f}",
-               sens=1 if validation["ecart"] > 0 else -1,
-               note="le modèle moins le composite")
+        validation = valider_modele(cours_filtre, referentiel_filtre,
+                                    ARCHIVE, UNIVERS)
 
-        st.caption(
-            f"L'intervalle couvre deux erreurs-types, calculées sur "
-            f"{m['dates_independantes']} périodes **disjointes** et non sur "
-            f"les {m['dates']} dates de test : avec un horizon de "
-            f"{validation['horizon']} séances, deux dates voisines "
-            "racontent la même histoire. Les compter comme indépendantes "
-            "multiplie la certitude apparente par huit."
-        )
+        if validation.get("motif"):
+            # L'apprentissage manque, le reste de l'app tient debout. On le dit
+            # sans dramatiser : le composite est la référence, et elle est là.
+            st.warning(prediction.expliquer(validation))
+            st.caption(
+                "Le classement composite reste disponible dans l'onglet "
+                "**Classement** — c'est lui qui part en production quand le "
+                "modèle appris ne le devance pas."
+            )
+        elif validation["periodes"].empty:
+            _attente(
+                "Prédiction",
+                validation["lignes"], validation["lignes_minimum"],
+                "Une observation, c'est une valeur à une date, avec son sort "
+                "connu trois mois plus tard. Chaque séance en apporte une "
+                "quarantaine — mais il faut d'abord un an de cotation avant que "
+                "la première soit calculable.",
+                unite="observation",
+            )
+        else:
+            # L'IC se cite de mémoire, son incertitude non : la tuile porte
+            # donc l'intervalle en légende, là où le chiffre ne peut pas
+            # partir sans lui.
+            m, c = validation["mesure"], validation["mesure_composite"]
+            # L'intervalle passe en légende et non en `delta` : Streamlit dessine
+            # une flèche devant un delta, et une incertitude n'a pas de sens de
+            # variation — « ↑ ± 0,117 » se lit comme une hausse.
+            mesures = st.columns(3)
+            # L'intervalle passe en note et non en écart : Streamlit dessine
+            # une flèche devant un delta, et une incertitude n'a pas de sens
+            # de variation.
+            _tuile(mesures[0], "IC du modèle", f"{validation['ic']:+.3f}",
+                   note=f"± {2 * m['erreur_type']:.3f} · t = {m['t']:+.1f} · "
+                        + ("significatif" if m["significatif"]
+                           else "indiscernable du hasard"))
+            _tuile(mesures[1], "IC du composite",
+                   f"{validation['ic_composite']:+.3f}",
+                   note=f"± {2 * c['erreur_type']:.3f} · t = {c['t']:+.1f} · "
+                        + ("significatif" if c["significatif"]
+                           else "indiscernable du hasard"))
+            _tuile(mesures[2], "Écart", f"{validation['ecart']:+.3f}",
+                   sens=1 if validation["ecart"] > 0 else -1,
+                   note="le modèle moins le composite")
 
-        # Le constat le plus important de l'onglet, et il ne tient pas
-        # dans une tuile : sur quoi le classement repose-t-il vraiment ?
-        traits_mesures = validation.get("traits_mesures") or {}
-        if traits_mesures:
-            table = pd.DataFrame([
-                {"trait": pedagogie.LIBELLES.get(t, t), "IC": mes["ic"],
-                 "± 2 erreurs-types": 2 * mes["erreur_type"],
-                 "t": mes["t"],
-                 "verdict": "significatif" if mes["significatif"]
-                            else "indiscernable du hasard"}
-                for t, mes in traits_mesures.items()
-            ])
-            if not table.empty and not table["verdict"].eq("significatif").any():
+            st.caption(
+                f"L'intervalle couvre deux erreurs-types, calculées sur "
+                f"{m['dates_independantes']} périodes **disjointes** et non sur "
+                f"les {m['dates']} dates de test : avec un horizon de "
+                f"{validation['horizon']} séances, deux dates voisines "
+                "racontent la même histoire. Les compter comme indépendantes "
+                "multiplie la certitude apparente par huit."
+            )
+
+            # Le constat le plus important de l'onglet, et il ne tient pas
+            # dans une tuile : sur quoi le classement repose-t-il vraiment ?
+            traits_mesures = validation.get("traits_mesures") or {}
+            if traits_mesures:
+                table = pd.DataFrame([
+                    {"trait": pedagogie.LIBELLES.get(t, t), "IC": mes["ic"],
+                     "± 2 erreurs-types": 2 * mes["erreur_type"],
+                     "t": mes["t"],
+                     "verdict": "significatif" if mes["significatif"]
+                                else "indiscernable du hasard"}
+                    for t, mes in traits_mesures.items()
+                ])
+                if not table.empty and not table["verdict"].eq("significatif").any():
+                    st.error(
+                        "**Aucun trait ne se distingue du hasard.** Le "
+                        "classement reste une description du marché — qui a "
+                        "monté, qui s'échange — mais rien ici n'autorise à en "
+                        "attendre un rendement."
+                    )
+                with st.expander("Ce que vaut chaque trait, pris séparément"):
+                    st.dataframe(
+                        # Un IC se lit par son signe autant que par sa taille :
+                        # le fond divergent le dit avant le chiffre. Plafond à
+                        # 0,05, la borne haute de la bande exploitable.
+                        table.style.map(lambda v: _fond_divergent(v, plafond=0.05),
+                                        subset=["IC"]),
+                        width="stretch", hide_index=True,
+                        column_config={
+                            "trait": st.column_config.TextColumn("Trait"),
+                            "IC": st.column_config.NumberColumn(format="%+.3f"),
+                            "± 2 erreurs-types":
+                                st.column_config.NumberColumn(format="%.3f"),
+                            "t": st.column_config.NumberColumn(format="%+.1f"),
+                            "verdict": st.column_config.TextColumn("Verdict"),
+                        },
+                    )
+
+            if validation["ecart"] <= 0:
+                st.warning(
+                    "**Le modèle ne bat pas le score composite.** C'est le cas le "
+                    "plus fréquent sur ce marché : c'est le composite — onglet "
+                    "Classement — qui doit partir en production."
+                )
+            elif validation["ic"] > 0.30:
                 st.error(
-                    "**Aucun trait ne se distingue du hasard.** Le "
-                    "classement reste une description du marché — qui a "
-                    "monté, qui s'échange — mais rien ici n'autorise à en "
-                    "attendre un rendement."
+                    f"**IC de {validation['ic']:.3f} — anormalement élevé.** "
+                    "Un IC exploitable vaut 0,02 à 0,05. Cherchez la fuite."
                 )
-            with st.expander("Ce que vaut chaque trait, pris séparément"):
-                st.dataframe(
-                    # Un IC se lit par son signe autant que par sa taille :
-                    # le fond divergent le dit avant le chiffre. Plafond à
-                    # 0,05, la borne haute de la bande exploitable.
-                    table.style.map(lambda v: _fond_divergent(v, plafond=0.05),
-                                    subset=["IC"]),
-                    width="stretch", hide_index=True,
-                    column_config={
-                        "trait": st.column_config.TextColumn("Trait"),
-                        "IC": st.column_config.NumberColumn(format="%+.3f"),
-                        "± 2 erreurs-types":
-                            st.column_config.NumberColumn(format="%.3f"),
-                        "t": st.column_config.NumberColumn(format="%+.1f"),
-                        "verdict": st.column_config.TextColumn("Verdict"),
-                    },
-                )
-
-        if validation["ecart"] <= 0:
-            st.warning(
-                "**Le modèle ne bat pas le score composite.** C'est le cas le "
-                "plus fréquent sur ce marché : c'est le composite — onglet "
-                "Classement — qui doit partir en production."
-            )
-        elif validation["ic"] > 0.30:
-            st.error(
-                f"**IC de {validation['ic']:.3f} — anormalement élevé.** "
-                "Un IC exploitable vaut 0,02 à 0,05. Cherchez la fuite."
-            )
-        st.dataframe(
-            validation["periodes"].style.map(
-                lambda v: _fond_divergent(v, plafond=0.05),
-                subset=["ic_modele", "ic_composite"]),
-            width="stretch", hide_index=True,
-            column_config={
-                "periode": st.column_config.TextColumn("Période de test"),
-                "lignes_entrainement": st.column_config.NumberColumn(
-                    "Appris sur", format="localized",
-                    help="Observations d'entraînement, étiquettes "
-                         "recouvrantes purgées."),
-                "lignes_test": st.column_config.NumberColumn(
-                    "Testé sur", format="localized"),
-                "ic_modele": st.column_config.NumberColumn(
-                    "IC du modèle", format="%+.3f"),
-                "ic_composite": st.column_config.NumberColumn(
-                    "IC du composite", format="%+.3f"),
-                "precision": st.column_config.NumberColumn(
-                    "Précision", format="percent",
-                    help="Part des paris justes. Trompeuse seule : "
-                         "c'est l'IC qui compte."),
-            },
-        )
-
-        probable = prediction.predire(cours_filtre, referentiel=referentiel_filtre)
-        if not probable.empty:
-            probable = probable.merge(referentiel[["ticker", "nom", "secteur"]],
-                                      on="ticker", how="left")
-            tete = probable.head(15)
-            _panneau("Probabilité de surperformer le marché",
-                     "à trois mois, quinze premières").altair_chart(
-                alt.Chart(tete)
-                .mark_bar(cornerRadiusEnd=4, height=16, color=SERIE_1)
-                .encode(
-                    x=alt.X("probabilite:Q",
-                            title="probabilité de surperformer",
-                            axis=alt.Axis(format=".0%")),
-                    y=alt.Y("ticker:N", sort="-x", title=None,
-                            axis=alt.Axis(labelOverlap=False)),
-                    tooltip=[
-                        alt.Tooltip("ticker:N", title="Symbole"),
-                        alt.Tooltip("nom:N", title="Société"),
-                        alt.Tooltip("probabilite:Q", title="Probabilité",
-                                    format=".1%"),
-                        alt.Tooltip("secteur:N", title="Secteur"),
-                    ],
-                )
-                .properties(height=max(220, 24 * len(tete))),
-                width="stretch",
-            )
-            # Jumeau tabulaire : une infobulle ne doit jamais être le seul
-            # accès à une valeur.
             st.dataframe(
-                # Une probabilité s'écarte de 0,5 dans un sens ou dans
-                # l'autre : c'est un encodage divergent centré sur le
-                # hasard, et le plafond à 0,05 correspond à l'écart au-delà
-                # duquel le modèle prétend savoir quelque chose.
-                probable.style.map(
-                    lambda v: _fond_divergent(v - 0.5, plafond=0.05),
-                    subset=["probabilite"]),
-                width="stretch", hide_index=True)
-            _telecharger(probable, "prediction.csv", "dl_prediction")
+                validation["periodes"].style.map(
+                    lambda v: _fond_divergent(v, plafond=0.05),
+                    subset=["ic_modele", "ic_composite"]),
+                width="stretch", hide_index=True,
+                column_config={
+                    "periode": st.column_config.TextColumn("Période de test"),
+                    "lignes_entrainement": st.column_config.NumberColumn(
+                        "Appris sur", format="localized",
+                        help="Observations d'entraînement, étiquettes "
+                             "recouvrantes purgées."),
+                    "lignes_test": st.column_config.NumberColumn(
+                        "Testé sur", format="localized"),
+                    "ic_modele": st.column_config.NumberColumn(
+                        "IC du modèle", format="%+.3f"),
+                    "ic_composite": st.column_config.NumberColumn(
+                        "IC du composite", format="%+.3f"),
+                    "precision": st.column_config.NumberColumn(
+                        "Précision", format="percent",
+                        help="Part des paris justes. Trompeuse seule : "
+                             "c'est l'IC qui compte."),
+                },
+            )
 
-    st.warning("**Ce que ces chiffres ne disent pas.** "
-               + " ; ".join(validation["avertissements"]) + ".")
+            probable = appliquer_modele(cours_filtre, referentiel_filtre,
+                                        ARCHIVE, UNIVERS)
+            if not probable.empty:
+                probable = probable.merge(referentiel[["ticker", "nom", "secteur"]],
+                                          on="ticker", how="left")
+                tete = probable.head(15)
+                _panneau("Probabilité de surperformer le marché",
+                         "à trois mois, quinze premières").altair_chart(
+                    alt.Chart(tete)
+                    .mark_bar(cornerRadiusEnd=4, height=16, color=SERIE_1)
+                    .encode(
+                        x=alt.X("probabilite:Q",
+                                title="probabilité de surperformer",
+                                axis=alt.Axis(format=".0%")),
+                        y=alt.Y("ticker:N", sort="-x", title=None,
+                                axis=alt.Axis(labelOverlap=False)),
+                        tooltip=[
+                            alt.Tooltip("ticker:N", title="Symbole"),
+                            alt.Tooltip("nom:N", title="Société"),
+                            alt.Tooltip("probabilite:Q", title="Probabilité",
+                                        format=".1%"),
+                            alt.Tooltip("secteur:N", title="Secteur"),
+                        ],
+                    )
+                    .properties(height=max(220, 24 * len(tete))),
+                    width="stretch",
+                )
+                # Jumeau tabulaire : une infobulle ne doit jamais être le seul
+                # accès à une valeur.
+                st.dataframe(
+                    # Une probabilité s'écarte de 0,5 dans un sens ou dans
+                    # l'autre : c'est un encodage divergent centré sur le
+                    # hasard, et le plafond à 0,05 correspond à l'écart au-delà
+                    # duquel le modèle prétend savoir quelque chose.
+                    probable.style.map(
+                        lambda v: _fond_divergent(v - 0.5, plafond=0.05),
+                        subset=["probabilite"]),
+                    width="stretch", hide_index=True)
+                _telecharger(probable, "prediction.csv", "dl_prediction")
 
-    st.subheader("Rendement du dividende")
-    st.caption("Télécoms et services publics : retour à la moyenne du "
-               "rendement, sans apprentissage. Cinq valeurs ne font pas un "
-               "échantillon d'apprentissage.")
-    cibles = list(referentiel_filtre[
-        referentiel_filtre["secteur"].isin(
-            ["Télécommunications", "Services Publics"])]["ticker"])
-    st.code(dividende.expliquer(
-        dividende.signal(cours_filtre, dividendes, tickers=cibles)), language=None)
+        st.warning("**Ce que ces chiffres ne disent pas.** "
+                   + " ; ".join(validation["avertissements"]) + ".")
 
-    _glossaire("ic", "score", "rendement", "frais")
+        st.subheader("Rendement du dividende")
+        st.caption("Télécoms et services publics : retour à la moyenne du "
+                   "rendement, sans apprentissage. Cinq valeurs ne font pas un "
+                   "échantillon d'apprentissage.")
+        cibles = tuple(referentiel_filtre[
+            referentiel_filtre["secteur"].isin(
+                ["Télécommunications", "Services Publics"])]["ticker"])
+        st.code(dividende.expliquer(
+            signal_dividende(cours_filtre, dividendes, ARCHIVE, UNIVERS,
+                             cibles)), language=None)
+
+        _glossaire("ic", "score", "rendement", "frais")
 
 
 # --- Backtest -------------------------------------------------------------
-with onglets[3]:
-    st.caption(
-        "Ce qu'aurait donné le classement s'il avait été suivi dans le "
-        "passé — frais compris. Un bon résultat ici ne promet rien : il dit "
-        "seulement que la règle n'était pas absurde."
-    )
-    with st.expander("Réglages avancés"):
-        bt = st.columns(3)
-        positions = bt[0].slider("Positions en portefeuille", 3, 20, 10)
-        frais = bt[1].number_input("Frais par passage (%)", 0.0, 5.0, 1.0, 0.1)
-        impact = bt[2].number_input("Impact de marché (%)", 0.0, 5.0, 0.5, 0.1)
+if onglets[3].open:
+    with onglets[3]:
+        st.caption(
+            "Ce qu'aurait donné le classement s'il avait été suivi dans le "
+            "passé — frais compris. Un bon résultat ici ne promet rien : il dit "
+            "seulement que la règle n'était pas absurde."
+        )
+        with st.expander("Réglages avancés"):
+            bt = st.columns(3)
+            positions = bt[0].slider("Positions en portefeuille", 3, 20, 10,
+                                     key="bt_positions",
+                                     persist_state="session")
+            frais = bt[1].number_input("Frais par passage (%)", 0.0, 5.0, 1.0,
+                                       0.1, key="bt_frais",
+                                       persist_state="session")
+            impact = bt[2].number_input("Impact de marché (%)", 0.0, 5.0, 0.5,
+                                        0.1, key="bt_impact",
+                                        persist_state="session")
 
-    resultat = backtest.backtester(
-        cours_filtre, referentiel_filtre,
-        {"analyse": DEFAUTS["analyse"], "ponderations": DEFAUTS["ponderations"],
-         "backtest": {**DEFAUTS["backtest"], "positions": positions,
-                      "frais_pourcent": frais, "impact_pourcent": impact}},
-        fondamentaux=fondamentaux, dividendes=dividendes,
-    )
+        resultat = calculer_backtest(cours_filtre, referentiel_filtre,
+                                     fondamentaux, dividendes,
+                                     ARCHIVE, UNIVERS, positions, frais, impact)
 
-    # LE MÊME CALCUL AVEC L'AUTRE SOURCE DE DIVIDENDES. Les deux ne
-    # s'accordent pas sur 43 exercices, parfois d'un facteur 2, et
-    # personne ne sait laquelle a raison — la chute du cours au
-    # détachement ne départage pas. Afficher un nombre seul là où il
-    # existe un intervalle mesuré affirme plus qu'on ne sait.
-    variante = None
-    if dividendes is not None and not dividendes.empty:
-        autre = qualite.variante_sources(dividendes, fondamentaux)
-        if len(autre) != len(dividendes) or not autre.equals(dividendes):
-            variante = backtest.backtester(
-                cours_filtre, referentiel_filtre,
-                {"analyse": DEFAUTS["analyse"],
-                 "ponderations": DEFAUTS["ponderations"],
-                 "backtest": {**DEFAUTS["backtest"], "positions": positions,
-                              "frais_pourcent": frais,
-                              "impact_pourcent": impact}},
-                fondamentaux=fondamentaux, dividendes=autre,
+        # LE MÊME CALCUL AVEC L'AUTRE SOURCE DE DIVIDENDES. Les deux ne
+        # s'accordent pas sur 43 exercices, parfois d'un facteur 2, et
+        # personne ne sait laquelle a raison — la chute du cours au
+        # détachement ne départage pas. Afficher un nombre seul là où il
+        # existe un intervalle mesuré affirme plus qu'on ne sait.
+        variante = None
+        if dividendes is not None and not dividendes.empty:
+            autre = variante_dividendes(dividendes, fondamentaux, ARCHIVE)
+            if autre is not None:
+                variante = calculer_backtest(
+                    cours_filtre, referentiel_filtre, fondamentaux, autre,
+                    ARCHIVE, UNIVERS, positions, frais, impact,
+                    source="variante")
+
+        if resultat["etapes"].empty:
+            _attente(
+                "Backtest",
+                resultat["seances"], resultat["seances_requises"],
+                "Il faut un an de cotation avant la première décision, puis une "
+                "période à mesurer ensuite. Un backtest plus court ne mesurerait "
+                "que le hasard de sa fenêtre.",
+            )
+        else:
+            m = st.columns(5)
+            ecart_bt = resultat["rendement_total"] - resultat["reference_total"]
+            # L'INTERVALLE, PAS LE POINT. Le second chiffre n'est pas une
+            # marge d'erreur statistique : c'est le même calcul avec l'autre
+            # source de dividendes, et l'écart vaut douze points.
+            note = f"{pedagogie.pourcentage(resultat['rendement_annualise'])} par an"
+            if variante is not None:
+                bornes = sorted([variante["rendement_total"],
+                                 resultat["rendement_total"]])
+                note += (f" — de {pedagogie.pourcentage(bornes[0])} à "
+                         f"{pedagogie.pourcentage(bornes[1])} selon la source "
+                         "des dividendes")
+            # L'ÉCART EN TÊTE, LE NIVEAU ENSUITE. Le niveau ne dit rien : un
+            # marché qui monte de 12 % l'an rend n'importe quelle stratégie
+            # brillante. C'est l'écart à la référence qui dit s'il y a quelque
+            # chose, et il était relégué en troisième position derrière deux
+            # nombres flatteurs.
+            # L'ÉCART SE DIT PAR AN, PAS EN CUMULÉ. Soustraire deux rendements
+            # cumulés sur onze ans et demi donnait « −186,9 % », ce qui est
+            # exact et illisible : ça se lit comme perdre 186 % de sa mise,
+            # une impossibilité. Le rendu de l'app l'a montré ; l'arithmétique
+            # seule ne l'aurait pas dit.
+            ecart_an = (resultat["rendement_annualise"]
+                        - resultat["reference_annualisee"])
+            _tuile(m[0], "Écart au marché",
+                   pedagogie.pourcentage(ecart_an) + " par an",
+                   sens=1 if ecart_an > 0 else -1,
+                   note="c'est le seul chiffre qui dise si la règle apporte "
+                        "quelque chose — "
+                        f"{pedagogie.pourcentage(ecart_bt)} en cumulé")
+            _tuile(m[1], "Stratégie",
+                   pedagogie.pourcentage(resultat["rendement_total"]),
+                   sens=1 if resultat["rendement_total"] > 0 else -1,
+                   note=note)
+            _tuile(m[2], "Référence équipondérée",
+                   pedagogie.pourcentage(resultat["reference_total"]),
+                   sens=1 if resultat["reference_total"] > 0 else -1,
+                   note=f"{pedagogie.pourcentage(resultat['reference_annualisee'])} "
+                        "par an — c'est elle qu'il faut battre")
+            _tuile(m[3], "Perte maximale",
+                   pedagogie.pourcentage(resultat["perte_max"], signe=False),
+                   note="plus forte baisse depuis un sommet", teinte=BAISSE)
+            _tuile(m[4], "Coût cumulé",
+                   pedagogie.pourcentage(resultat["cout_cumule"], signe=False),
+                   sens=-1,
+                   note=f"{resultat['rotation_moyenne']:.0%} de rotation moyenne")
+
+            # Le verdict en toutes lettres : quatre tuiles ne disent pas d'
+            # elles-mêmes laquelle des deux courbes gagne, et c'est la seule
+            # question que pose cet onglet.
+            etapes = resultat["etapes"]
+            ecart = resultat["rendement_total"] - resultat["reference_total"]
+
+            # Le dividende n'est pas un détail sur ce marché : il vaut deux à
+            # trois fois le rendement du cours. Dire ce qu'il apporte, et sur
+            # quelle part de la période il est connu, doit précéder le reste.
+            couverture = resultat.get("couverture_dividende")
+            if couverture and couverture["part"] > 0:
+                st.info(
+                    # « des séances » était faux depuis que la couverture se
+                    # compte par couple : en 2015, trois sociétés sur
+                    # trente-cinq ont un dividende retenu, et annoncer une
+                    # part « des séances » laissait croire que toute la cote
+                    # était couverte cette année-là.
+                    "**Dividende compté** sur "
+                    f"{pedagogie.pourcentage(couverture['part'], signe=False)} "
+                    "des couples valeur × séance (exercices "
+                    f"{', '.join(couverture['exercices'])}). "
+                    f"Il apporte {pedagogie.pourcentage(resultat['apport_dividende'])} "
+                    "au total : sans lui, la stratégie rendrait "
+                    f"{pedagogie.pourcentage(resultat['rendement_prix_annualise'])} "
+                    "l'an au lieu de "
+                    + pedagogie.pourcentage(resultat["rendement_annualise"])
+                    + ". "
+                    "Faute de date de détachement publiée, il est réparti sur "
+                    "les séances de son exercice plutôt que crédité le jour "
+                    "même — une correction de niveau, pas de profil."
+                )
+            st.markdown(
+                f"Sur {resultat['rebalancements']} rééquilibrages entre le "
+                f"{pedagogie.jour(etapes['date_entree'].iloc[0])} et le "
+                f"{pedagogie.jour(etapes['date_sortie'].iloc[-1])}, la stratégie "
+                f"rapporte {pedagogie.pourcentage(resultat['rendement_total'])} "
+                f"contre {pedagogie.pourcentage(resultat['reference_total'])} "
+                "pour la référence — "
+                + ("**elle la bat** de " if ecart > 0 else "**elle perd** de ")
+                + f"{pedagogie.pourcentage(abs(ecart), signe=False)}. Les frais "
+                + "ont coûté "
+                + pedagogie.pourcentage(resultat["cout_cumule"], signe=False)
+                + " en cumul."
             )
 
-    if resultat["etapes"].empty:
-        _attente(
-            "Backtest",
-            resultat["seances"], resultat["seances_requises"],
-            "Il faut un an de cotation avant la première décision, puis une "
-            "période à mesurer ensuite. Un backtest plus court ne mesurerait "
-            "que le hasard de sa fenêtre.",
-        )
-    else:
-        m = st.columns(5)
-        ecart_bt = resultat["rendement_total"] - resultat["reference_total"]
-        # L'INTERVALLE, PAS LE POINT. Le second chiffre n'est pas une
-        # marge d'erreur statistique : c'est le même calcul avec l'autre
-        # source de dividendes, et l'écart vaut douze points.
-        note = f"{pedagogie.pourcentage(resultat['rendement_annualise'])} par an"
-        if variante is not None:
-            bornes = sorted([variante["rendement_total"],
-                             resultat["rendement_total"]])
-            note += (f" — de {pedagogie.pourcentage(bornes[0])} à "
-                     f"{pedagogie.pourcentage(bornes[1])} selon la source "
-                     "des dividendes")
-        # L'ÉCART EN TÊTE, LE NIVEAU ENSUITE. Le niveau ne dit rien : un
-        # marché qui monte de 12 % l'an rend n'importe quelle stratégie
-        # brillante. C'est l'écart à la référence qui dit s'il y a quelque
-        # chose, et il était relégué en troisième position derrière deux
-        # nombres flatteurs.
-        # L'ÉCART SE DIT PAR AN, PAS EN CUMULÉ. Soustraire deux rendements
-        # cumulés sur onze ans et demi donnait « −186,9 % », ce qui est
-        # exact et illisible : ça se lit comme perdre 186 % de sa mise,
-        # une impossibilité. Le rendu de l'app l'a montré ; l'arithmétique
-        # seule ne l'aurait pas dit.
-        ecart_an = (resultat["rendement_annualise"]
-                    - resultat["reference_annualisee"])
-        _tuile(m[0], "Écart au marché",
-               pedagogie.pourcentage(ecart_an) + " par an",
-               sens=1 if ecart_an > 0 else -1,
-               note="c'est le seul chiffre qui dise si la règle apporte "
-                    "quelque chose — "
-                    f"{pedagogie.pourcentage(ecart_bt)} en cumulé")
-        _tuile(m[1], "Stratégie",
-               pedagogie.pourcentage(resultat["rendement_total"]),
-               sens=1 if resultat["rendement_total"] > 0 else -1,
-               note=note)
-        _tuile(m[2], "Référence équipondérée",
-               pedagogie.pourcentage(resultat["reference_total"]),
-               sens=1 if resultat["reference_total"] > 0 else -1,
-               note=f"{pedagogie.pourcentage(resultat['reference_annualisee'])} "
-                    "par an — c'est elle qu'il faut battre")
-        _tuile(m[3], "Perte maximale",
-               pedagogie.pourcentage(resultat["perte_max"], signe=False),
-               note="plus forte baisse depuis un sommet", teinte=BAISSE)
-        _tuile(m[4], "Coût cumulé",
-               pedagogie.pourcentage(resultat["cout_cumule"], signe=False),
-               sens=-1,
-               note=f"{resultat['rotation_moyenne']:.0%} de rotation moyenne")
+            courbes = resultat["etapes"].melt(
+                id_vars="date_sortie", value_vars=["valeur", "valeur_reference"],
+                var_name="serie", value_name="part",
+            ).replace({"valeur": "Stratégie",
+                       "valeur_reference": "Référence équipondérée"})
 
-        # Le verdict en toutes lettres : quatre tuiles ne disent pas d'
-        # elles-mêmes laquelle des deux courbes gagne, et c'est la seule
-        # question que pose cet onglet.
-        etapes = resultat["etapes"]
-        ecart = resultat["rendement_total"] - resultat["reference_total"]
-
-        # Le dividende n'est pas un détail sur ce marché : il vaut deux à
-        # trois fois le rendement du cours. Dire ce qu'il apporte, et sur
-        # quelle part de la période il est connu, doit précéder le reste.
-        couverture = resultat.get("couverture_dividende")
-        if couverture and couverture["part"] > 0:
-            st.info(
-                # « des séances » était faux depuis que la couverture se
-                # compte par couple : en 2015, trois sociétés sur
-                # trente-cinq ont un dividende retenu, et annoncer une
-                # part « des séances » laissait croire que toute la cote
-                # était couverte cette année-là.
-                "**Dividende compté** sur "
-                f"{pedagogie.pourcentage(couverture['part'], signe=False)} "
-                "des couples valeur × séance (exercices "
-                f"{', '.join(couverture['exercices'])}). "
-                f"Il apporte {pedagogie.pourcentage(resultat['apport_dividende'])} "
-                "au total : sans lui, la stratégie rendrait "
-                f"{pedagogie.pourcentage(resultat['rendement_prix_annualise'])} "
-                f"l'an au lieu de {pedagogie.pourcentage(resultat['rendement_annualise'])}. "
-                "Faute de date de détachement publiée, il est réparti sur "
-                "les séances de son exercice plutôt que crédité le jour "
-                "même — une correction de niveau, pas de profil."
+            couleurs = alt.Color(
+                "serie:N", title=None,
+                scale=alt.Scale(domain=["Stratégie", "Référence équipondérée"],
+                                range=[SERIE_1, SERIE_2]),
+                legend=alt.Legend(orient="bottom", direction="horizontal"),
             )
-        st.markdown(
-            f"Sur {resultat['rebalancements']} rééquilibrages entre le "
-            f"{pedagogie.jour(etapes['date_entree'].iloc[0])} et le "
-            f"{pedagogie.jour(etapes['date_sortie'].iloc[-1])}, la stratégie "
-            f"rapporte {pedagogie.pourcentage(resultat['rendement_total'])} "
-            f"contre {pedagogie.pourcentage(resultat['reference_total'])} "
-            "pour la référence — "
-            + ("**elle la bat** de " if ecart > 0 else "**elle perd** de ")
-            + f"{pedagogie.pourcentage(abs(ecart), signe=False)}. Les frais "
-            f"ont coûté {pedagogie.pourcentage(resultat['cout_cumule'], signe=False)} "
-            "en cumul."
-        )
+            base = alt.Chart(courbes).encode(
+                x=alt.X("date_sortie:T", title=None,
+                        axis=alt.Axis(format="%d/%m/%y", tickCount=8)),
+                y=alt.Y("part:Q", title="valeur d'une part",
+                        scale=alt.Scale(zero=False)),
+                color=couleurs,
+            )
+            lignes = base.mark_line(strokeWidth=2).encode(
+                tooltip=[
+                    alt.Tooltip("date_sortie:T", title="Date", format="%d/%m/%Y"),
+                    alt.Tooltip("serie:N", title="Série"),
+                    alt.Tooltip("part:Q", title="Valeur", format=".3f"),
+                ],
+            )
+            derniers = courbes.loc[courbes.groupby("serie")["date_sortie"].idxmax()]
+            # LE POINT PORTE LA COULEUR, LE TEXTE PORTE L'ENCRE. Colorer le texte
+            # confierait l'identité à un canal qu'il n'assume pas : une teinte
+            # claire est illisible en texte sur le fond. L'anneau de 2 px à la
+            # couleur du fond détache le point de la courbe.
+            points = (alt.Chart(derniers)
+                      .mark_point(size=90, filled=True, stroke=SURFACE, strokeWidth=2)
+                      .encode(x="date_sortie:T", y="part:Q", color=couleurs))
+            etiquettes = (alt.Chart(derniers)
+                          .mark_text(align="left", dx=12, fontSize=12,
+                                     color=ENCRE_DOUCE)
+                          .encode(x="date_sortie:T", y="part:Q", text="serie:N"))
 
-        courbes = resultat["etapes"].melt(
-            id_vars="date_sortie", value_vars=["valeur", "valeur_reference"],
-            var_name="serie", value_name="part",
-        ).replace({"valeur": "Stratégie",
-                   "valeur_reference": "Référence équipondérée"})
+            _panneau("Valeur d'une part",
+                     "stratégie contre univers éligible équipondéré, "
+                     "frais et dividende compris").altair_chart(
+                (lignes + points + etiquettes).properties(
+                    height=360,
+                    padding={"right": 150, "left": 5, "top": 5, "bottom": 5}),
+                width="stretch",
+            )
+            st.caption("La référence est l'univers éligible équipondéré : c'est "
+                       "elle qu'il faut battre, pas zéro.")
+            st.dataframe(
+                etapes.style
+                .map(lambda v: _fond_divergent(v, plafond=0.15),
+                     subset=["rendement"])
+                .map(lambda v: _fond_sequentiel(v, float(etapes["cout"].max() or 1)),
+                     subset=["cout"]),
+                width="stretch", hide_index=True,
+                column_config={
+                    "date_decision": st.column_config.TextColumn(
+                        "Décidé le",
+                        help="Sur la clôture de cette séance, et rien après."),
+                    "date_entree": st.column_config.TextColumn(
+                        "Acheté le",
+                        help="Une séance plus tard : décider et exécuter au même "
+                             "cours reviendrait à passer un ordre à un prix déjà "
+                             "connu."),
+                    "date_sortie": st.column_config.TextColumn("Revendu le"),
+                    "positions": st.column_config.TextColumn("Lignes détenues"),
+                    "rendement": st.column_config.NumberColumn(
+                        "Cours", format="percent"),
+                    "dividende": st.column_config.NumberColumn(
+                        "Dividende", format="percent",
+                        help="Accru pendant la détention."),
+                    "rotation": st.column_config.NumberColumn(
+                        "Rotation", format="percent",
+                        help="Part du portefeuille remplacée — elle se paie deux "
+                             "fois, à la vente et au rachat."),
+                    "cout": st.column_config.NumberColumn("Coût", format="percent"),
+                    "valeur": st.column_config.NumberColumn(
+                        "Part stratégie", format="%.3f"),
+                    "valeur_reference": st.column_config.NumberColumn(
+                        "Part référence", format="%.3f"),
+                },
+            )
+            _telecharger(resultat["etapes"], "backtest.csv", "dl_backtest")
 
-        couleurs = alt.Color(
-            "serie:N", title=None,
-            scale=alt.Scale(domain=["Stratégie", "Référence équipondérée"],
-                            range=[SERIE_1, SERIE_2]),
-            legend=alt.Legend(orient="bottom", direction="horizontal"),
-        )
-        base = alt.Chart(courbes).encode(
-            x=alt.X("date_sortie:T", title=None,
-                    axis=alt.Axis(format="%d/%m/%y", tickCount=8)),
-            y=alt.Y("part:Q", title="valeur d'une part",
-                    scale=alt.Scale(zero=False)),
-            color=couleurs,
-        )
-        lignes = base.mark_line(strokeWidth=2).encode(
-            tooltip=[
-                alt.Tooltip("date_sortie:T", title="Date", format="%d/%m/%Y"),
-                alt.Tooltip("serie:N", title="Série"),
-                alt.Tooltip("part:Q", title="Valeur", format=".3f"),
-            ],
-        )
-        derniers = courbes.loc[courbes.groupby("serie")["date_sortie"].idxmax()]
-        # LE POINT PORTE LA COULEUR, LE TEXTE PORTE L'ENCRE. Colorer le texte
-        # confierait l'identité à un canal qu'il n'assume pas : une teinte
-        # claire est illisible en texte sur le fond. L'anneau de 2 px à la
-        # couleur du fond détache le point de la courbe.
-        points = (alt.Chart(derniers)
-                  .mark_point(size=90, filled=True, stroke=SURFACE, strokeWidth=2)
-                  .encode(x="date_sortie:T", y="part:Q", color=couleurs))
-        etiquettes = (alt.Chart(derniers)
-                      .mark_text(align="left", dx=12, fontSize=12,
-                                 color=ENCRE_DOUCE)
-                      .encode(x="date_sortie:T", y="part:Q", text="serie:N"))
-
-        _panneau("Valeur d'une part",
-                 "stratégie contre univers éligible équipondéré, "
-                 "frais et dividende compris").altair_chart(
-            (lignes + points + etiquettes).properties(
-                height=360,
-                padding={"right": 150, "left": 5, "top": 5, "bottom": 5}),
-            width="stretch",
-        )
-        st.caption("La référence est l'univers éligible équipondéré : c'est "
-                   "elle qu'il faut battre, pas zéro.")
-        st.dataframe(
-            etapes.style
-            .map(lambda v: _fond_divergent(v, plafond=0.15),
-                 subset=["rendement"])
-            .map(lambda v: _fond_sequentiel(v, float(etapes["cout"].max() or 1)),
-                 subset=["cout"]),
-            width="stretch", hide_index=True,
-            column_config={
-                "date_decision": st.column_config.TextColumn(
-                    "Décidé le",
-                    help="Sur la clôture de cette séance, et rien après."),
-                "date_entree": st.column_config.TextColumn(
-                    "Acheté le",
-                    help="Une séance plus tard : décider et exécuter au même "
-                         "cours reviendrait à passer un ordre à un prix déjà "
-                         "connu."),
-                "date_sortie": st.column_config.TextColumn("Revendu le"),
-                "positions": st.column_config.TextColumn("Lignes détenues"),
-                "rendement": st.column_config.NumberColumn(
-                    "Cours", format="percent"),
-                "dividende": st.column_config.NumberColumn(
-                    "Dividende", format="percent",
-                    help="Accru pendant la détention."),
-                "rotation": st.column_config.NumberColumn(
-                    "Rotation", format="percent",
-                    help="Part du portefeuille remplacée — elle se paie deux "
-                         "fois, à la vente et au rachat."),
-                "cout": st.column_config.NumberColumn("Coût", format="percent"),
-                "valeur": st.column_config.NumberColumn(
-                    "Part stratégie", format="%.3f"),
-                "valeur_reference": st.column_config.NumberColumn(
-                    "Part référence", format="%.3f"),
-            },
-        )
-        _telecharger(resultat["etapes"], "backtest.csv", "dl_backtest")
-
-    st.warning("**Trois biais survivent et ne sont pas corrigeables ici :** "
-               + " ; ".join(resultat["avertissements"]) + ".")
-    _glossaire("backtest", "reference", "perte_max", "rotation", "frais",
-               "survivant")
+        st.warning("**Trois biais survivent et ne sont pas corrigeables ici :** "
+                   + " ; ".join(resultat["avertissements"]) + ".")
+        _glossaire("backtest", "reference", "perte_max", "rotation", "frais",
+                   "survivant")
 
 
 # --- Données --------------------------------------------------------------
-with onglets[4]:
-    etat = st.columns(3)
-    _tuile(etat[0], "Séances en archive", f"{seances}", teinte=SERIE_1,
-           note=f"{cours['date'].min()} → {cours['date'].max()}")
-    _tuile(etat[1], "Dividendes",
-           f"{len(dividendes)} + {len(fondamentaux)}", teinte=SERIE_2,
-           note="détachements datés, puis mesures par exercice")
-    _tuile(etat[2], "Sociétés au référentiel", f"{len(referentiel)}",
-           teinte=SERIE_1,
-           note=f"{int(referentiel['secteur'].notna().sum())} avec secteur")
+if onglets[4].open:
+    with onglets[4]:
+        etat = st.columns(3)
+        _tuile(etat[0], "Séances en archive", f"{seances}", teinte=SERIE_1,
+               note=f"{cours['date'].min()} → {cours['date'].max()}")
+        _tuile(etat[1], "Dividendes",
+               f"{len(dividendes)} + {len(fondamentaux)}", teinte=SERIE_2,
+               note="détachements datés, puis mesures par exercice")
+        _tuile(etat[2], "Sociétés au référentiel", f"{len(referentiel)}",
+               teinte=SERIE_1,
+               note=f"{int(referentiel['secteur'].notna().sum())} avec secteur")
 
-    # Visible sans avoir à ouvrir les journaux de l'hébergeur : un onglet
-    # bridé s'explique ici plutôt que de laisser croire à un bug.
-    st.caption(
-        "Modèle appris : "
-        + ("**disponible** (scikit-learn installé)."
-           if prediction.APPRENTISSAGE_DISPONIBLE else
-           "**indisponible** — scikit-learn absent de l'environnement. "
-           "Le score composite, lui, ne dépend d'aucune bibliothèque "
-           "d'apprentissage et reste calculé.")
-    )
-
-    if referentiel_filtre["secteur"].notna().any():
-        comptes = (referentiel_filtre.groupby("secteur").size()
-                   .reset_index(name="sociétés"))
-        _panneau("Répartition sectorielle",
-                 f"{len(referentiel_filtre)} sociétés").altair_chart(
-            alt.Chart(comptes)
-            .mark_bar(cornerRadiusEnd=4, height=20, color=SERIE_1)
-            .encode(
-                # tickMinStep=1 : un décompte de sociétés n'a pas de
-                # demi-unité, et un axe qui en affiche invente une précision.
-                x=alt.X("sociétés:Q", title="sociétés",
-                        axis=alt.Axis(tickMinStep=1, format="d")),
-                # labelLimit relevé : par défaut Vega tronquait
-                # « Consommation de Base » et « Consommation Discrétionnaire »
-                # au même « Consommation d… ».
-                y=alt.Y("secteur:N", sort="-x", title=None,
-                        axis=alt.Axis(labelLimit=220)),
-                tooltip=[alt.Tooltip("secteur:N", title="Secteur"),
-                         alt.Tooltip("sociétés:Q", title="Sociétés")],
-            )
-            .properties(height=260),
-            width="stretch",
+        # Visible sans avoir à ouvrir les journaux de l'hébergeur : un onglet
+        # bridé s'explique ici plutôt que de laisser croire à un bug.
+        st.caption(
+            "Modèle appris : "
+            + ("**disponible** (scikit-learn installé)."
+               if prediction.APPRENTISSAGE_DISPONIBLE else
+               "**indisponible** — scikit-learn absent de l'environnement. "
+               "Le score composite, lui, ne dépend d'aucune bibliothèque "
+               "d'apprentissage et reste calculé.")
         )
 
-    st.subheader("Couverture de l'archive")
-    par_date = cours.groupby("date").size().reset_index(name="lignes")
-    st.dataframe(par_date.tail(30), width="stretch", hide_index=True)
+        if referentiel_filtre["secteur"].notna().any():
+            comptes = (referentiel_filtre.groupby("secteur").size()
+                       .reset_index(name="sociétés"))
+            _panneau("Répartition sectorielle",
+                     f"{len(referentiel_filtre)} sociétés").altair_chart(
+                alt.Chart(comptes)
+                .mark_bar(cornerRadiusEnd=4, height=20, color=SERIE_1)
+                .encode(
+                    # tickMinStep=1 : un décompte de sociétés n'a pas de
+                    # demi-unité, et un axe qui en affiche invente une précision.
+                    x=alt.X("sociétés:Q", title="sociétés",
+                            axis=alt.Axis(tickMinStep=1, format="d")),
+                    # labelLimit relevé : par défaut Vega tronquait
+                    # « Consommation de Base » et « Consommation Discrétionnaire »
+                    # au même « Consommation d… ».
+                    y=alt.Y("secteur:N", sort="-x", title=None,
+                            axis=alt.Axis(labelLimit=220)),
+                    tooltip=[alt.Tooltip("secteur:N", title="Secteur"),
+                             alt.Tooltip("sociétés:Q", title="Sociétés")],
+                )
+                .properties(height=260),
+                width="stretch",
+            )
 
-    st.caption(
-        "Source : brvm.org, ingéré par l'action `ingestion.yml` et versionné "
-        "dans `data/cours.csv`. L'app ne lit que ces fichiers — elle n'écrit "
-        "rien et ne conserve aucun état. Dividendes, fondamentaux et séries "
-        "de commodités se chargent par « brvm importer-* »."
-    )
+        st.subheader("Couverture de l'archive")
+        par_date = cours.groupby("date").size().reset_index(name="lignes")
+        st.dataframe(par_date.tail(30), width="stretch", hide_index=True)
+
+        st.caption(
+            "Source : brvm.org, ingéré par l'action `ingestion.yml` et versionné "
+            "dans `data/cours.csv`. L'app ne lit que ces fichiers — elle n'écrit "
+            "rien et ne conserve aucun état. Dividendes, fondamentaux et séries "
+            "de commodités se chargent par « brvm importer-* »."
+        )

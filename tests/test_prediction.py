@@ -176,6 +176,74 @@ def _apres(cours, date, reglages):
     return dates[dates.index(date) + reglages["prediction"]["horizon"]]
 
 
+def test_les_rangs_se_calculent_DANS_la_seance():
+    """Le rang d'un trait compare les valeurs d'une MÊME séance.
+
+    C'est la propriété que l'échantillon vend : un niveau brut n'est pas
+    comparable d'une date à l'autre, un rang du jour l'est. Si la
+    construction rangeait sur l'ensemble des dates confondues, le modèle
+    apprendrait le calendrier — les traits d'une année calme et ceux d'une
+    année agitée n'auraient plus la même échelle — et rien ne le signalerait
+    dans le résultat.
+    """
+    echantillon = prediction.construire_echantillon(
+        _marche_aleatoire(n_valeurs=8, n_seances=120, graine=5), REGLAGES)
+    assert not echantillon.empty
+
+    for date, bloc in echantillon.groupby("date"):
+        rangs = bloc["momentum"].dropna()
+        # Rang centile sur n valeurs : le dernier vaut 1, le premier 1/n.
+        assert rangs.max() == 1.0
+        assert abs(rangs.min() - 1 / len(rangs)) < 1e-9, date
+
+
+def test_une_seance_trop_creuse_est_ecartee():
+    """Sous quatre valeurs cotées, la médiane de la séance ne sépare plus.
+
+    L'étiquette vaut « bat la médiane du jour ». À trois valeurs, une seule
+    est au-dessus et la cible ne dit plus rien du marché — d'où le refus de
+    la séance entière plutôt qu'une ligne qui aurait l'air d'en être une.
+    """
+    rng = np.random.default_rng(23)
+    n = 120
+    trajectoires = {f"T{i:02d}": 100 * np.exp(np.cumsum(
+        rng.normal(0, 0.01, n))) for i in range(6)}
+    cours = _cours(trajectoires)
+
+    dates = sorted(cours["date"].unique())
+    creuse = dates[len(dates) // 2]
+    # Trois valeurs seulement cotent ce jour-là ; les autres sont absentes,
+    # ce qui est le cas normal sur ce marché.
+    maigre = cours[~((cours["date"] == creuse)
+                     & (cours["ticker"] > "T02"))]
+
+    echantillon = prediction.construire_echantillon(maigre, REGLAGES)
+    assert not echantillon.empty
+    assert creuse not in set(echantillon["date"])
+
+
+def test_l_etiquette_regarde_l_horizon_en_seances():
+    """`rendement_futur` compare la clôture à celle de H SÉANCES plus tard.
+
+    Non pas H jours calendaires : entre deux séances il y a des week-ends
+    et des jours fériés, en nombre variable. Un décalage en jours ferait
+    glisser la cible d'une valeur à l'autre sans que rien ne le montre.
+    """
+    horizon = REGLAGES["prediction"]["horizon"]
+    n = 120
+    # Une seule valeur monte de 1 % par séance : le rendement sur H séances
+    # est connu d'avance, 1,01^H − 1.
+    droite = {"AAA": [100 * 1.01 ** i for i in range(n)]}
+    for i in range(5):
+        droite[f"T{i:02d}"] = [100.0] * n
+    echantillon = prediction.construire_echantillon(_cours(droite), REGLAGES)
+
+    attendu = 1.01 ** horizon - 1
+    obtenu = echantillon[echantillon["ticker"] == "AAA"]["rendement_futur"]
+    assert not obtenu.empty
+    assert np.allclose(obtenu, attendu)
+
+
 def test_refus_quand_l_echantillon_est_maigre():
     """Deux cents lignes ne font pas une prévision : le module doit rendre
     vide plutôt qu'un nombre, et dire ce qui manque."""

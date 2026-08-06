@@ -36,7 +36,7 @@ dev = ["pytest>=7", "pypdf>=4"]
 avis = ["pypdf>=4"]
 # Interface web. Streamlit Community Cloud installe requirements.txt,
 # pas cet extra ; il sert à retrouver le même environnement en local.
-web = ["streamlit>=1.49", "altair>=5.5"]
+web = ["streamlit>=1.61", "altair>=5.5"]
 
 [project.scripts]
 brvm = "brvm.cli:main"

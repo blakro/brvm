@@ -250,6 +250,73 @@ def test_un_exercice_inconnu_n_accroit_rien():
     assert accru.notna().all().all()
 
 
+def _cote_plate(dates, ticker="AAA", cloture=100.0):
+    """Une valeur au cours constant, cotée aux dates données."""
+    return pd.DataFrame([{"date": d, "ticker": ticker, "cloture": cloture,
+                          "volume_titres": 10.0, "volume_fcfa": 1_000.0}
+                         for d in dates])
+
+
+def test_le_rendement_courant_compte_douze_mois_calendaires():
+    """La fenêtre glissante est ]date − 365 jours, date], bornes comprises
+    comme écrit — et en jours CALENDAIRES, pas en séances.
+
+    Les deux bornes se testent parce qu'elles se trompent silencieusement :
+    un détachement compté un jour trop tôt, ou gardé un jour de trop, ne
+    déplace le rendement que d'une séance sur trois cents. Rien ne le
+    montrerait à l'écran, et le signal de retour à la moyenne qui s'en
+    nourrit changerait pourtant de sens.
+    """
+    dates = ["2024-06-01", "2024-06-02", "2025-06-01", "2025-06-02"]
+    detache = pd.DataFrame([{"ticker": "AAA",
+                             "date_detachement": "2024-06-02",
+                             "montant": 5.0}])
+    rendement = dividende.rendement_courant(_cote_plate(dates), detache)["AAA"]
+
+    # La veille du détachement : rien n'est encore versé.
+    assert rendement["2024-06-01"] == 0.0
+    # Le jour même : compté, 5 FCFA sur un cours de 100.
+    assert rendement["2024-06-02"] == pytest.approx(0.05)
+    # Trois cent soixante-quatre jours plus tard : encore dans la fenêtre.
+    assert rendement["2025-06-01"] == pytest.approx(0.05)
+    # Trois cent soixante-cinq : il en sort, la borne étant stricte.
+    assert rendement["2025-06-02"] == 0.0
+
+
+def test_le_rendement_courant_additionne_les_detachements_de_la_fenetre():
+    """Deux acomptes dans les douze mois font un rendement, pas deux.
+
+    Plusieurs sociétés de la cote versent un acompte puis un solde ; ne
+    retenir que le dernier détachement afficherait la moitié du rendement
+    réel.
+    """
+    dates = ["2024-03-01", "2024-09-01", "2024-09-02"]
+    detache = pd.DataFrame([
+        {"ticker": "AAA", "date_detachement": "2024-03-01", "montant": 4.0},
+        {"ticker": "AAA", "date_detachement": "2024-09-01", "montant": 6.0},
+    ])
+    rendement = dividende.rendement_courant(_cote_plate(dates), detache)["AAA"]
+
+    assert rendement["2024-03-01"] == pytest.approx(0.04)
+    assert rendement["2024-09-01"] == pytest.approx(0.10)
+    assert rendement["2024-09-02"] == pytest.approx(0.10)
+
+
+def test_une_valeur_sans_dividende_connu_rend_zero_et_non_du_vide():
+    """Colonne à zéro, pas de NaN et pas de colonne absente : l'appelant
+    parcourt toutes les valeurs, et une colonne manquante le ferait
+    tomber au lieu de lui dire « aucun dividende connu »."""
+    dates = ["2024-03-01", "2024-09-01"]
+    cours = pd.concat([_cote_plate(dates), _cote_plate(dates, "BBB")])
+    detache = pd.DataFrame([{"ticker": "AAA",
+                             "date_detachement": "2024-03-01",
+                             "montant": 4.0}])
+    rendement = dividende.rendement_courant(cours, detache)
+
+    assert list(rendement.columns) == ["AAA", "BBB"]
+    assert (rendement["BBB"] == 0.0).all()
+
+
 def test_le_backtest_avec_dividendes_rend_plus_que_sans():
     """Sur ce marché le dividende vaut 7 à 10 % l'an quand le cours en
     rend 2,8 : l'ignorer ne biaise pas à la marge, cela change l'ordre de

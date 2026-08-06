@@ -271,17 +271,35 @@ def rendement_courant(
     if div.empty:
         return pd.DataFrame()
 
+    # SOMMES CUMULÉES PLUTÔT QUE DEUX BOUCLES IMBRIQUÉES. La fenêtre
+    # glissante se lisait en refiltrant le calendrier de détachements pour
+    # chaque couple (séance, société) : 47 sociétés × 3 000 séances, soit
+    # 141 000 filtres pandas et deux bonnes minutes de calcul — ce que
+    # l'onglet Prédiction payait à chaque interaction. Les montants étant
+    # triés par date, la somme sur ]date − fenêtre, date] est la différence
+    # de deux cumuls, et chaque borne se trouve par recherche dichotomique.
     dates = pd.to_datetime(pd.Series(prix.index), errors="coerce")
+    fin = dates.to_numpy()
+    debut = fin - np.timedelta64(fenetre_jours, "D")
+    # Une date de séance illisible ne peut pas encadrer de fenêtre : elle
+    # vaut zéro, comme le faisaient les comparaisons avec NaT.
+    datee = dates.notna().to_numpy()
+
     glissant = pd.DataFrame(0.0, index=prix.index, columns=prix.columns)
     for ticker, groupe in div.groupby("ticker"):
         if ticker not in glissant.columns:
             continue
-        for date, montant in zip(dates, glissant.index):
-            fenetre = groupe[
-                (groupe["date_detachement"] <= date)
-                & (groupe["date_detachement"] > date - pd.Timedelta(days=fenetre_jours))
-            ]
-            glissant.loc[montant, ticker] = float(fenetre["montant"].sum())
+        groupe = groupe.sort_values("date_detachement")
+        bornes = groupe["date_detachement"].to_numpy()
+        montants = pd.to_numeric(groupe["montant"], errors="coerce").fillna(0.0)
+        # Le zéro de tête donne un cumul indexable par le rang renvoyé par
+        # `searchsorted`, y compris quand aucun détachement ne précède.
+        cumul = np.concatenate([[0.0], montants.to_numpy(float).cumsum()])
+        # `right` des deux côtés : détachements <= date, moins ceux <=
+        # date − fenêtre, ce qui laisse exactement ]date − fenêtre, date].
+        somme = (cumul[np.searchsorted(bornes, fin, side="right")]
+                 - cumul[np.searchsorted(bornes, debut, side="right")])
+        glissant[ticker] = np.where(datee, somme, 0.0)
 
     return (glissant / prix.replace(0, np.nan)).replace([np.inf, -np.inf], np.nan)
 
