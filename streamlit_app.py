@@ -583,15 +583,28 @@ with titre_1:
         "signal validé."
     )
 
-direct, echec = (None, None)
-if cours.empty:
-    direct, echec = lire_en_direct()
-
+# LA SÉANCE LUE EN DIRECT DOIT TENIR, ET ELLE NE TENAIT PAS. La cote
+# relue par le bouton n'était versée dans `direct` QU'AU passage où l'on
+# cliquait : à la relance suivante la variable retombait à `None`, la
+# séance disparaissait de l'écran et la date revenait à celle de
+# l'archive. Il fallait donc réactualiser sans cesse.
+#
+# Le défaut était latent — n'importe quel filtre le déclenchait déjà —
+# mais des onglets qui relancent le script l'ont rendu permanent : changer
+# d'onglet suffisait à reperdre la séance.
+#
+# C'est l'INTENTION qui est retenue, pas la table : la relecture reste
+# derrière `lire_en_direct`, qui garde sa réponse un quart d'heure. La
+# rejouer à chaque relance ne coûte donc rien et ne retouche pas le site.
 with titre_2:
     if st.button("↻ Actualiser", width="stretch",
                  help="Relire la cote publiée sur brvm.org, sans rien écrire"):
         lire_en_direct.clear()
-        direct, echec = lire_en_direct()
+        st.session_state["en_direct"] = True
+
+direct, echec = (None, None)
+if cours.empty or st.session_state.get("en_direct"):
+    direct, echec = lire_en_direct()
 
 # Replié par défaut, et ce n'est pas un détail : ce dépliant est au-dessus
 # des onglets, donc ouvert il le reste sur les cinq et leur mange le premier
