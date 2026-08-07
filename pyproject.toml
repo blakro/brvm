@@ -29,7 +29,11 @@ dependencies = [
 Source = "https://github.com/blakro/brvm"
 
 [project.optional-dependencies]
-dev = ["pytest>=7", "pypdf>=4"]
+# L'interface en fait partie depuis que `tests/test_app.py` existe. Sans
+# elle, ces tests se sautent en silence — et le défaut qu'ils surveillent
+# est précisément celui qui a atteint la production sans que la suite
+# bronche. Un test sauté par défaut d'installation ne surveille rien.
+dev = ["pytest>=7", "pypdf>=4", "streamlit>=1.61", "altair>=5.5"]
 # Lecture des avis officiels de détachement — voir `sonder-avis`. Sert
 # UNIQUEMENT à confronter un montant de dividende à son document
 # d'origine ; son absence coûte cette vérification et rien d'autre.
