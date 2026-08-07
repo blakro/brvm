@@ -222,8 +222,10 @@ deux corrigées :
 
 - **L'onglet ne se perd plus.** Il est retenu d'une relance à l'autre, et
   écrit dans l'URL — donc il survit aussi au rechargement de la page, et
-  `?onglet=Backtest` se partage tel quel. Les réglages avancés d'un onglet
-  survivent de même à un aller-retour par un autre.
+  `?onglet=Backtest` se partage tel quel. La société ouverte dans l'onglet
+  **Valeur** y est écrite de même, ce qui rend chaque fiche partageable
+  par son lien : `?onglet=Valeur&valeur=SNTS`. Les réglages avancés d'un
+  onglet survivent de leur côté à un aller-retour par un autre.
 - **Seul l'onglet visible se calcule.** Les quatre autres étaient
   entièrement recalculés à chaque interaction : 176 secondes entre deux
   rendus, pour un affichage qui n'en montre qu'un cinquième. Les résultats

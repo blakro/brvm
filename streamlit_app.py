@@ -1005,10 +1005,33 @@ if onglets[0].open:
 if onglets[1].open:
     with onglets[1]:
         noms = referentiel.set_index("ticker")["nom"]
+
+        # LA SOCIÉTÉ CHOISIE VA DANS L'URL, comme le rang de l'onglet. Sans
+        # cela, recharger la page ramenait à la première valeur de la liste :
+        # l'onglet était bien retrouvé, mais pas ce qu'on y regardait. Une
+        # fiche se partage désormais par son lien, `?onglet=Valeur&valeur=SNTS`.
+        #
+        # ÉCRIT À LA MAIN, ET NON PAR `bind="query-params"`. Le liage natif
+        # apparie sur le LIBELLÉ mis en forme : l'URL porterait
+        # « ?valeur=SNTS — SONATEL », qui cesserait de désigner quoi que ce
+        # soit au premier renommage au référentiel. Le symbole seul est
+        # l'identifiant stable de ce marché, et c'est lui qui doit voyager.
+        cotees = sorted(cours_filtre["ticker"].unique())
+        _demandee = st.query_params.get("valeur")
+        if "valeur" not in st.session_state and _demandee in cotees:
+            st.session_state["valeur"] = _demandee
+
+        # `persist_state` garde le choix quand on passe par un autre onglet,
+        # où ce sélecteur n'est plus rendu. Un symbole que le filtre de
+        # secteur vient d'écarter n'est pas une erreur : Streamlit retombe
+        # alors sur la première valeur de la liste.
         choix = st.selectbox(
-            "Valeur", sorted(cours_filtre["ticker"].unique()),
+            "Valeur", cotees,
             format_func=lambda t: f"{t} — {noms.get(t, '')}",
+            key="valeur", persist_state="session",
         )
+        if st.query_params.get("valeur") != choix:
+            st.query_params["valeur"] = choix
 
         serie = cours_filtre[cours_filtre["ticker"] == choix].sort_values("date")
         fiche = referentiel[referentiel["ticker"] == choix]
