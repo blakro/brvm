@@ -54,6 +54,13 @@ permissions:
 jobs:
   verser:
     runs-on: ubuntu-latest
+    # `secrets` N'EXISTE PAS DANS UN `if` D'ÉTAPE — GitHub refuse le
+    # fichier entier, pas seulement l'étape, et le workflow ne démarre
+    # jamais. La présence de la clé se lit donc ici, où le contexte est
+    # autorisé, et voyage ensuite comme une variable ordinaire. Le booléen
+    # arrive en chaîne : c'est « true » qu'on compare, pas true.
+    env:
+      CLE_PRESENTE: ${{ secrets.CLE_VERSEMENT != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -406,7 +413,7 @@ jobs:
       - name: Signer et verser
         id: verser
         if: ${{ steps.appliquer.outputs.applique == 'true'
-                && secrets.CLE_VERSEMENT != '' }}
+                && env.CLE_PRESENTE == 'true' }}
         env:
           CLE: ${{ secrets.CLE_VERSEMENT }}
           COURRIEL: ${{ vars.COURRIEL_VERSEMENT }}
