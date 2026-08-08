@@ -330,3 +330,52 @@ def test_variante_sources_rend_l_original_quand_tout_concorde():
     fonda = pd.DataFrame([{"ticker": "AAAA", "date": "2023-12-31",
                            "indicateur": "dividende", "valeur": 100.0}])
     pd.testing.assert_frame_equal(qualite.variante_sources(div, fonda), div)
+
+
+def _archive(dates: list[str]) -> pd.DataFrame:
+    """Une archive minimale : une ligne par séance."""
+    return pd.DataFrame([{"date": d, "ticker": "AAAA", "cloture": 100.0}
+                         for d in dates])
+
+
+def test_un_trou_dans_l_archive_se_voit():
+    """LE DÉFAUT QUI A COÛTÉ UNE SÉANCE. `brvm veille` regardait la
+    dernière date et concluait « l'archive avance » — ce qui était vrai, et
+    à côté de la question : le 6 août 2026 manquait entre le 5 et le 7,
+    l'ingestion ayant été annulée à mi-course.
+
+    Un retard finit par se combler tout seul ; un trou, jamais. Il doit
+    donc se voir, sans quoi il ne se voit plus jamais.
+    """
+    from brvm.cli import _seances_manquantes
+
+    # mercredi, jeudi manquant, vendredi
+    trous = _seances_manquantes(_archive(["2026-08-05", "2026-08-07"]))
+    assert trous == ["2026-08-06"]
+
+
+def test_le_week_end_n_est_pas_un_trou():
+    """Sans quoi le contrôle signalerait deux jours par semaine et
+    s'apprendrait à s'ignorer avant la fin du premier mois."""
+    from brvm.cli import _seances_manquantes
+
+    # vendredi puis lundi : le samedi et le dimanche ne comptent pas.
+    assert _seances_manquantes(_archive(["2026-08-07", "2026-08-10"])) == []
+
+
+def test_le_retard_n_est_pas_un_trou():
+    """Un trou est BORNÉ par les séances connues. Au-delà de la dernière,
+    ce n'est plus une lacune mais du retard, et c'est l'autre moitié de la
+    commande qui le mesure — les compter deux fois ferait dire à la veille
+    qu'une archive à jour d'hier est trouée."""
+    from brvm.cli import _seances_manquantes
+
+    assert _seances_manquantes(_archive(["2020-01-01", "2020-01-02"])) == []
+
+
+def test_une_archive_vide_n_a_pas_de_trou():
+    """Zéro séance n'est pas une archive trouée : c'est une archive vide,
+    et le message qui convient n'est pas le même."""
+    from brvm.cli import _seances_manquantes
+
+    assert _seances_manquantes(pd.DataFrame()) == []
