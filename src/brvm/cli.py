@@ -633,6 +633,25 @@ def _veille(args) -> int:
     print(f"jours ouvrés écoulés depuis : {ecoules}")
     print(f"séances au total : {archive['date'].nunique()}")
 
+    # LE SECOND ANGLE MORT, ET IL A SERVI. Regarder la dernière séance dit
+    # si la collecte VIT ; cela ne dit rien de ce qu'elle a manqué en
+    # chemin. Le 6 août 2026, l'ingestion a été annulée à mi-course : le
+    # 5 et le 7 sont dans l'archive, le 6 n'y est pas, et cette commande
+    # répondait « L'archive avance » — ce qui était vrai, et à côté de la
+    # question. Un trou ne se comble pas tout seul et ne se voit plus
+    # jamais, alors qu'une séance en retard finit par arriver.
+    trous = _seances_manquantes(archive)
+    if trous:
+        recents = trous[-8:]
+        print(f"\nTROUS DANS L'ARCHIVE : {len(trous)} jour(s) ouvré(s) sans "
+              f"séance entre la première et la dernière. "
+              f"{'Les plus récents' if len(trous) > 8 else 'Ce sont'} : "
+              + ", ".join(recents) + ".")
+        print("Un jour férié de la BRVM en est un aussi — le calendrier des "
+              "fériés n'est pas\nen base, donc tous ne sont pas des pannes. "
+              "Ce qui se rattrape se rattrape\npar « brvm rapatrier --debut "
+              "… --fin … ».")
+
     if ecoules > args.tolerance:
         print(
             f"\nARCHIVE FIGÉE : {ecoules} jours ouvrés sans nouvelle séance, "
@@ -645,8 +664,28 @@ def _veille(args) -> int:
         )
         return 1
 
-    print("\nL'archive avance.")
+    print("\nL'archive avance." if not trous else
+          "\nL'archive avance, mais elle est trouée.")
     return 0
+
+
+def _seances_manquantes(archive: pd.DataFrame) -> list[str]:
+    """Jours ouvrés sans aucune ligne, entre la première et la dernière.
+
+    Bornée à l'intervalle couvert : au-delà de la dernière séance, ce n'est
+    plus un trou mais du retard, et c'est l'autre moitié de la commande qui
+    le mesure.
+
+    Les jours fériés de la BRVM y figurent — leur calendrier n'est pas en
+    base. C'est délibéré : mieux vaut nommer huit dates dont deux sont des
+    fériés que de taire un trou en croyant l'expliquer.
+    """
+    if archive.empty:
+        return []
+    presentes = set(archive["date"].astype(str))
+    ouvres = pd.bdate_range(min(presentes), max(presentes))
+    return [j.strftime("%Y-%m-%d") for j in ouvres
+            if j.strftime("%Y-%m-%d") not in presentes]
 
 
 def _limites() -> None:
