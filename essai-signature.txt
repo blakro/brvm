@@ -1,0 +1,2 @@
+Essai jetable : un commit créé par l'API GitHub est-il signé ?
+Cette branche est supprimée aussitôt la réponse obtenue.
