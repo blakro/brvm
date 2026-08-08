@@ -180,7 +180,7 @@ tests/                    237 tests, tous hors ligne
 .github/workflows/
   ingestion.yml             collecte quotidienne, 16 h UTC en semaine
   rapatriement.yml          rattrapage d'historique
-  versement.yml             réémission des séances en retard
+  versement.yml             verse les séances collectées, 16 h 45 UTC
   veille.yml                alerte si l'archive cesse d'avancer
   tests.yml                 les tests à chaque modification
 ```
@@ -419,25 +419,77 @@ où elle cotait. Le passé devenait celui des seuls survivants — ce qui
 fabrique mécaniquement des performances passées trop belles, puisqu'on
 oublie ceux qui ont échoué.
 
-### Les actions automatiques ne committent pas, elles déposent
+### Qui collecte, qui verse, et qui signe
 
-Un runner GitHub n'a pas de clé de signature : tout commit qu'il
-produirait resterait non signé, et l'historique du dépôt cesserait d'être
-intégralement vérifiable pour la commodité d'un robot.
+`ingestion.yml` et `rapatriement.yml` sont en **lecture seule**. Ils
+publient un artefact `archive-<run_id>` contenant `data/` et n'écrivent
+rien : ce sont des collecteurs.
 
-`ingestion.yml` et `rapatriement.yml` sont donc en **lecture seule**. Ils
-publient un artefact `archive-<run_id>` contenant `data/`, et le versement
-se fait à la main :
+`versement.yml` écrit. Il tourne chaque jour ouvré à 16 h 45 UTC, relit
+les artefacts des ingestions récentes, contrôle ce qu'il y trouve, et
+verse dans `data/` — **en signant**.
 
-1. onglet **Actions** → l'exécution → télécharger l'artefact `archive-…` ;
-2. décompresser dans `data/` ;
-3. `python -m brvm importer`, puis `git add data/ && git commit`.
+**Pourquoi une clé pour un robot.** Le versement était d'abord manuel,
+au motif qu'un runner ne sait pas signer et qu'un historique à moitié
+vérifiable ne vaut guère mieux qu'un historique nu. L'objection portait
+sur la signature, pas sur l'écriture : une clé propre au robot la lève.
+Chaque versement reste « Verified », et l'auteur — `versement
+automatique` — dit qui a agi.
 
-Le prix de ce choix est réel et assumé : **l'archive n'avance pas toute
-seule.** C'est précisément ce que `veille.yml` surveille — elle ouvre une
-issue GitHub quand la donnée cesse de progresser pendant cinq jours
-ouvrés, et son message distingue les deux causes possibles : des
-artefacts en attente, ou une collecte cassée.
+Ce que la contrepartie coûte, dit franchement : une signature ne prouve
+plus qu'une personne tenait sa clé, seulement que le commit vient de ce
+dépôt-ci. La distinction reste lisible dans le journal, mais elle change
+de nature.
+
+**Ce que le robot vérifie avant d'écrire**, parce que personne ne
+regardera : en-têtes identiques, aucune ligne déjà présente, aucune
+séance antérieure à l'archive — ce garde-fou a déjà empêché de
+ressusciter 38 séances fantômes — tri préservé, et **la limite de ±7,5 %
+par séance**. Un seul contrôle qui tombe annule le versement.
+
+**Quand il ne verse pas**, il retombe sur son ancien comportement :
+émettre l'incrément dans son journal, compressé et empreinté, à reprendre
+à la main. Une clé absente, un contrôle en échec ou une poussée refusée
+font perdre l'automatisme, jamais la donnée.
+
+#### Installer la clé du robot
+
+Une fois, et le versement tourne seul ensuite :
+
+```bash
+ssh-keygen -t ed25519 -C "versement automatique brvm" -f cle_versement -N ""
+```
+
+1. **Clé publique** (`cle_versement.pub`) → *Settings → SSH and GPG keys →
+   New SSH key*, type **Signing Key**. Pas « Authentication » : une clé
+   d'authentification ne signe rien.
+2. **Clé privée** (`cle_versement`) → *Settings → Secrets and variables →
+   Actions → New repository secret*, nom `CLE_VERSEMENT`.
+3. **Variable** `COURRIEL_VERSEMENT` (même écran, onglet *Variables*) :
+   une adresse **vérifiée** du compte. L'adresse `@users.noreply.github.com`
+   convient. Sans elle, le workflow s'arrête plutôt que de produire un
+   commit non vérifié.
+4. Supprimez `cle_versement` de votre disque.
+
+#### Verser une séance à la main
+
+Si le robot s'est arrêté, l'incrément est dans le journal de
+`versement.yml`, avec son empreinte :
+
+```bash
+# depuis le journal de l'action : la ligne « --- increment base64 gzip --- »
+base64 -d increment.b64 | gunzip > increment.csv
+sha256sum increment.csv   # doit correspondre à l'empreinte annoncée
+```
+
+puis fusionner dans `data/cours.csv` en respectant le tri, et committer.
+L'autre voie reste ouverte : télécharger l'artefact `archive-…`,
+décompresser dans `data/`, `python -m brvm importer`.
+
+`veille.yml` surveille l'ensemble : elle ouvre une issue GitHub quand la
+donnée cesse de progresser pendant cinq jours ouvrés, et son message
+distingue les deux causes possibles — un versement en panne, ou une
+collecte cassée.
 
 `veille.yml` lance aussi `brvm verifier` **sur la page vivante**, une fois
 par semaine. La distinction fait tout le dispositif : `tests.yml` lance le

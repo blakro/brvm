@@ -17,6 +17,12 @@ name: verser les séances en attente
 # quotidien de `ingestion.yml` — à la différence près que celui-ci rattrape
 # un retard de plusieurs jours d'un coup.
 on:
+  # 16 h 45 UTC, du lundi au vendredi : trois quarts d'heure après
+  # `ingestion.yml`, de quoi laisser son artefact se publier. Le versement
+  # cesse ainsi d'attendre qu'on y pense — c'était le seul maillon manuel
+  # de la chaîne, et il a laissé l'archive prendre cinq séances de retard.
+  schedule:
+    - cron: "45 16 * * 1-5"
   workflow_dispatch:
     inputs:
       executions:
@@ -24,10 +30,25 @@ on:
         required: false
         default: "20"
 
-# `actions: read` en plus : lister les exécutions et télécharger leurs
-# artefacts. Toujours aucune écriture — c'est la session qui versera.
+# `contents: write` DÉSORMAIS, ET CE N'EST PAS UN RENONCEMENT. Le projet
+# refusait qu'un runner commite parce qu'il ne sait pas signer, et qu'un
+# historique à moitié vérifiable ne vaut guère mieux qu'un historique nu.
+# L'objection portait sur la SIGNATURE, pas sur l'écriture : une clé propre
+# au robot, déposée en secret de dépôt, la lève. Chaque versement reste
+# « Verified », et l'auteur dit qui a agi — « versement automatique » et non
+# un humain.
+#
+# Ce que la contrepartie coûte, dit franchement : une signature ne prouve
+# plus qu'une personne tenait sa clé, seulement que le commit vient de ce
+# dépôt-ci. La distinction reste lisible dans le journal, elle ne disparaît
+# pas — mais elle change de nature, et c'est un choix, pas un détail.
+#
+# SANS LE SECRET, RIEN N'EST POUSSÉ. Le workflow retombe alors sur son
+# ancien comportement : émettre l'incrément dans le journal, à verser à la
+# main. Une clé absente ou révoquée fait perdre l'automatisme, jamais la
+# donnée.
 permissions:
-  contents: read
+  contents: write
   actions: read
 
 jobs:
@@ -180,18 +201,213 @@ jobs:
                 f"{', '.join(dates)}")
           PY
 
+      # LES MÊMES CONTRÔLES QU'À LA MAIN, PARCE QUE PERSONNE NE REGARDERA.
+      # Un versement manuel passe sous les yeux de quelqu'un ; celui-ci
+      # n'aura pour témoin que ce journal. Tout ce qu'une session vérifiait
+      # avant d'écrire est donc vérifié ici, et un seul contrôle qui tombe
+      # annule le versement — l'incrément part alors dans le journal, à
+      # verser à la main, comme avant.
+      #
+      # Bibliothèque standard uniquement : ce job n'installe rien, et lui
+      # faire installer pandas pour diviser deux nombres coûterait une
+      # minute par séance et une dépendance de plus à la chaîne.
+      - name: Appliquer l'incrément et le contrôler
+        id: appliquer
+        run: |
+          python - <<'PY'
+          import os, shutil
+
+
+          def cle(ligne: str) -> tuple[str, str]:
+              date, ticker = ligne.split(",", 2)[:2]
+              return date, ticker
+
+
+          def sortie(**valeurs):
+              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+                  for nom, valeur in valeurs.items():
+                      f.write(f"{nom}={valeur}\n")
+
+
+          if not os.path.exists("increment.csv"):
+              print("rien à appliquer")
+              sortie(applique="false", motif="rien")
+              raise SystemExit(0)
+
+          with open("data/cours.csv", encoding="utf-8") as f:
+              entete = f.readline().rstrip("\n")
+              archive = [l.rstrip("\n") for l in f if l.strip()]
+          with open("increment.csv", encoding="utf-8") as f:
+              tete = f.readline().rstrip("\n")
+              incr = [l.rstrip("\n") for l in f if l.strip()]
+
+          refus = []
+          if tete != entete:
+              refus.append(f"en-têtes différents : {tete!r} vs {entete!r}")
+
+          connues = {cle(l) for l in archive}
+          deja = [l for l in incr if cle(l) in connues]
+          if deja:
+              refus.append(f"{len(deja)} lignes déjà présentes dans l'archive")
+
+          derniere = max((d for d, _ in connues), default="")
+          anciennes = [l for l in incr if cle(l)[0] <= derniere]
+          if anciennes:
+              refus.append(f"{len(anciennes)} lignes pas postérieures "
+                           f"à {derniere}")
+
+          # LA LIMITE DE ±7,5 % EST UNE RÈGLE DU MARCHÉ, PAS UNE TOLÉRANCE.
+          # Un cours qui la franchit n'est pas une forte séance : c'est une
+          # lecture fausse, ou une réduction du nominal que l'archive doit
+          # traiter à part. Dans les deux cas, un humain doit voir.
+          derniers = {}
+          for ligne in archive:
+              champs = ligne.split(",")
+              if champs[5]:
+                  derniers[champs[1]] = float(champs[5])
+          hors = []
+          for ligne in sorted(incr, key=cle):
+              champs = ligne.split(",")
+              date, ticker, cloture = champs[0], champs[1], champs[5]
+              if not cloture:
+                  continue
+              veille = derniers.get(ticker)
+              valeur = float(cloture)
+              if veille:
+                  ecart = valeur / veille - 1
+                  if abs(ecart) > 0.0751:
+                      hors.append(f"{date} {ticker} {ecart:+.2%}")
+              derniers[ticker] = valeur
+          if hors:
+              refus.append(f"{len(hors)} variations hors ±7,5 % : "
+                           + ", ".join(hors[:5]))
+
+          if refus:
+              print("VERSEMENT REFUSÉ :")
+              for motif in refus:
+                  print(f"  - {motif}")
+              print("\nL'incrément part dans le journal ; à verser à la main "
+                    "après examen.")
+              sortie(applique="false", motif="controle")
+              raise SystemExit(0)
+
+          fusion = sorted(archive + incr, key=cle)
+          assert fusion == archive + sorted(incr, key=cle), \
+              "l'incrément ne s'ajoute pas en queue"
+          with open("data/cours.csv", "w", encoding="utf-8") as f:
+              f.write(entete + "\n" + "\n".join(fusion) + "\n")
+
+          # Le référentiel est une table RÉÉCRITE, pas un incrément : celui
+          # de l'artefact le plus récent porte déjà la fusion faite par
+          # `ingestion`, donc il remplace, il ne se complète pas.
+          #
+          # COPIÉ ET NON DÉPLACÉ : si le versement échoue plus loin, le
+          # journal doit encore trouver `referentiel.csv` à la racine pour
+          # l'émettre. Le déplacer privait le filet de la moitié de ce
+          # qu'il doit rattraper.
+          if os.path.exists("referentiel.csv"):
+              shutil.copy("referentiel.csv", "data/referentiel.csv")
+              print("référentiel remplacé par le plus récent")
+
+          dates = sorted({d for d, _ in (cle(l) for l in incr)})
+          print(f"appliqué : +{len(incr)} lignes, séances {', '.join(dates)}")
+          sortie(applique="true", lignes=len(incr),
+                 seances=len(dates), dates=" ".join(dates))
+          PY
+
+      # LA CLÉ EST CELLE DU ROBOT, ET ELLE NE SERT QU'ICI. Elle est déposée
+      # en secret de dépôt et enregistrée comme clé de SIGNATURE sur le
+      # compte — pas comme clé de déploiement, qui ne signerait rien.
+      # L'auteur porte un nom qui dit ce qu'il est ; l'adresse est celle,
+      # vérifiée, du compte, sans quoi GitHub refuserait la signature.
+      #
+      # `if` sur le secret : sans lui l'étape est SAUTÉE, pas en échec, et
+      # le journal reprend son rôle plus bas.
+      - name: Signer et verser
+        id: verser
+        if: ${{ steps.appliquer.outputs.applique == 'true'
+                && secrets.CLE_VERSEMENT != '' }}
+        env:
+          CLE: ${{ secrets.CLE_VERSEMENT }}
+          COURRIEL: ${{ vars.COURRIEL_VERSEMENT }}
+          DATES: ${{ steps.appliquer.outputs.dates }}
+          LIGNES: ${{ steps.appliquer.outputs.lignes }}
+          SEANCES: ${{ steps.appliquer.outputs.seances }}
+        run: |
+          set -euo pipefail
+
+          # Une adresse absente donnerait un commit sans auteur valide, que
+          # GitHub refuserait de marquer « Verified » — l'automatisme
+          # tournerait en produisant exactement ce qu'on voulait éviter.
+          # Mieux vaut s'arrêter ici : le journal prendra le relais.
+          if [ -z "${COURRIEL}" ]; then
+            echo "::error::La variable de dépôt COURRIEL_VERSEMENT est vide."
+            echo "Renseignez une adresse VÉRIFIÉE du compte, sans quoi la"
+            echo "signature ne sera pas reconnue. Voir README."
+            exit 1
+          fi
+
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$CLE" > ~/.ssh/versement
+          chmod 600 ~/.ssh/versement
+          ssh-keygen -y -f ~/.ssh/versement > ~/.ssh/versement.pub
+
+          git config user.name "versement automatique"
+          git config user.email "$COURRIEL"
+          git config gpg.format ssh
+          git config user.signingkey ~/.ssh/versement.pub
+          git config commit.gpgsign true
+
+          # Le message passe par un fichier : l'écrire en ligne de commande
+          # exposerait son contenu à l'interprétation du shell, et une
+          # apostrophe ou un accent grave dans un nom de société suffirait
+          # à casser le versement — ou pire, à exécuter quelque chose.
+          {
+            echo "Verser ${SEANCES} séance(s) : ${DATES}"
+            echo
+            echo "Versé par l'action, artefacts d'ingestion relus et"
+            echo "contrôlés : en-têtes, doublons, antériorité, tri, et la"
+            echo "limite de ±7,5 % par séance. ${LIGNES} lignes ajoutées."
+            echo
+            echo "Commit signé par la clé du robot — l'auteur dit qui a agi."
+          } > message.txt
+
+          git add data/cours.csv data/referentiel.csv
+          git commit -F message.txt
+
+          # LE DÉPÔT PEUT AVOIR BOUGÉ pendant que les artefacts se
+          # téléchargeaient. Rejouer le versement au-dessus de `main` plutôt
+          # que d'échouer : le commit est resigné au passage, la clé est là.
+          for essai in 1 2 3; do
+            git pull --rebase --autostash origin "${GITHUB_REF_NAME}" \
+              && git push && { echo "poussé"; exit 0; }
+            echo "poussée refusée, nouvel essai ($essai)"
+            sleep $((essai * 5))
+          done
+          echo "trois tentatives refusées — reprise à la main"
+          exit 1
+
       # COMPRESSÉ SUR UNE LIGNE, ET CE N'EST PAS DE LA COQUETTERIE. En
       # clair, quatre séances font près de deux cents lignes de journal :
       # les relire demande de deviner combien de lignes remonter, et une
       # ligne manquée passe pour une donnée absente plutôt que pour une
       # lecture tronquée. L'empreinte tranche — le versement se vérifie
       # au lieu de se supposer.
+      #
+      # DEVENU LE FILET, ET NON PLUS LA VOIE NORMALE. Il ne s'écrit que si
+      # rien n'a été poussé : contrôle en échec, secret absent, clé
+      # révoquée. La donnée reste alors récupérable à la main — c'est
+      # exactement ce qui a servi à rattraper les quatre séances du 3 au
+      # 7 août, quand le stockage d'artefacts était injoignable.
       - name: Écrire l'incrément dans le journal
+        if: ${{ always() && steps.verser.outcome != 'success' }}
         run: |
           if [ ! -s increment.csv ]; then
             echo "rien à écrire"
             exit 0
           fi
+          echo "Aucun versement automatique : reprise à la main depuis ce"
+          echo "journal. Voir README, « Verser une séance à la main »."
           for f in increment referentiel; do
             [ -s "$f.csv" ] || continue
             echo "--- $f sha256 $(sha256sum "$f.csv" | cut -c1-16) \
