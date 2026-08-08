@@ -116,16 +116,30 @@ jobs:
               connues = {cle(l): l for l in
                          (x.rstrip("\n") for x in f) if l.strip()}
           derniere = max((d for d, _ in connues), default="")
+          # LES DATES PRÉSENTES, ET PAS SEULEMENT LA DERNIÈRE : c'est ce qui
+          # sépare un TROU d'une ligne délibérément retirée. Voir plus bas.
+          datees = {d for d, _ in connues}
           print(f"archive versée : {len(connues)} lignes, "
                 f"dernière séance {derniere or '—'}")
 
           combien = int(os.environ.get("EXECUTIONS") or 20)
-          runs = json.loads(lire(
-              f"{RACINE}/actions/workflows/ingestion.yml/runs"
-              f"?status=success&per_page={combien}"))["workflow_runs"]
+
+          # DEUX SOURCES, ET L'ORDRE COMPTE. `ingestion` apporte la séance
+          # du jour ; `rapatriement` sert à reprendre une séance manquée —
+          # le 6 août 2026 l'a été, l'ingestion ayant été annulée à
+          # mi-course. Les deux déposent le même artefact `archive-<run>`.
+          #
+          # L'ingestion passe en premier parce que c'est d'elle, et d'elle
+          # seule, qu'on retient le référentiel : le rapatriement lit un
+          # historique par valeur et ne rafraîchit pas la liste des cotées.
+          runs = []
+          for atelier in ("ingestion.yml", "rapatriement.yml"):
+              runs += [(atelier, r) for r in json.loads(lire(
+                  f"{RACINE}/actions/workflows/{atelier}/runs"
+                  f"?status=success&per_page={combien}"))["workflow_runs"]]
 
           nouvelles: dict[tuple[str, str], str] = {}
-          for run in runs:
+          for atelier, run in runs:
               arts = json.loads(lire(
                   f"{RACINE}/actions/runs/{run['id']}/artifacts"))["artifacts"]
               for art in arts:
@@ -147,9 +161,16 @@ jobs:
                       # dirait pas ce qui en a disparu. Les exécutions
                       # arrivent de la plus récente à la plus ancienne :
                       # le premier référentiel rencontré est le bon.
+                      #
+                      # DE L'INGESTION SEULEMENT. Le rapatriement lit un
+                      # historique valeur par valeur et ne rafraîchit pas la
+                      # liste des cotées : son référentiel est celui du jour
+                      # où on l'a lancé, et le retenir ferait reculer
+                      # `derniere_vue` pour tout le monde.
                       refs = [n for n in z.namelist()
                               if n.endswith("referentiel.csv")]
-                      if refs and not os.path.exists("referentiel.csv"):
+                      if (refs and atelier == "ingestion.yml"
+                              and not os.path.exists("referentiel.csv")):
                           with open("referentiel.csv", "w",
                                     encoding="utf-8") as f:
                               f.write(z.read(refs[0]).decode("utf-8"))
@@ -157,31 +178,49 @@ jobs:
                               f"({run['created_at'][:10]})")
                   absentes = {cle(l): l for l in texte.splitlines()[1:]
                               if l.strip() and cle(l) not in connues}
-                  # SEULES LES SÉANCES POSTÉRIEURES À L'ARCHIVE SONT VERSÉES,
-                  # ET CE GARDE-FOU A SERVI DÈS LE PREMIER PASSAGE. Un
-                  # artefact plus ancien qu'une correction porte l'archive
-                  # d'AVANT : celui du 28 juillet contenait encore les 38
-                  # séances fantômes retirées le 29, et le versement les
+                  # DEUX FAÇONS D'ÊTRE ABSENTE, ET UNE SEULE SE VERSE.
+                  #
+                  # Le garde-fou d'origine ne retenait que les séances
+                  # POSTÉRIEURES à l'archive, et il a servi dès le premier
+                  # passage : l'artefact du 28 juillet portait encore les
+                  # 38 lignes fantômes retirées le 29, et les verser les
                   # aurait ressuscitées sans que rien ne le dise — la panne
                   # exacte contre laquelle `db.effacer_cours` a été écrit.
                   #
-                  # Une ligne absente et antérieure à la dernière séance
-                  # versée n'est donc jamais un retard : c'est une donnée
-                  # que le dépôt a délibérément écartée, ou qu'un
-                  # rapatriement doit reprendre en entier. Elle est
-                  # signalée, jamais réémise.
-                  ajout = {(d, t): l for (d, t), l in absentes.items()
-                           if d > derniere}
-                  ecartees = len(absentes) - len(ajout)
+                  # Mais il refusait du même geste toute reprise de TROU :
+                  # une séance manquée est antérieure par définition. Le
+                  # 6 août 2026 était donc irrattrapable par cette voie.
+                  #
+                  # Ce qui sépare les deux cas se lit dans l'archive
+                  # elle-même. Une ligne retirée l'a été d'une date qui
+                  # existe toujours — le 09/02/2015 y garde 22 lignes, le
+                  # 25/12/2017 en garde 30. Un trou, lui, est une date
+                  # ENTIÈREMENT absente. La règle tient en une phrase : on
+                  # verse ce qui est postérieur, et ce qui comble une date
+                  # dont l'archive ne sait rien. Jamais une ligne qu'elle a
+                  # écartée d'une date qu'elle connaît.
+                  ajout, ecartees = {}, 0
+                  combles = set()
+                  for (d, t), l in absentes.items():
+                      if d > derniere:
+                          ajout[(d, t)] = l
+                      elif d not in datees:
+                          ajout[(d, t)] = l
+                          combles.add(d)
+                      else:
+                          ecartees += 1
                   dates = sorted({d for d, _ in ajout})
                   print(f"  {art['name']} ({run['created_at'][:10]}) : "
                         f"{len(ajout)} lignes neuves {dates or ''}")
+                  if combles:
+                      print(f"      dont {len(combles)} séance(s) comblée(s) "
+                            f"dans l'archive : {', '.join(sorted(combles))}")
                   if ecartees:
                       anciennes = sorted({d for d, _ in absentes
-                                          if d <= derniere})
-                      print(f"      {ecartees} lignes ÉCARTÉES car pas "
-                            f"postérieures à {derniere} — archive d'avant "
-                            f"une correction : {anciennes[0]}…"
+                                          if d <= derniere and d in datees})
+                      print(f"      {ecartees} lignes ÉCARTÉES : antérieures "
+                            f"ET sur des séances déjà présentes, donc "
+                            f"retirées à dessein — {anciennes[0]}…"
                             f"{anciennes[-1]}")
                   nouvelles.update(ajout)
 
@@ -250,11 +289,22 @@ jobs:
           if deja:
               refus.append(f"{len(deja)} lignes déjà présentes dans l'archive")
 
+          # POSTÉRIEURE, OU COMBLANT UNE DATE INCONNUE. Une ligne antérieure
+          # sur une séance que l'archive connaît déjà en a été retirée à
+          # dessein — la ressusciter est la panne contre laquelle
+          # `db.effacer_cours` a été écrit. Une date dont l'archive ne sait
+          # rien est un trou, et se comble.
           derniere = max((d for d, _ in connues), default="")
-          anciennes = [l for l in incr if cle(l)[0] <= derniere]
-          if anciennes:
-              refus.append(f"{len(anciennes)} lignes pas postérieures "
-                           f"à {derniere}")
+          datees = {d for d, _ in connues}
+          intruses = [l for l in incr
+                      if cle(l)[0] <= derniere and cle(l)[0] in datees]
+          if intruses:
+              refus.append(f"{len(intruses)} lignes antérieures sur des "
+                           f"séances déjà présentes (retirées à dessein)")
+          combles = sorted({cle(l)[0] for l in incr
+                            if cle(l)[0] <= derniere and cle(l)[0] not in datees})
+          if combles:
+              print(f"séances comblées : {', '.join(combles)}")
 
           # UN COURS NUL OU NÉGATIF N'EST JAMAIS LÉGITIME. Contrairement à
           # la limite de séance, celui-ci ne connaît pas d'exception : il
@@ -314,9 +364,16 @@ jobs:
               sortie(applique="false", motif="controle")
               raise SystemExit(0)
 
+          # LA GARANTIE N'EST PLUS « ÇA S'AJOUTE EN QUEUE » : combler un trou
+          # insère au milieu. Ce qui doit rester vrai, et qui est vérifié
+          # ici, c'est que la fusion est triée, qu'elle ne perd aucune ligne
+          # de l'archive, et qu'elle en compte exactement autant qu'avant
+          # plus l'incrément — donc qu'elle n'en invente ni n'en écrase.
           fusion = sorted(archive + incr, key=cle)
-          assert fusion == archive + sorted(incr, key=cle), \
-              "l'incrément ne s'ajoute pas en queue"
+          assert fusion == sorted(fusion, key=cle), "fusion non triée"
+          assert set(archive).issubset(set(fusion)), "l'archive a perdu une ligne"
+          assert len(fusion) == len(archive) + len(incr), \
+              f"{len(fusion)} lignes au lieu de {len(archive) + len(incr)}"
           with open("data/cours.csv", "w", encoding="utf-8") as f:
               f.write(entete + "\n" + "\n".join(fusion) + "\n")
 
