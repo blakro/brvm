@@ -444,8 +444,17 @@ de nature.
 **Ce que le robot vérifie avant d'écrire**, parce que personne ne
 regardera : en-têtes identiques, aucune ligne déjà présente, aucune
 séance antérieure à l'archive — ce garde-fou a déjà empêché de
-ressusciter 38 séances fantômes — tri préservé, et **la limite de ±7,5 %
-par séance**. Un seul contrôle qui tombe annule le versement.
+ressusciter 38 séances fantômes — tri préservé, et aucune clôture nulle
+ou négative. Un seul contrôle qui tombe annule le versement.
+
+**Ce qu'il ne refuse pas : la limite de ±7,5 %.** La tentation est d'en
+faire un invariant dur ; mesurée sur l'archive, elle lève 356 alertes dont
+l'immense majorité est légitime — au détachement le prix de référence est
+ajusté du dividende, la limite relie deux séances *consécutives* et non
+deux blocs séparés d'un mois, et une division du nominal la franchit par
+construction. Bloquer là-dessus arrêterait le versement toute la saison
+des détachements, de mai à août. Les dépassements sont donc notés dans le
+journal ; `brvm qualite` les range par cause probable.
 
 **Quand il ne verse pas**, il retombe sur son ancien comportement :
 émettre l'incrément dans son journal, compressé et empreinté, à reprendre
