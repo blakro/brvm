@@ -426,8 +426,18 @@ publient un artefact `archive-<run_id>` contenant `data/` et n'écrivent
 rien : ce sont des collecteurs.
 
 `versement.yml` écrit. Il tourne chaque jour ouvré à 16 h 45 UTC, relit
-les artefacts des ingestions récentes, contrôle ce qu'il y trouve, et
-verse dans `data/` — **en signant**.
+les artefacts **des ingestions et des rapatriements** récents, contrôle ce
+qu'il y trouve, et verse dans `data/` — **en signant**.
+
+**Deux façons d'être absente, une seule se verse.** Une séance postérieure
+à l'archive est un retard, elle se verse. Une ligne antérieure, sur une
+date que l'archive connaît déjà, en a été retirée à dessein : la
+ressusciter est la panne contre laquelle `db.effacer_cours` a été écrit,
+et le versement la refuse. Entre les deux il y a le **trou** — une date
+entièrement absente, comme le 6 août 2026 dont l'ingestion fut annulée à
+mi-course. Celui-là se comble, et c'est à quoi sert `rapatriement.yml` :
+`brvm rapatrier --debut … --fin …` relit la période, dépose son artefact,
+et le versement suivant le reprend. `brvm veille` liste les trous.
 
 **Pourquoi une clé pour un robot.** Le versement était d'abord manuel,
 au motif qu'un runner ne sait pas signer et qu'un historique à moitié
