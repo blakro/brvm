@@ -454,8 +454,18 @@ de nature.
 **Ce que le robot vérifie avant d'écrire**, parce que personne ne
 regardera : en-têtes identiques, aucune ligne déjà présente, aucune
 séance antérieure à l'archive — ce garde-fou a déjà empêché de
-ressusciter 38 séances fantômes — tri préservé, et aucune clôture nulle
-ou négative. Un seul contrôle qui tombe annule le versement.
+ressusciter 38 séances fantômes — tri préservé, aucune clôture nulle ou
+négative, et **aucune séance republiée**. Un seul contrôle qui tombe
+annule le versement.
+
+La séance republiée mérite son nom : le 6 août 2026, rattrapé par
+rapatriement, est revenu avec les 47 cours et les 47 volumes du 7 — la
+même séance sous une autre date. Versée, elle a mis toutes les variations
+de l'onglet **Marché** à 0 %, et c'est un lecteur qui l'a vu. Le critère
+vient de `sikafinance.seances_repetees`, mesuré sur ce marché : « deux
+échanges égaux au franc près n'existent pas, c'est la même transaction
+republiée ». Les volumes nuls, eux, se répètent normalement et ne
+comptent pas.
 
 **Ce qu'il ne refuse pas : la limite de ±7,5 %.** La tentation est d'en
 faire un invariant dur ; mesurée sur l'archive, elle lève 356 alertes dont
