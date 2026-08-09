@@ -341,6 +341,44 @@ jobs:
               refus.append(f"{len(absurdes)} clôtures nulles ou négatives : "
                            + ", ".join(absurdes[:5]))
 
+          # LA SÉANCE REPUBLIÉE, ET J'EN AI VERSÉ UNE. Le 6 août 2026 a été
+          # « rattrapé » par rapatriement, et les 47 lignes obtenues étaient
+          # la séance du 7 au titre près : mêmes clôtures, mêmes volumes.
+          # L'app a affiché 0 % partout, et c'est l'utilisateur qui l'a vu.
+          #
+          # `sikafinance.seances_repetees` porte déjà le critère, mesuré sur
+          # ce marché : « deux échanges égaux au franc près n'existent pas,
+          # c'est la même transaction republiée ». Il valait pour une valeur
+          # à la fois ; à l'échelle d'une séance entière, un volume commun à
+          # toutes les valeurs deux jours de suite est impossible.
+          #
+          # Les volumes NULS se répètent normalement — une valeur qui
+          # n'échange pas deux jours de suite — et sont donc exclus du
+          # décompte, comme dans le contrôle d'origine.
+          derniers_volumes = {}
+          for ligne in archive:
+              champs = ligne.split(",")
+              if champs[6]:
+                  derniers_volumes[champs[1]] = (champs[6], champs[5])
+          par_seance = {}
+          for ligne in incr:
+              champs = ligne.split(",")
+              if champs[6] and float(champs[6]) > 0:
+                  par_seance.setdefault(champs[0], []).append(
+                      (champs[1], champs[6], champs[5]))
+          for date, valeurs in sorted(par_seance.items()):
+              # Sous cinq valeurs échangées, la coïncidence redevient
+              # possible et le contrôle ne prouverait rien.
+              if len(valeurs) < 5:
+                  continue
+              repetees = sum(1 for t, v, c in valeurs
+                             if derniers_volumes.get(t) == (v, c))
+              if repetees >= 0.9 * len(valeurs):
+                  refus.append(
+                      f"séance {date} : {repetees}/{len(valeurs)} valeurs au "
+                      "volume ET au cours identiques à leur séance "
+                      "précédente — séance republiée, pas une séance neuve")
+
           # LA LIMITE DE ±7,5 % EST DÉCRITE, JAMAIS OPPOSÉE, et ce n'est pas
           # de la mollesse — c'est ce que le projet a MESURÉ. Sur l'archive,
           # ce contrôle lève 356 alertes dont l'immense majorité est
