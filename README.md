@@ -458,6 +458,14 @@ ressusciter 38 séances fantômes — tri préservé, aucune clôture nulle ou
 négative, et **aucune séance republiée**. Un seul contrôle qui tombe
 annule le versement.
 
+**Une séance douteuse n'arrête pas les autres.** Ce qui met en cause
+l'incrément entier — en-têtes, lignes déjà présentes, lignes antérieures
+sur une séance connue — bloque tout : ce sont des signaux de
+dysfonctionnement. Une séance individuellement suspecte, elle, est
+**écartée seule** et le reste est versé. Le tout ou rien s'est montré
+ruineux : un artefact fautif vit trente jours, et il aurait bloqué chaque
+versement suivant — la bonne séance du jour refusée avec lui.
+
 La séance republiée mérite son nom : le 6 août 2026, rattrapé par
 rapatriement, est revenu avec les 47 cours et les 47 volumes du 7 — la
 même séance sous une autre date. Versée, elle a mis toutes les variations

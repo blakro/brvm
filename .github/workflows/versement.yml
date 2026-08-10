@@ -288,6 +288,7 @@ jobs:
               incr = [l.rstrip("\n") for l in f if l.strip()]
 
           refus = []
+          quarantaine: dict[str, list[str]] = {}
           if tete != entete:
               refus.append(f"en-têtes différents : {tete!r} vs {entete!r}")
 
@@ -331,6 +332,8 @@ jobs:
               valeur = float(cloture)
               if valeur <= 0:
                   absurdes.append(f"{date} {ticker} {valeur}")
+                  quarantaine.setdefault(date, []).append(
+                      f"clôture {valeur} sur {ticker}")
               veille = derniers.get(ticker)
               if veille:
                   ecart = valeur / veille - 1
@@ -338,8 +341,8 @@ jobs:
                       hors.append(f"{date} {ticker} {ecart:+.2%}")
               derniers[ticker] = valeur
           if absurdes:
-              refus.append(f"{len(absurdes)} clôtures nulles ou négatives : "
-                           + ", ".join(absurdes[:5]))
+              print(f"{len(absurdes)} clôtures nulles ou négatives : "
+                    + ", ".join(absurdes[:5]))
 
           # LA SÉANCE REPUBLIÉE, ET J'EN AI VERSÉ UNE. Le 6 août 2026 a été
           # « rattrapé » par rapatriement, et les 47 lignes obtenues étaient
@@ -374,10 +377,10 @@ jobs:
               repetees = sum(1 for t, v, c in valeurs
                              if derniers_volumes.get(t) == (v, c))
               if repetees >= 0.9 * len(valeurs):
-                  refus.append(
-                      f"séance {date} : {repetees}/{len(valeurs)} valeurs au "
-                      "volume ET au cours identiques à leur séance "
-                      "précédente — séance republiée, pas une séance neuve")
+                  quarantaine.setdefault(date, []).append(
+                      f"{repetees}/{len(valeurs)} valeurs au volume ET au "
+                      "cours identiques à leur séance précédente — séance "
+                      "republiée, pas une séance neuve")
 
           # LA LIMITE DE ±7,5 % EST DÉCRITE, JAMAIS OPPOSÉE, et ce n'est pas
           # de la mollesse — c'est ce que le projet a MESURÉ. Sur l'archive,
@@ -400,14 +403,41 @@ jobs:
                     f"({', '.join(hors[:5])}) — décrites, pas opposées. "
                     "« brvm qualite » les range par cause probable.")
 
+          # DEUX NIVEAUX DE REFUS, ET LE DEUXIÈME EST NÉ D'UN DÉFAUT RÉEL.
+          #
+          # `refus` porte ce qui met en cause l'incrément ENTIER : en-têtes
+          # différents, lignes déjà présentes, lignes antérieures sur des
+          # séances connues. Ce sont des signaux de dysfonctionnement, pas
+          # des données douteuses, et rien ne doit s'écrire.
+          #
+          # `quarantaine` porte les séances individuellement suspectes. Le
+          # tout ou rien s'y montrait ruineux : le 6 août republié dort dans
+          # un artefact pendant trente jours, et il aurait bloqué CHAQUE
+          # versement suivant — la bonne séance du jour refusée avec lui, le
+          # pipeline arrêté par une seule donnée fautive que personne n'a le
+          # temps de retirer. On écarte donc la séance, et on verse le reste.
           if refus:
-              print("VERSEMENT REFUSÉ :")
+              print("VERSEMENT REFUSÉ EN BLOC :")
               for motif in refus:
                   print(f"  - {motif}")
               print("\nL'incrément part dans le journal ; à verser à la main "
                     "après examen.")
               sortie(applique="false", motif="controle")
               raise SystemExit(0)
+
+          if quarantaine:
+              print("SÉANCES ÉCARTÉES, le reste est versé :")
+              for date, motifs in sorted(quarantaine.items()):
+                  for motif in motifs:
+                      print(f"  - {date} : {motif}")
+              avant = len(incr)
+              incr = [l for l in incr if cle(l)[0] not in quarantaine]
+              print(f"  {avant - len(incr)} lignes retirées de l'incrément.")
+              if not incr:
+                  print("\nRien ne subsiste : l'incrément part dans le "
+                        "journal, à examiner.")
+                  sortie(applique="false", motif="quarantaine")
+                  raise SystemExit(0)
 
           # LA GARANTIE N'EST PLUS « ÇA S'AJOUTE EN QUEUE » : combler un trou
           # insère au milieu. Ce qui doit rester vrai, et qui est vérifié
