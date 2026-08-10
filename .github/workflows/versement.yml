@@ -229,7 +229,16 @@ jobs:
                             f"ET sur des séances déjà présentes, donc "
                             f"retirées à dessein — {anciennes[0]}…"
                             f"{anciennes[-1]}")
-                  nouvelles.update(ajout)
+                  # LE PLUS RÉCENT GAGNE, ET `update` FAISAIT L'INVERSE.
+                  # Les exécutions sont parcourues de la plus récente à la
+                  # plus ancienne ; `update` écrase à chaque tour, si bien
+                  # que la PLUS ANCIENNE avait le dernier mot. Tant qu'un
+                  # artefact par séance suffisait, cela ne se voyait pas.
+                  # Cela se voit dès qu'on reprend une séance : un
+                  # rapatriement corrigé serait écrasé par celui qu'il
+                  # corrige, et la mauvaise donnée gagnerait en silence.
+                  for k, v in ajout.items():
+                      nouvelles.setdefault(k, v)
 
           if not nouvelles:
               print("\nRien à verser : l'archive contient déjà tout.")
