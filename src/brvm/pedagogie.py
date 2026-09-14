@@ -56,22 +56,23 @@ GLOSSAIRE: dict[str, str] = {
         "Le montant qui s'échange en moyenne chaque séance. Une valeur peu "
         "liquide s'achète difficilement, et se revend encore moins bien.",
     "choc_volume":
-        "Le montant échangé ces dernières semaines rapporté à celui de "
-        "l'année : non pas « cette valeur s'échange beaucoup », mais « elle "
-        "s'échange soudain plus que d'habitude ». Le seul des six traits "
-        "dont le pouvoir prédictif tienne sur onze ans d'archive.",
+        "Une valeur qui s'échange soudain beaucoup plus que d'habitude. Ce "
+        "n'est pas « elle s'échange beaucoup » mais « elle s'est réveillée » "
+        "— et c'est le seul indicateur de ce tableau de bord qui annonce "
+        "quelque chose sur onze ans de recul.",
     "retournement":
         "Ce que la valeur a fait le mois dernier — l'exact contraire du "
         "momentum, qui ignore justement le dernier mois. Une valeur qui "
         "vient de bondir tend à en rendre une part, d'où un signe négatif.",
     "ir":
-        "L'IC moyen divisé par ses écarts d'une période à l'autre. Deux "
-        "méthodes au même IC ne se valent pas si l'une le réalise à chaque "
-        "période et l'autre une fois sur deux.",
+        "La régularité d'une méthode : réussit-elle un peu à chaque fois, ou "
+        "beaucoup une fois sur deux ? Deux méthodes qui se valent en moyenne "
+        "ne se valent pas si l'une est régulière et l'autre pas.",
     "calibrage":
-        "La conversion d'un rang en probabilité, apprise sur les périodes "
-        "de test et non sur l'entraînement. C'est ce qui empêche d'annoncer "
-        "100 % pour la valeur en tête d'un classement incertain.",
+        "Traduire une place de classement en pourcentage de chances, en "
+        "comptant ce qui s'est réellement produit par le passé. Sans lui, la "
+        "première du classement afficherait 100 % de chances, ce qui serait "
+        "faux.",
     "score":
         "La note qui sert à ordonner les valeurs entre elles. Elle n'a pas "
         "d'unité et ne se compare pas d'un jour à l'autre : seul le rang "
@@ -121,6 +122,78 @@ GLOSSAIRE: dict[str, str] = {
     "sgi":
         "Société de Gestion et d'Intermédiation : le seul intermédiaire par "
         "lequel un particulier peut passer un ordre sur la BRVM.",
+    "arbitrage":
+        "Vendre une valeur pour en acheter une autre. Vous payez deux fois "
+        "des frais — une fois pour sortir, une fois pour entrer — donc il "
+        "faut que le remplacement rapporte plus que ces deux passages.",
+    "aller_retour":
+        "Le total des frais d'un échange : ceux de la vente plus ceux de "
+        "l'achat. C'est ce chiffre qu'un changement doit dépasser pour valoir "
+        "la peine, et non la moitié.",
+    "gain_attendu":
+        "Ce qu'un changement devrait rapporter en moyenne, si le classement "
+        "vaut ce qu'on a mesuré. C'est une espérance sur beaucoup de cas, pas "
+        "une promesse sur celui-ci.",
+    "prudence":
+        "Retenir l'hypothèse basse plutôt que l'hypothèse moyenne. Les frais "
+        "d'un échange sont certains ; son gain ne l'est pas. Compter large "
+        "sur le gain et juste sur les frais fait acheter à perte.",
+    "detachement":
+        "Le jour où une société verse son dividende. Le cours baisse "
+        "mécaniquement du montant versé : on n'a rien gagné ni perdu ce "
+        "jour-là, l'argent a seulement changé de poche.",
+    "seuil_frais":
+        "Le niveau de frais au-delà duquel une stratégie rapporte moins que "
+        "le fait d'acheter et de ne plus y toucher. En dessous elle vaut la "
+        "peine, au-dessus elle enrichit l'intermédiaire.",
+    "univers":
+        "Les valeurs qu'on accepte de classer : celles qui s'échangent assez "
+        "pour qu'on puisse en sortir, et dont l'historique est assez long "
+        "pour être mesuré. Les autres sont écartées avant tout calcul.",
+    "tampon":
+        "Garder une valeur un peu après qu'elle a quitté les premières "
+        "places, au lieu de la vendre aussitôt. Cela évite de payer des frais "
+        "pour des changements de rang qui n'étaient que du hasard.",
+    "purge":
+        "Retirer de l'apprentissage les dates trop proches de la période "
+        "d'examen. Sans cela le modèle connaît déjà une partie de la réponse, "
+        "et paraît excellent sans avoir rien appris.",
+    "significatif":
+        "Se dit d'un écart trop grand pour s'expliquer par la chance seule. "
+        "Un résultat non significatif n'est pas faux : il n'est simplement "
+        "pas distinguable du hasard avec ce qu'on a mesuré.",
+    "seance":
+        "Une journée de cotation. La BRVM en tient une par jour ouvré, hors "
+        "jours fériés : environ 250 par an. Tout ce que mesure ce tableau de "
+        "bord se compte en séances, jamais en jours du calendrier.",
+    "archive":
+        "L'historique des cours conservé par ce projet, jour après jour depuis "
+        "2015. C'est la seule matière première des calculs : rien ici ne "
+        "provient d'une prévision d'expert ou d'une source extérieure.",
+    "referentiel":
+        "La liste des sociétés cotées, avec leur nom et leur secteur. Elle "
+        "garde aussi la mémoire de celles qui ont disparu, sans quoi le passé "
+        "paraîtrait plus beau qu'il ne fut.",
+    "surperformer":
+        "Faire mieux que la moyenne des autres valeurs, et non simplement "
+        "monter. Une valeur qui baisse de 2 pour cent quand tout le marché "
+        "baisse de 10 a surperformé, même si le porteur a perdu de l'argent.",
+    "dispersion":
+        "L'écart habituel entre la meilleure et la moins bonne valeur d'une "
+        "même journée. Bien classer ne sert à rien si toutes les valeurs "
+        "rapportent la même chose : c'est cet écart qui rend le tri utile.",
+    "hors_echantillon":
+        "Jugé sur des dates que le calcul n'avait pas vues quand il a été "
+        "mis au point. C'est la seule façon honnête de le noter : sur les "
+        "dates qu'il connaît, n'importe quelle méthode paraît excellente.",
+    "disjointe":
+        "Se dit de deux périodes qui ne se chevauchent pas du tout. Compter "
+        "deux mesures qui partagent presque tout leur avenir comme deux "
+        "preuves séparées fait croire à dix fois plus de certitude qu'on n'en a.",
+    "regression":
+        "Une formule qui pèse plusieurs indicateurs pour en tirer un seul "
+        "nombre, les poids étant choisis par le calcul plutôt qu'à la main. "
+        "C'est la forme d'apprentissage la plus simple, et ici la meilleure.",
 }
 
 
@@ -128,10 +201,22 @@ GLOSSAIRE: dict[str, str] = {
 # quelques entrées dont le nom court serait ambigu tout seul.
 LIBELLES: dict[str, str] = {
     "volatilite": "volatilité",
+    "seance": "séance de cotation",
+    "hors_echantillon": "hors échantillon",
+    "disjointe": "périodes disjointes",
+    "regression": "régression",
+    "referentiel": "référentiel des sociétés",
+    "aller_retour": "aller-retour",
+    "gain_attendu": "gain attendu",
+    "prudence": "hypothèse prudente",
+    "detachement": "détachement du dividende",
+    "seuil_frais": "seuil de frais",
+    "tampon": "zone tampon",
+    "purge": "purge des dates",
     "liquidite": "liquidité",
     "choc_volume": "choc de volume",
     "retournement": "retournement à un mois",
-    "ir": "IR (IC rapporté à sa dispersion)",
+    "ir": "IR (régularité)",
     "calibrage": "calibrage des probabilités",
     "score": "score composite",
     "limite": "limite de ±7,5 %",

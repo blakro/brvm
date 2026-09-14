@@ -381,6 +381,35 @@ d'investissement. L'application ne connaît ni votre fiscalité, ni votre
 horizon, ni votre tolérance au risque, ni la part que ces titres
 représentent chez vous.
 
+### 8. Lisible par quelqu'un qui ne connaît rien
+
+Une contrainte, pas une finition : **chaque onglet et chaque terme de
+l'application doit se comprendre sans rien savoir de la bourse.** Un tableau
+de bord que personne ne peut lire ne protège personne — et celui-ci a
+justement pour but d'empêcher de confondre un classement avec un conseil.
+
+Trois règles, tenues par des tests :
+
+- **Chacun des cinq onglets porte son dépliant** (« Les mots de cet
+  onglet »), avec son propre vocabulaire et lui seul. Un glossaire relégué
+  dans une page à part n'est ouvert par personne.
+- **Aucune définition n'emploie le jargon qu'elle remplace.** La définition
+  est le bout de la chaîne : c'est là que le lecteur doit pouvoir s'arrêter.
+  Trois définitions violaient cette règle — celle de l'IR renvoyait à l'IC —
+  et rien ne le signalait.
+- **Aucune formule dans une définition.** Une formule est exacte et
+  illisible ; sa place est dans les docstrings des modules de calcul.
+
+Et une règle de rédaction : **les deux nombres qui décident viennent en
+premier, dans la même unité.** La section « que faire » affichait « écart de
+score requis : 3,06 », qui ne veut rien dire pour qui découvre l'app. Elle
+affiche maintenant *changer une ligne coûte 3,00 %* et *le meilleur
+changement rapporte −1,07 %* — la décision se lit à vue d'œil, et le
+vocabulaire vient après pour qui veut savoir d'où ça sort.
+
+Le glossaire compte 40 entrées. Chacune tient en une phrase, sans jargon et
+sans formule.
+
 ### Ce que ça change pour vous
 
 Sur un marché où toute stratégie qui tourne plus de quelques fois par an
@@ -420,13 +449,13 @@ src/brvm/
   dividende.py              détachements, et si le cours les reflète
   exogene.py                séries externes
   qualite.py                détection des anomalies d'archive
-  pedagogie.py              les textes explicatifs de l'app
+  pedagogie.py              le glossaire et les mises en mots
   ingestion/
     brvm_org.py               la cote du jour
     sikafinance.py            l'historique
     dividendes.py             les calendriers de dividendes
 
-tests/                    289 tests, tous hors ligne
+tests/                    292 tests, tous hors ligne
   donnees/                  captures réelles de pages web, servant de témoins
 
 .github/workflows/

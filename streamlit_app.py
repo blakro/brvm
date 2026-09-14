@@ -860,6 +860,16 @@ def _variations(table: pd.DataFrame) -> pd.DataFrame:
 # --- Marché ---------------------------------------------------------------
 if onglets[0].open:
     with onglets[0]:
+        # L'ONGLET D'ACCUEIL N'AVAIT AUCUNE INTRODUCTION. C'est le premier
+        # écran que voit quelqu'un qui découvre l'application, et il tombait
+        # directement sur un chiffre de capitalisation échangée sans savoir
+        # ce qu'il regarde ni sur quoi porte la page.
+        st.caption(
+            "L'état du marché à la dernière séance de cotation : qui monte, "
+            "qui baisse, et combien d'argent a changé de mains. **Rien ici "
+            "n'est une prévision** — c'est ce qui s'est passé, pas ce qui va "
+            "se passer."
+        )
         jour = _variations(cours_filtre)
         connues = jour["variation"].dropna()
 
@@ -1278,9 +1288,14 @@ if onglets[1].open:
 if onglets[2].open:
     with onglets[2]:
         st.caption(
-            "Momentum « 12-1 », filtré par liquidité et neutralisé par secteur. "
-            "**Les pondérations n'ont été calibrées sur rien** : une liste de "
-            "valeurs à examiner, pas un signal validé."
+            "Les valeurs ordonnées de la mieux notée à la moins bien notée. "
+            "La note récompense celles qui montent depuis un an, pénalise "
+            "celles qui bougent brutalement, et écarte celles qui "
+            "s'échangent trop peu pour qu'on puisse en ressortir. "
+            "**Les poids de cette note n'ont été calibrés sur rien** : c'est "
+            "une liste de valeurs à examiner, pas un ordre d'achat. "
+            "Techniquement : momentum « 12-1 », filtre de liquidité, "
+            "neutralisation sectorielle."
         )
         # Repliés : six curseurs en tête d'onglet, c'est un pupitre dont un
         # lecteur qui découvre le sujet ne peut pas connaître les bons réglages,
@@ -1548,11 +1563,11 @@ if onglets[2].open:
         st.divider()
         st.subheader("Que faire, concrètement")
         st.caption(
-            "Un classement ne dit pas s'il faut vendre. Un arbitrage ne se "
-            "fait que si son gain attendu dépasse ses frais — et sur cette "
-            "place les frais se comptent en **pourcents**, pas en points de "
-            "base. Saisissez ce que vous détenez et ce que votre SGI vous "
-            "facture."
+            "Savoir quelle valeur est première ne dit pas s'il faut vendre "
+            "celle qu'on a pour l'acheter. **Vendre puis racheter coûte des "
+            "frais deux fois**, et il faut que le changement rapporte plus "
+            "que ces deux passages. Dites ce que vous détenez et ce que "
+            "votre intermédiaire vous facture ; le calcul est fait pour vous."
         )
         saisie = st.columns([3, 1, 1])
         detenu = saisie[0].multiselect(
@@ -1592,35 +1607,46 @@ if onglets[2].open:
                 tuple(detenu), frais_cs, impact_cs,
                 int(DEFAUTS["backtest"]["positions"]), prudence)
 
+            # LES DEUX NOMBRES QUI DÉCIDENT, DANS LA MÊME UNITÉ, EN
+            # PREMIER. « Écart de score requis : 3,06 » ne veut rien dire
+            # pour qui découvre l'app — et c'était la tuile de gauche. Ce
+            # qu'il faut lire, c'est ce que ça coûte et ce que ça rapporte,
+            # en pourcents, côte à côte. Le vocabulaire vient après, en
+            # légende, pour qui veut savoir d'où ça sort.
+            gain_cs = avis.get("gain_meilleur", float("nan"))
             tuiles = st.columns(3)
-            _tuile(tuiles[0], "IC employé", f"{avis['ic']:+.4f}",
-                   sens=1 if avis["ic"] > 0 else -1,
-                   note="borne basse de l'intervalle à 95 %" if prudence
-                        else "estimation ponctuelle")
-            seuil_cs = avis["ecart_minimal"]
-            _tuile(tuiles[1], "Écart de score requis",
-                   "aucun ne suffit" if seuil_cs == float("inf")
-                   else f"{seuil_cs:.2f}",
-                   note=f"aller-retour à {2 * avis['cout']:.2%}")
-            _tuile(tuiles[2], "Arbitrages qui se paient",
-                   f"{avis['arbitrages']}",
+            _tuile(tuiles[0], "Changer une ligne coûte",
+                   f"{2 * avis['cout']:.2%}",
+                   note="vos frais, à la vente puis à l'achat")
+            _tuile(tuiles[1], "Le meilleur changement rapporte",
+                   "rien de mesurable" if gain_cs != gain_cs
+                   else f"{gain_cs:+.2%}",
+                   sens=1 if (gain_cs == gain_cs
+                              and gain_cs > 2 * avis["cout"]) else -1,
+                   note="en moyenne, si le classement vaut ce qu'on a mesuré")
+            _tuile(tuiles[2], "Verdict",
+                   "Ne rien faire" if avis["arbitrages"] == 0
+                   else f"{avis['arbitrages']} changement(s)",
                    sens=1 if avis["arbitrages"] else 0,
-                   note="sur votre portefeuille, à vos frais")
+                   note="ce que dit la comparaison ci-contre")
 
             if avis["arbitrages"] == 0:
                 st.success(
-                    "**Conseil : ne rien faire.** Ce n'est pas une absence de "
-                    "réponse. Le classement distingue bien des valeurs, mais "
-                    "l'écart qu'il mesure entre elles est plus petit que ce "
-                    "que coûte le fait d'y réagir. Sur cette place, "
-                    "l'inaction est la décision la plus souvent correcte."
+                    "**Ne rien faire.** Ce n'est pas une absence de réponse. "
+                    "Le classement distingue bien les valeurs entre elles, "
+                    "mais l'écart qu'il mesure est plus petit que ce que "
+                    "coûte le fait d'y réagir. Ici, changer une ligne coûte "
+                    "quelques **pourcents** — sur les grandes places ce "
+                    "serait quelques centièmes de pourcent — et l'immobilité "
+                    "est donc le plus souvent la bonne décision."
                 )
             else:
                 st.warning(
-                    f"**{avis['arbitrages']} arbitrage(s) couvrent leurs "
-                    "frais.** Le gain et les frais affichés sont ceux de la "
-                    "PAIRE : les deux jambes portent le même net, qui est "
-                    "celui de la décision."
+                    f"**{avis['arbitrages']} changement(s) rapportent plus "
+                    "qu'ils ne coûtent.** Chaque changement est une paire : "
+                    "on vend l'une, on achète l'autre. Les deux lignes du "
+                    "tableau affichent donc le même résultat, celui de "
+                    "l'opération entière — et non la moitié chacune."
                 )
 
             if not avis["lignes"].empty:
@@ -1651,7 +1677,9 @@ if onglets[2].open:
 
             st.error("**Ce que ceci n'est pas.** "
                      + " ; ".join(avis["avertissements"]) + ".")
-        _glossaire("score", "rang", "frais", "ic", "rotation")
+        _glossaire("arbitrage", "aller_retour", "gain_attendu", "prudence",
+                   "dispersion", "univers", "significatif", "score", "rang",
+                   "frais", "ic")
 
 
 # --- Prédiction -----------------------------------------------------------
@@ -1848,8 +1876,10 @@ if onglets[2].open:
                     "periode": st.column_config.TextColumn("Période de test"),
                     "lignes_entrainement": st.column_config.NumberColumn(
                         "Appris sur", format="localized",
-                        help="Observations d'entraînement, étiquettes "
-                             "recouvrantes purgées."),
+                        help="Observations servant à l'apprentissage. Les "
+                             "dates trop proches de la période d'examen sont "
+                             "retirées : sinon le modèle connaîtrait déjà une "
+                             "partie de la réponse."),
                     "lignes_test": st.column_config.NumberColumn(
                         "Testé sur", format="localized"),
                     "ic_combinaison": st.column_config.NumberColumn(
@@ -1981,8 +2011,9 @@ if onglets[2].open:
             signal_dividende(cours_filtre, dividendes, ARCHIVE, UNIVERS,
                              cibles)), language=None)
 
-        _glossaire("ic", "ir", "calibrage", "choc_volume", "retournement",
-                   "score", "rendement", "frais")
+        _glossaire("ic", "ir", "calibrage", "surperformer", "dispersion",
+                   "hors_echantillon", "disjointe", "regression", "purge",
+                   "significatif", "choc_volume", "retournement", "frais")
 
 
 # --- Backtest -------------------------------------------------------------
@@ -2314,13 +2345,23 @@ if onglets[3].open:
                 })
             _telecharger(barres, "seuil_frais.csv", "dl_seuil")
 
-        _glossaire("backtest", "reference", "perte_max", "rotation", "frais",
+        _glossaire("backtest", "reference", "seuil_frais", "tampon",
+                   "perte_max", "rotation", "frais",
                    "survivant")
 
 
 # --- Données --------------------------------------------------------------
 if onglets[4].open:
     with onglets[4]:
+        # CET ONGLET N'AVAIT NI INTRODUCTION NI DÉPLIANT, et il est celui qui
+        # emploie le plus de mots de métier — séance, archive, référentiel —
+        # sans qu'aucun soit défini nulle part.
+        st.caption(
+            "D'où viennent les chiffres de tout le reste de l'application, et "
+            "jusqu'où ils vont. Un tableau de bord qui ne montre pas sa "
+            "matière première demande qu'on lui fasse confiance ; celui-ci "
+            "préfère la montrer."
+        )
         etat = st.columns(3)
         _tuile(etat[0], "Séances en archive", f"{seances}", teinte=SERIE_1,
                note=f"{cours['date'].min()} → {cours['date'].max()}")
@@ -2380,3 +2421,6 @@ if onglets[4].open:
             "rien et ne conserve aucun état. Dividendes, fondamentaux et séries "
             "de commodités se chargent par « brvm importer-* »."
         )
+
+        _glossaire("seance", "archive", "referentiel", "dividende",
+                   "detachement", "survivant", "fixing")

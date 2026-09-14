@@ -221,7 +221,14 @@ def conseiller(
             # remplace rien : il n'a pas d'aller-retour à amortir, et son
             # nombre se compte à part.
             "constitution": 0,
-            "meilleur_arbitrage": float("nan"), "positions": positions,
+            "meilleur_arbitrage": float("nan"),
+            # LE MÊME ÉCART, MAIS EN POURCENTAGE, et c'est ce qui rend la
+            # section lisible. « Écart de score requis : 3,06 » ne veut rien
+            # dire pour qui n'a pas lu Grinold ; « le meilleur échange promet
+            # 3,08 % et coûte 3,00 % » se compare à vue d'œil, et c'est
+            # exactement la même arithmétique.
+            "gain_meilleur": float("nan"),
+            "positions": positions,
             "prudence": prudence, "avertissements": AVERTISSEMENTS}
     if classement is None or classement.empty or "ticker" not in classement:
         return vide
@@ -318,9 +325,13 @@ def conseiller(
         poser(ticker, "conserver", ic * disp * z[ticker], 0.0, motif)
 
     rendu = pd.DataFrame(lignes.values())
+    gain_meilleur = (ic * disp * meilleur
+                     if np.isfinite(meilleur) and np.isfinite(ic)
+                     and np.isfinite(disp) else float("nan"))
     return {**vide, "lignes": _finir(rendu, classement), "ic": ic,
             "dispersion": disp, "ecart_minimal": seuil,
-            "arbitrages": arbitrages, "meilleur_arbitrage": meilleur}
+            "arbitrages": arbitrages, "meilleur_arbitrage": meilleur,
+            "gain_meilleur": gain_meilleur}
 
 
 def _finir(rendu: pd.DataFrame, classement: pd.DataFrame) -> pd.DataFrame:
@@ -347,31 +358,40 @@ def expliquer(resultat: dict) -> str:
 
     ic, disp, cout = resultat["ic"], resultat["dispersion"], resultat["cout"]
     seuil = resultat["ecart_minimal"]
+    gain = resultat.get("gain_meilleur", float("nan"))
+
+    # LA COMPARAISON D'ABORD, EN POURCENTS, ET LE VOCABULAIRE APRÈS. Deux
+    # nombres dans la même unité suffisent à décider : ce qu'un changement
+    # rapporterait, ce qu'il coûterait. Le reste — l'écart de score, l'IC, la
+    # dispersion — explique d'où ils viennent, et se lit ensuite ou jamais.
     lignes = [
-        f"Frais retenus : {cout:.2%} par sens, soit {2 * cout:.2%} "
-        "l'aller-retour.",
-        f"IC employé : {ic:+.4f}"
-        + (" (borne basse de l'intervalle à 95 %, estimation prudente)"
-           if resultat["prudence"] else " (estimation ponctuelle)")
-        + f" ; dispersion transversale {disp:.1%}.",
+        "La question est celle de n'importe quel achat : est-ce que ça vaut "
+        "ce que ça coûte ?",
         "",
+        f"  changer une ligne pour une autre coûte      {2 * cout:>7.2%}",
     ]
+    if np.isfinite(gain):
+        lignes.append(
+            f"  le meilleur changement possible rapporte   {gain:>+7.2%}")
+    else:
+        lignes.append(
+            "  le meilleur changement possible rapporte   "
+            "rien de mesurable")
+    lignes.append("")
+    # DEUX SITUATIONS QU'IL NE FAUT PAS CONFONDRE, et le lecteur ne peut pas
+    # les distinguer des seuls pourcents : soit le classement a un avantage
+    # que les frais mangent, soit il n'a pas d'avantage du tout. La première
+    # se corrige en changeant d'intermédiaire, la seconde non.
     if not np.isfinite(seuil) or seuil == float("inf"):
         lignes += [
-            "AUCUN ARBITRAGE NE PEUT SE PAYER, quel que soit le classement.",
-            "L'IC prudent est nul ou négatif : la preuve ne permet pas "
-            "d'affirmer",
-            "que le classement ordonne mieux que le hasard, et un coût "
-            "certain ne",
-            "s'engage pas contre un gain qui n'est pas établi.",
-            "",
-        ]
-    else:
-        lignes += [
-            f"Écart de score minimal pour qu'un arbitrage se paie : "
-            f"{seuil:.2f}.",
-            f"Meilleur écart réellement disponible : "
-            f"{resultat['meilleur_arbitrage']:+.2f}.",
+            "ET CE N'EST PAS UNE QUESTION DE FRAIS. Les mesures de ce tableau "
+            "de bord ne",
+            "permettent pas d'affirmer que ce classement ordonne les valeurs "
+            "mieux que le",
+            "hasard. Même sans frais du tout, rien ne justifierait de vendre "
+            "une ligne",
+            "pour une autre. Un intermédiaire moins cher ne changerait rien "
+            "ici.",
             "",
         ]
 
@@ -383,15 +403,15 @@ def expliquer(resultat: dict) -> str:
                    f"{resultat['constitution']} lignes.", ""]
         if not np.isfinite(seuil) or seuil == float("inf"):
             lignes += [
-                "MAIS LE CLASSEMENT NE JUSTIFIE PAS DE SE CONCENTRER. L'IC "
-                "prudent étant nul",
-                "ou négatif, rien n'établit que ces lignes-là valent mieux "
-                "qu'un panier large",
-                "du même univers — et un panier large coûte les mêmes frais "
-                "en étant moins",
-                "exposé à une valeur qui déçoit. Ce qui suit est l'ordre du "
-                "classement, pas",
-                "un avantage démontré.",
+                "MAIS RIEN NE JUSTIFIE DE SE CONCENTRER SUR CELLES-LÀ. Les "
+                "mesures de ce",
+                "tableau de bord ne permettent pas d'affirmer que ces lignes "
+                "valent mieux",
+                "qu'un panier plus large du même marché — et un panier plus "
+                "large coûte les",
+                "mêmes frais en étant moins exposé à une seule valeur qui "
+                "déçoit. Ce qui",
+                "suit est l'ordre du classement, pas un avantage démontré.",
                 "",
             ]
     elif resultat["arbitrages"] == 0:
@@ -400,13 +420,13 @@ def expliquer(resultat: dict) -> str:
             "",
             "Ce n'est pas une absence de réponse. Le classement distingue "
             "bien des",
-            "valeurs, mais l'écart qu'il mesure entre elles est plus petit "
+            "valeurs entre elles, mais l'écart qu'il mesure est plus petit "
             "que ce que",
-            "coûte le fait d'y réagir. Sur cette place, où l'aller-retour se "
-            "compte en",
-            "pourcents et non en points de base, l'inaction est la décision "
-            "la plus",
-            "souvent correcte.",
+            "coûte le fait d'y réagir. Ici, changer une ligne coûte quelques "
+            "POURCENTS",
+            "— sur les grandes places, ce serait quelques centièmes de "
+            "pourcent — et",
+            "l'immobilité est donc la décision la plus souvent correcte.",
             "",
         ]
     else:
@@ -433,6 +453,22 @@ def expliquer(resultat: dict) -> str:
                    "l'univers classable : illiquides ou plus cotées. Leur "
                    "motif n'est pas un gain attendu, c'est le risque de ne "
                    "plus pouvoir en sortir."]
+    lignes += [
+        "",
+        "D'où viennent ces deux nombres : le coût est celui que vous avez "
+        f"saisi ({cout:.2%} par sens). Ce qu'un changement rapporte est "
+        f"estimé à partir de la qualité mesurée du classement (IC "
+        f"{ic:+.4f}"
+        + (", hypothèse prudente : la borne basse de sa marge d'erreur"
+           if resultat["prudence"] else ", estimation moyenne")
+        + f") et de l'écart habituel entre les valeurs de ce marché "
+        f"({disp:.1%} sur trois mois).",
+    ]
+    if np.isfinite(seuil) and seuil != float("inf"):
+        lignes.append(
+            f"Exprimé en places de classement, il faut un écart de "
+            f"{seuil:.2f} pour qu'un changement se paie ; le meilleur "
+            f"disponible vaut {resultat['meilleur_arbitrage']:+.2f}.")
     lignes += ["", "À retenir avant de passer un ordre :"]
     lignes += [f"  - {a}" for a in resultat["avertissements"]]
     return "\n".join(lignes)

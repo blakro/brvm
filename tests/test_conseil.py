@@ -114,7 +114,11 @@ def test_sans_preuve_aucun_arbitrage_ne_passe():
     assert set(resultat["lignes"]["action"]) == {"conserver"}
     rendu = conseil.expliquer(resultat)
     assert "NE RIEN FAIRE" in rendu
-    assert "AUCUN ARBITRAGE NE PEUT SE PAYER" in rendu
+    # ET LA RAISON, EN CLAIR. Sans avantage démontré, le lecteur doit savoir
+    # que ce n'est pas son courtier qui est en cause : changer d'intermédiaire
+    # ne rendrait pas le classement plus juste.
+    assert "N'EST PAS UNE QUESTION DE FRAIS" in rendu
+    assert "Même sans frais du tout" in rendu
 
 
 def test_des_frais_assez_hauts_interdisent_tout_arbitrage():
@@ -241,7 +245,7 @@ def test_constituer_n_est_pas_arbitrer():
     assert "NE RIEN FAIRE" not in rendu, "message d'arbitrage sur une création"
     # Et quand la preuve manque, la concentration n'est pas recommandée non
     # plus : le classement est présenté comme un ordre, pas un avantage.
-    assert "NE JUSTIFIE PAS DE SE CONCENTRER" in rendu
+    assert "NE JUSTIFIE DE SE CONCENTRER" in rendu
 
 
 def test_une_ligne_sortie_de_l_univers_se_vend_sans_arbitrage():
@@ -293,9 +297,17 @@ def test_le_rendu_ne_montre_jamais_une_action_sans_son_seuil():
         _classement(), detenu=["T09", "T10"], mesure=_mesure(0.10),
         dispersion_=0.216, reglages=_reglages(frais=0.2), prudence=False)
     rendu = conseil.expliquer(resultat)
-    assert "Écart de score minimal" in rendu
-    assert "Meilleur écart réellement disponible" in rendu
-    assert "IC employé" in rendu and "Frais retenus" in rendu
+    # LES DEUX NOMBRES QUI DÉCIDENT, DANS LA MÊME UNITÉ, AVANT TOUT LE RESTE.
+    # Une version précédente menait par « Écart de score minimal : 3,06 », qui
+    # ne veut rien dire pour qui découvre l'application. Ce qui doit se lire
+    # en premier est ce que ça coûte et ce que ça rapporte, en pourcents.
+    assert "coûte" in rendu and "rapporte" in rendu
+    tete = rendu.split("CONSEIL")[0]
+    assert "%" in tete, "le rendu ne commence pas par des pourcentages"
+    # Le vocabulaire vient après, pour qui veut savoir d'où ça sort — mais il
+    # vient : une action sans ce qui la justifie se cite toute seule.
+    assert "D'où viennent ces deux nombres" in rendu
+    assert "places de classement" in rendu
     # Et les avertissements, qui ne sont pas optionnels.
     assert "pas un conseil d'investissement" in rendu
 

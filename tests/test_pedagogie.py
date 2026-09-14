@@ -55,6 +55,43 @@ def test_l_app_ne_demande_que_des_termes_definis():
     assert not inconnus, f"termes absents du glossaire : {sorted(inconnus)}"
 
 
+def test_chaque_onglet_offre_son_depliant():
+    """Un onglet sans glossaire est un onglet qu'un novice ne peut pas lire.
+
+    L'exigence est simple et structurelle : les cinq onglets emploient tous du
+    vocabulaire de métier, donc les cinq doivent offrir de quoi le traduire.
+    « Données » n'en avait aucun — et c'est celui qui parle le plus de
+    séances, d'archive et de référentiel, trois mots que rien ne définissait.
+
+    Le test lit la source de l'application plutôt que son rendu : un onglet
+    fermé n'est pas exécuté, donc aucun test de rendu ne peut couvrir les
+    cinq d'un coup.
+    """
+    import re
+
+    source = (RACINE / "streamlit_app.py").read_text(encoding="utf-8")
+    lignes = source.splitlines()
+    bornes = [(i, int(re.search(r"\[(\d)\]", l).group(1)))
+              for i, l in enumerate(lignes)
+              if re.match(r"\s*with onglets\[\d\]:", l)]
+    assert bornes, "aucun bloc « with onglets[i] » trouvé : le test ne teste rien"
+
+    sans = set()
+    couverts = set()
+    for rang, (debut, onglet) in enumerate(bornes):
+        fin = bornes[rang + 1][0] if rang + 1 < len(bornes) else len(lignes)
+        corps = "\n".join(lignes[debut:fin])
+        if "_glossaire(" in corps:
+            couverts.add(onglet)
+        else:
+            sans.add(onglet)
+    # Un onglet peut être servi par plusieurs blocs — « Classement » en a
+    # trois : il suffit qu'un seul porte le dépliant.
+    manquants = sorted(sans - couverts)
+    assert not manquants, f"onglets sans glossaire : {manquants}"
+    assert couverts == {0, 1, 2, 3, 4}, sorted(couverts)
+
+
 def test_le_glossaire_refuse_un_terme_inconnu():
     """Ignorer l'entrée manquante laisserait le lecteur devant le mot qu'il
     ne comprenait justement pas."""
@@ -64,6 +101,68 @@ def test_le_glossaire_refuse_un_terme_inconnu():
         assert "cours_de_bourse_magique" in str(erreur)
     else:
         raise AssertionError("un terme inconnu doit lever, pas être sauté")
+
+
+# Les mots qu'une définition ne doit pas employer. Ce ne sont pas des mots
+# interdits dans l'application — ils y sont partout, et c'est leur place. Mais
+# une DÉFINITION qui les emploie renvoie le lecteur à un deuxième glossaire,
+# et un lecteur qu'on renvoie deux fois abandonne.
+#
+# La liste est volontairement courte et concrète : elle contient ce qui a
+# réellement été écrit dans une définition puis retiré, pas tout le
+# vocabulaire imaginable.
+JARGON = (
+    "IC", "IR", "Spearman", "quantile", "z-score", "écart-type",
+    "corrélation", "transversal", "surajust", "hors échantillon",
+    "entraînement", "glissant", "logistique", "régression", "composite",
+    "intervalle de confiance", "erreur-type", "p-valeur", "Benjamini",
+    "Grinold", "Ornstein", "point-in-time",
+)
+
+
+def test_aucune_definition_n_emploie_le_jargon_qu_elle_doit_remplacer():
+    """LA RÈGLE QUE L'EN-TÊTE DU MODULE ÉNONÇAIT SANS QUE RIEN NE LA VÉRIFIE.
+
+    « Une définition qui appelle un deuxième glossaire n'en est pas une »,
+    dit le module depuis le début. Trois définitions ajoutées récemment la
+    violaient — celle de l'IR renvoyait à l'IC, celle du calibrage parlait
+    d'entraînement — et rien ne l'a signalé.
+
+    Une définition est le bout de la chaîne : c'est là que le lecteur doit
+    pouvoir s'arrêter.
+    """
+    import re
+
+    fautes = []
+    for cle, texte in pedagogie.GLOSSAIRE.items():
+        for mot in JARGON:
+            # La clé peut apparaître dans sa propre définition : « les frais
+            # de transaction » définissant `frais` est correct.
+            if mot.lower() in cle.lower():
+                continue
+            # LIMITES DE MOTS, ET CASSE EXACTE POUR LES SIGLES. Une première
+            # version cherchait la sous-chaîne sans casse : « IC » se
+            # trouvait dans « difficile », « IR » dans « dire » et dans
+            # « aller-retour », et le test accusait dix-neuf définitions
+            # irréprochables. Un test qui crie partout ne se lit plus.
+            motif = rf"\b{re.escape(mot)}\b"
+            drapeaux = 0 if mot.isupper() else re.IGNORECASE
+            if re.search(motif, texte, drapeaux):
+                fautes.append(f"{cle} emploie « {mot} »")
+    assert not fautes, "définitions qui renvoient à un autre jargon :\n  " \
+        + "\n  ".join(fautes)
+
+
+def test_chaque_definition_se_lit_sans_formule():
+    """Pas de symbole mathématique dans une définition.
+
+    Une formule est exacte et illisible ; elle a sa place dans les
+    docstrings des modules de calcul, jamais dans le dépliant que lit
+    quelqu'un qui découvre le mot.
+    """
+    for cle, texte in pedagogie.GLOSSAIRE.items():
+        for symbole in ("×", "÷", "√", "²", "Σ", "±", "≈", "=", "/ ("):
+            assert symbole not in texte, f"{cle} contient « {symbole} »"
 
 
 def test_chaque_definition_tient_en_une_phrase_lisible():
