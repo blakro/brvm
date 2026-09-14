@@ -61,13 +61,50 @@ SEUIL_FDR = 0.10
 
 
 def _prix(cours: pd.DataFrame) -> dict[str, pd.DataFrame]:
-    """Les matrices brutes dont tous les prédicteurs dérivent."""
-    cloture = features.serie(cours, "cloture")
-    matrices = {"cloture": cloture}
+    """Les matrices dont tous les prédicteurs dérivent, cours reportés.
+
+    LE REPORT A CHANGÉ LA RÉPONSE DE CE MODULE, ET C'EST POURQUOI IL EST
+    ICI. Le pivot brut met un trou aux séances sans échange, et
+    `rolling(100)` exige cent valeurs consécutives : une valeur qui cote
+    une séance sur deux n'avait donc jamais de tendance, jamais de rang,
+    jamais de voix dans le balayage. La grille se prononçait sur la moitié
+    la plus régulièrement échangée du marché en croyant se prononcer sur
+    le marché.
+
+    Corrigée, la grille ne désigne plus le même vainqueur. Sur l'univers
+    tronqué, le retournement à un mois franchissait seul la correction de
+    Benjamini-Hochberg (t +3,6) et le choc de volume échouait de peu
+    (t +2,7). Sur l'univers complet, c'est l'inverse : le choc de volume
+    passe (t +3,8) et le retournement n'y arrive plus (t +2,5).
+
+    Une correction de données qui retourne la conclusion d'un balayage de
+    162 cases n'est pas un détail d'implémentation. Voir l'en-tête de
+    `features.py` pour le mécanisme, et `cours_reportes` pour les bornes
+    qui empêchent le report de mentir.
+    """
+    brut = features.serie(cours, "cloture")
+    limite = int(charger().get("analyse", {}).get(
+        "report_max_seances",
+        features.DEFAUTS_FENETRES["report_max_seances"]))
+    matrices = {"cloture": features.cours_reportes(brut, limite),
+                # Les séances RÉELLEMENT échangées : la volatilité et
+                # l'amplitude doivent les distinguer des séances reportées,
+                # dont le rendement nul n'est pas un calme observé.
+                "cotee": brut.notna()}
     for colonne in ("haut", "bas", "volume_fcfa"):
         matrices[colonne] = features.serie(cours, colonne).reindex(
-            index=cloture.index, columns=cloture.columns)
+            index=brut.index, columns=brut.columns)
     return matrices
+
+
+def _min(fenetre: int, part: float = 0.6) -> int:
+    """Observations exigées dans une fenêtre — voir `features._minimum`.
+
+    Compter des observations et non des séances consécutives est l'autre
+    moitié de la correction : sans elle, le report ne servirait à rien
+    puisque les fenêtres continueraient d'exiger une suite ininterrompue.
+    """
+    return features._minimum(fenetre, part)
 
 
 # --- Les prédicteurs ------------------------------------------------------
@@ -84,12 +121,18 @@ def _momentum(m, fenetre, saut):
 
 def _tendance(m, courte=20, longue=100):
     p = m["cloture"]
-    c, l = p.rolling(courte).mean(), p.rolling(longue).mean()
+    c = p.rolling(courte, min_periods=_min(courte)).mean()
+    l = p.rolling(longue, min_periods=_min(longue)).mean()
     return (c / l - 1).where(l > 0)
 
 
 def _volatilite(m, fenetre=60):
-    return np.log(m["cloture"]).diff().rolling(fenetre).std() * np.sqrt(250)
+    # `.where(cotee)` écarte les rendements nuls fabriqués par le report :
+    # sans cela, les valeurs les moins traitées passeraient pour les plus
+    # calmes, soit exactement l'inverse de la vérité.
+    rendements = np.log(m["cloture"]).diff().where(m["cotee"])
+    return rendements.rolling(
+        fenetre, min_periods=_min(fenetre, 0.3)).std() * np.sqrt(250)
 
 
 def _liquidite(m, fenetre=60):
@@ -104,13 +147,38 @@ def _amplitude(m, fenetre=60):
     même cours chaque séance après y avoir beaucoup circulé.
     """
     etendue = (m["haut"] - m["bas"]) / m["cloture"].where(m["cloture"] > 0)
-    return etendue.rolling(fenetre).mean()
+    return etendue.rolling(fenetre, min_periods=_min(fenetre, 0.3)).mean()
 
 
 def _ecart_moyenne(m, fenetre=250):
     """Écart au cours moyen de l'année : le retour à la moyenne, en coupe."""
-    moyenne = m["cloture"].rolling(fenetre).mean()
+    moyenne = m["cloture"].rolling(fenetre, min_periods=_min(fenetre)).mean()
     return (m["cloture"] / moyenne - 1).where(moyenne > 0)
+
+
+def _choc_volume(m, court=20, long=250):
+    """Volume médian récent rapporté au volume médian de fond.
+
+    LE NEUVIÈME PRÉDICTEUR, ET IL COMBLE UN ANGLE MORT DE CE BALAYAGE. La
+    grille mesurait la liquidité — un NIVEAU, « cette valeur s'échange
+    beaucoup » — et jamais sa VARIATION, « cette valeur s'échange soudain
+    plus que d'habitude ». Les deux n'ont aucune raison de se comporter
+    pareil, et de fait le niveau ne prédit rien tandis que la variation
+    est la seule case de la grille à franchir la correction.
+
+    Il entre ici plutôt que de rester dans `prediction` : un prédicteur
+    qu'on introduit sans le soumettre au même test multiple que les autres
+    est exactement la meilleure case d'une loterie qu'on aurait choisi de
+    ne pas compter. Son ajout durcit d'ailleurs le seuil pour tous, en
+    portant la grille de 144 cases à 162.
+    """
+    volumes = m["volume_fcfa"].fillna(0)
+    recent = volumes.rolling(court, min_periods=1).median()
+    fond = volumes.rolling(long, min_periods=1).median()
+    # Un FCFA au dénominateur : une valeur qui n'a rien échangé de l'année
+    # donnerait sinon une division par zéro. Le rang dans la séance efface
+    # l'échelle ensuite.
+    return recent / (fond + 1.0)
 
 
 PREDICTEURS = {
@@ -120,6 +188,7 @@ PREDICTEURS = {
     "tendance": _tendance,
     "volatilité": _volatilite,
     "liquidité": _liquidite,
+    "choc de volume": _choc_volume,
     "amplitude": _amplitude,
     "écart à la moyenne": _ecart_moyenne,
 }

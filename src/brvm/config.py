@@ -89,9 +89,28 @@ DEFAUTS: dict[str, dict] = {
         # inexécutable. Le signal exploitable est à un à six mois.
         "horizon": 60,
         # Périodes de test successives de la validation glissante.
-        "decoupes": 4,
+        #
+        # DIX ET NON QUATRE, ET C'ÉTAIT UN DÉFAUT DE MESURE. Avec quatre
+        # découpes, l'IC d'une période à l'autre allait de +0,29 à -0,28 sur
+        # l'archive : on concluait sur quatre tirages d'une variable dont
+        # l'écart-type dépasse la moyenne d'un ordre de grandeur, et la
+        # conclusion changeait à chaque séance versée. Dix découpes ne
+        # rendent pas la mesure précise — rien ne peut — mais elles rendent
+        # sa DISPERSION visible, et c'est elle qu'il faut lire.
+        "decoupes": 10,
         # En deçà, on ne valide ni ne prédit.
         "lignes_minimum": 400,
+        # Exigence de preuve du rétrécissement des poids par trait : le poids
+        # d'un trait vaut son IC × t²/(t² + exigence). À 4, un trait au seuil
+        # usuel de signification (t = 2) garde la moitié de son poids, et un
+        # trait sans preuve n'en garde rien. Voir apprentissage.poids_fiabilite.
+        "exigence_preuve": 4.0,
+        # Membres du sac de régressions. Il ne sert PAS à la précision —
+        # mesuré, il ne la change pas d'un millième — mais à chiffrer
+        # l'incertitude de chaque probabilité par la dispersion entre
+        # membres. Huit suffisent à un écart-type lisible ; au-delà on paie
+        # du temps de calcul pour une décimale.
+        "membres_sac": 8,
     },
     "exogenes": {
         # Variation mesurée sur ~3 mois, décalée de ~2 mois.

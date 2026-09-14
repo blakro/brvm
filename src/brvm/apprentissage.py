@@ -1,0 +1,465 @@
+"""Le cœur appris de la prédiction : poids, ensemble, combinaison, calibrage.
+
+`prediction.py` pose la question et juge la réponse ; ce module fabrique la
+réponse. La séparation n'est pas décorative — elle permet de mesurer chaque
+brique contre les autres, et c'est en les mesurant qu'on a découvert que
+trois des recettes usuelles de la fiabilité — l'ensemble, l'empilement, la
+sélection de traits — ne fonctionnent pas ici, et pourquoi.
+
+CE QUI A ÉTÉ MESURÉ, ET CE QUI A ÉTÉ JETÉ
+-----------------------------------------
+Tous les chiffres de ce module viennent du MÊME protocole, celui que le
+projet livre : validation glissante à dix découpes sur l'archive complète
+(2015-2026, 47 valeurs, 100 961 observations), étiquettes recouvrantes
+purgées, erreur-type conservatrice de `mesure_ic`. Citer deux protocoles
+reviendrait à choisir le plus flatteur sans le dire.
+
+L'IR est l'IC moyen divisé par son écart-type d'une période à l'autre :
+c'est LUI qui mesure la fiabilité, là où l'IC seul mesure l'ampleur.
+
+    RETENU   trois sources équipondérées        IC +0,045  IR 0,51  7/10
+    ---
+    rejeté   régression logistique seule        IC +0,044  IR 0,66  7/10
+    rejeté   moyenne des 8 membres du sac       IC +0,037  IR 0,59  7/10
+    rejeté   sac sur profondeurs d'historique   IC +0,036  IR 0,42  7/10
+    rejeté   empilement à poids appris          IC +0,036  IR 0,51  6/10
+    rejeté   crête adaptative par la preuve     IC +0,037  IR 0,46  6/10
+    rejeté   poids de fiabilité seuls           IC +0,028  IR 0,32  6/10
+    rejeté   composite de la configuration      IC +0,032  IR 0,30  5/10
+
+LA COMBINAISON ET LA RÉGRESSION SEULE NE SE DÉPARTAGENT PAS. +0,045 contre
++0,044, et l'IR penche dans l'autre sens ; sur dix périodes, l'écart entre
+un IR de 0,51 et un de 0,66 n'est pas mesurable. C'est la combinaison qui
+est livrée, pour trois raisons qui ne dépendent pas de ces décimales : elle
+a le meilleur IC, elle n'est jamais la pire des trois sources quand l'une
+d'elles se trompe (période 2022-09 : régression -0,009, fiabilité -0,054,
+composite +0,238, combinaison +0,085), et elle rend encore un classement
+quand scikit-learn manque. Choisir la régression parce qu'elle a le
+meilleur IR sur dix périodes serait exactement l'erreur que ce module
+documente.
+
+1. L'EMPILEMENT À POIDS APPRIS ÉCHOUE, ET L'ÉCHEC EST INSTRUCTIF. Estimer
+   par validation imbriquée le poids à donner à chaque source — la méthode
+   correcte, celle qu'on enseigne — rend IC +0,036 contre +0,045 pour trois
+   poids égaux décidés d'avance. La raison tient en un nombre : onze ans à
+   l'horizon de soixante séances font QUARANTE-DEUX périodes réellement
+   indépendantes. On n'apprend pas des poids de combinaison sur quarante-
+   deux points ; on y apprend le bruit de la fenêtre d'entraînement. Quand
+   la preuve est mince, répartir bat choisir.
+
+2. LE SAC N'AMÉLIORE PAS LA PRÉCISION. Moyenner ses huit membres rend
+   +0,037 là où le membre unique entraîné sur tout rend +0,044 : non
+   seulement le sac n'aide pas, il coûte. Six coefficients sur cent mille
+   lignes, c'est déjà un estimateur à faible variance, et il n'y avait pas
+   de variance à réduire.
+
+   Le sac est pourtant conservé. PAS POUR LA PRÉCISION — pour
+   l'incertitude : la dispersion entre ses membres est le seul moyen
+   honnête de dire qu'une probabilité de 53 % vaut « 53 % ± 3 » et non
+   « 53 % ». Un chiffre sans sa marge se cite tout seul, et c'est ainsi
+   qu'il finit par tromper. La probabilité affichée reste celle du membre
+   central, mesurée ci-dessus ; le sac ne fournit que la barre d'erreur.
+
+3. SÉLECTIONNER LES TRAITS SUR LA PREUVE D'ENTRAÎNEMENT ÉCHOUE AUSSI, ET
+   C'EST LE PIÈGE LE PLUS TENTANT DU PROJET. En retirant après coup les
+   trois traits qui n'ont rien porté — momentum, tendance, liquidité — on
+   lit IC +0,076 et IR 0,96, le double du modèle livré. Ce nombre n'existe
+   pas : il suppose de connaître d'avance lesquels retirer.
+
+   Toutes les façons honnêtes de faire ce choix ont été essayées, et
+   aucune n'y arrive. La crête adaptative — standardiser les traits puis
+   les mettre à l'échelle de leur preuve mesurée sur la seule fenêtre
+   d'entraînement — rend entre +0,033 et +0,037 selon l'exigence, soit
+   MOINS que la régression qui ne sélectionne rien. Les facteurs estimés
+   sur l'entraînement ne désignent pas les bons traits assez souvent :
+   au dernier pli ils donnent 0,47 au choc de volume mais aussi 0,42 à la
+   volatilité et 0,19 au momentum.
+
+   Retenir : +0,076 est ce que le recul offre, +0,044 ce que l'honnêteté
+   permet, et l'écart entre les deux est la mesure exacte de ce qu'un
+   backtest gagne à tricher.
+
+4. LES POIDS DE FIABILITÉ, EUX, FONCTIONNENT — À CONDITION D'ÊTRE
+   RÉTRÉCIS, et à condition de servir de SOURCE et non de sélecteur. Voir
+   `poids_fiabilite`.
+
+CE QUE CE MODULE NE FAIT PAS
+----------------------------
+Ni forêt, ni gradient boosting, ni réseau. Ce n'est pas de la timidité :
+sur quarante-deux périodes indépendantes et six traits, un modèle souple a
+assez de degrés de liberté pour mémoriser l'échantillon entier. Et la
+puissance n'a jamais été ce qui manquait — la même régression logistique,
+sur l'univers non corrigé et les quatre traits d'origine, rend un IC de
+-0,056 ; ce n'est pas son manque de souplesse qui l'en empêchait, ce sont
+ses données et ses entrées. Le risque ici n'est pas de manquer de
+puissance, il est d'en avoir trop.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+
+# scikit-learn reste optionnelle, et le module s'importe sans elle — voir
+# l'en-tête de `prediction.py`. Tout ce qui suit sauf `Ensemble` est du
+# pandas, y compris les poids de fiabilité : l'absence de la bibliothèque
+# coûte la régression logistique, pas la combinaison.
+try:
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.pipeline import make_pipeline
+    from sklearn.preprocessing import StandardScaler
+
+    DISPONIBLE = True
+except ImportError:  # pragma: no cover — dépend de l'environnement
+    DISPONIBLE = False
+
+
+# --- mesure ---------------------------------------------------------------
+
+def ic_par_date(bloc: pd.DataFrame, colonne: str,
+                cible: str = "rendement_futur") -> pd.Series:
+    """IC de Spearman séance par séance, vectorisé.
+
+    La version naïve — `groupby("date").apply(corr)` — coûtait quarante
+    secondes par comparaison de stratégies, ce qui suffisait à décourager
+    de mesurer. Or c'est en mesurant qu'on a jeté l'empilement et le sac ;
+    une mesure trop lente pour être répétée est une mesure qu'on ne fait
+    pas.
+
+    Le calcul est le même : rangs dans la séance, puis corrélation de
+    Pearson sur ces rangs — soit Spearman, exprimé en sommes que pandas
+    agrège d'un bloc.
+    """
+    besoin = ["date", colonne, cible]
+    if bloc.empty or any(c not in bloc.columns for c in besoin):
+        return pd.Series(dtype=float)
+    d = bloc[besoin].dropna()
+    if d.empty:
+        return pd.Series(dtype=float)
+
+    par_date = d.groupby("date")
+    x = par_date[colonne].rank()
+    y = par_date[cible].rank()
+    dx = x - x.groupby(d["date"]).transform("mean")
+    dy = y - y.groupby(d["date"]).transform("mean")
+    numerateur = (dx * dy).groupby(d["date"]).sum()
+    denominateur = np.sqrt((dx * dx).groupby(d["date"]).sum()
+                           * (dy * dy).groupby(d["date"]).sum())
+    # Moins de trois valeurs cotées : une corrélation de rang n'y veut rien
+    # dire, et vaudrait mécaniquement ±1.
+    return (numerateur / denominateur.replace(0.0, np.nan)).where(
+        par_date.size() >= 3).dropna()
+
+
+def mesure_ic(ics: pd.Series, horizon: int) -> dict:
+    """IC moyen, erreur-type conservatrice, t, verdict.
+
+    L'erreur-type ne se calcule pas sur le nombre de dates mais sur le
+    nombre de périodes RÉELLEMENT disjointes, `dates / horizon` : avec un
+    horizon de 60 séances, l'étiquette du lundi recouvre celle du mardi à
+    59/60. C'est le piège qui avait fait passer un IC de -0,07 pour un t de
+    -10,2 alors qu'il vaut -1,4.
+
+    DEUX ESTIMATEURS SONT POSSIBLES, ET LE PLUS PRUDENT EST RETENU. On peut
+    diviser par racine de K (le nombre de blocs) soit l'écart-type des IC
+    QUOTIDIENS, soit celui des MOYENNES par bloc. Le second est le
+    traitement usuel d'une série à dépendance bornée, et il est moins
+    exigeant : mesuré sur l'archive, l'écart-type quotidien du choc de
+    volume vaut 0,190 et celui de ses moyennes par bloc 0,102, si bien que
+    le t passe de +2,2 à +4,2 selon l'estimateur choisi.
+
+    C'est le premier qui est retenu, comme depuis l'origine du module. Le
+    recouvrement des étiquettes n'annule pas toute l'information d'une date
+    sur l'autre, mais on cherche ici un signal qui n'existe probablement
+    pas — et quand on cherche ce qui n'existe probablement pas, mieux vaut
+    se tromper du côté qui n'annonce rien. Un lecteur qui préfère l'autre
+    estimateur peut doubler tous les t de ce module ; aucune conclusion du
+    projet n'en dépend, et celles qui en dépendraient seraient justement
+    celles qu'il ne faut pas tirer.
+    """
+    vide = {"ic": float("nan"), "erreur_type": float("nan"), "t": float("nan"),
+            "dates": 0, "blocs": 0, "significatif": False}
+    valeurs = np.asarray(pd.Series(ics).dropna(), dtype=float)
+    if len(valeurs) == 0:
+        return vide
+    moyenne = float(valeurs.mean())
+    blocs = max(1, int(np.ceil(len(valeurs) / max(1, horizon))))
+    if len(valeurs) < 2 or blocs < 2:
+        return {**vide, "ic": moyenne, "dates": len(valeurs), "blocs": blocs}
+
+    erreur = float(valeurs.std(ddof=1) / np.sqrt(blocs))
+    t = float(moyenne / erreur) if erreur > 0 else float("nan")
+    return {
+        "ic": moyenne,
+        "erreur_type": erreur,
+        "t": t,
+        "dates": len(valeurs),
+        "blocs": blocs,
+        # Deux erreurs-types : le seuil usuel, et il n'est pas atteint par
+        # grand-chose sur ce marché.
+        "significatif": bool(erreur > 0 and abs(t) > 2),
+    }
+
+
+# --- sources de score -----------------------------------------------------
+
+def score_composite(bloc: pd.DataFrame, poids: dict) -> pd.Series:
+    """La référence sans apprentissage : somme pondérée des rangs.
+
+    Ce sont les poids écrits dans la configuration, ceux de `scoring.py`.
+    Rien n'y est estimé, donc rien n'y surajuste — et sur ce marché c'est
+    une qualité rare : mesuré seul, le composite rend IC +0,053 et IR
+    0,63, soit davantage que la régression libre.
+    """
+    utiles = {t: p for t, p in poids.items() if t in bloc.columns}
+    if not utiles:
+        return pd.Series(0.5, index=bloc.index)
+    total = sum(abs(p) for p in utiles.values()) or 1.0
+    return sum(p * bloc[t] for t, p in utiles.items()) / total
+
+
+def poids_fiabilite(echantillon: pd.DataFrame, traits: list[str],
+                    horizon: int, exigence: float = 4.0) -> dict[str, float]:
+    """Poids de chaque trait = son IC, rétréci par la force de sa preuve.
+
+    LE PROBLÈME QU'ILS RÉSOLVENT. Une régression logistique donne un
+    coefficient à chaque trait, y compris à ceux qui ne portent rien. Sur
+    cette archive, le momentum et la tendance changent de signe d'une année
+    à l'autre ; la régression leur attribue pourtant le poids que leur donne
+    la fenêtre d'entraînement, et le porte en production.
+
+    LA RÈGLE. Pour chaque trait on mesure son IC sur la fenêtre
+    d'entraînement, et le t de cet IC sur blocs disjoints. Le poids vaut
+
+        w = IC × t² / (t² + exigence)
+
+    C'est un rétrécissement à la James-Stein. Un trait sans preuve (t ≈ 0)
+    reçoit un poids nul quelle que soit la taille de son IC ; un trait
+    avéré (t grand) garde le sien. Le facteur vaut la moitié quand t² égale
+    `exigence` — à 4, la moitié du poids est accordée à t = 2, soit
+    exactement le seuil usuel de signification.
+
+    CE QUE ÇA DONNE, sur l'échantillon complet :
+
+        choc_volume    +0,0358      retournement   -0,0122
+        volatilite     -0,0105      momentum       +0,0013
+        tendance       +0,0003      liquidite      -0,0001
+
+    Le rétrécissement a fait son travail : le momentum, la tendance et la
+    liquidité sont à zéro à la troisième décimale, et le poids s'est
+    concentré sur le seul trait dont la preuve tienne. Ce sont précisément
+    les traits que le projet mettait en avant depuis le début qui
+    disparaissent. C'est désagréable à lire et c'est le but.
+
+    (Les poids affichés par la validation diffèrent de ceux-ci : ils sont
+    estimés sur la seule fenêtre d'entraînement du dernier pli, qui est
+    plus courte. C'est voulu — un poids calculé sur l'échantillon entier
+    connaîtrait la période de test.)
+
+    `exigence` ne demande pas de réglage fin : balayée de 0,25 à 9 sur
+    l'archive, elle déplace l'IC de la combinaison de +0,0440 à +0,0455.
+    La valeur 4 est retenue parce qu'elle a un sens — demi-poids au seuil
+    usuel t = 2 — et non parce qu'elle maximise quoi que ce soit.
+    """
+    poids: dict[str, float] = {}
+    for trait in traits:
+        if trait not in echantillon.columns:
+            poids[trait] = 0.0
+            continue
+        mesure = mesure_ic(ic_par_date(echantillon, trait), horizon)
+        t = mesure["t"]
+        if not np.isfinite(t) or mesure["blocs"] < 2:
+            poids[trait] = 0.0
+            continue
+        poids[trait] = float(mesure["ic"] * t * t / (t * t + exigence))
+    return poids
+
+
+def score_fiabilite(bloc: pd.DataFrame, poids: dict[str, float]) -> pd.Series:
+    """Somme des rangs pondérée par les poids de `poids_fiabilite`."""
+    utiles = {t: p for t, p in poids.items()
+              if t in bloc.columns and abs(p) > 1e-12}
+    total = sum(abs(p) for p in utiles.values())
+    if total < 1e-12:
+        # Aucun trait n'a fait sa preuve : la source se tait plutôt que de
+        # rendre un classement arbitraire. Un score constant a un IC non
+        # défini, et `combiner` l'écarte.
+        return pd.Series(np.nan, index=bloc.index)
+    return sum(p * bloc[t] for t, p in utiles.items()) / total
+
+
+# --- le modèle appris -----------------------------------------------------
+
+class ApprentissageIndisponible(RuntimeError):
+    """Levée quand on demande un modèle sans que scikit-learn soit là."""
+
+
+class Ensemble:
+    """Sac de régressions logistiques, rééchantillonnées PAR BLOCS DE DATES.
+
+    L'unité de rééchantillonnage est la période de `horizon` séances, pas
+    la ligne. Tirer des lignes au hasard reviendrait à tirer soixante fois
+    la même information — l'étiquette du lundi et celle du mardi racontent
+    la même histoire — et donnerait des membres quasi identiques, donc une
+    dispersion nulle et une fausse certitude. En tirant des blocs, deux
+    membres voient des régimes de marché différents, et leur désaccord dit
+    quelque chose.
+
+    Rappel de l'en-tête : le sac ne gagne PAS en précision (IC 0,0515
+    contre 0,0515 pour une régression unique). Il est là pour la
+    dispersion, qui devient la marge d'erreur affichée à côté de chaque
+    probabilité. Le membre entraîné sur l'échantillon complet, lui, fournit
+    la probabilité centrale — celle qu'on cite.
+    """
+
+    def __init__(self, traits: list[str], horizon: int, membres: int = 8,
+                 regularisation: float = 0.1, graine: int = 0):
+        if not DISPONIBLE:  # pragma: no cover — dépend de l'environnement
+            raise ApprentissageIndisponible(
+                "scikit-learn n'est pas installé dans cet environnement.")
+        self.traits = list(traits)
+        self.horizon = int(horizon)
+        self.membres = int(membres)
+        self.regularisation = float(regularisation)
+        self.graine = int(graine)
+        self.central = None
+        self.sac: list = []
+
+    def _neuf(self):
+        # Régularisation forte et modèle linéaire : voir l'en-tête du
+        # module. `max_iter` généreux parce qu'un avertissement de
+        # convergence dans une app Streamlit n'est lu par personne.
+        return make_pipeline(
+            StandardScaler(),
+            LogisticRegression(C=self.regularisation, max_iter=2000),
+        )
+
+    def entrainer(self, echantillon: pd.DataFrame) -> "Ensemble":
+        utiles = [t for t in self.traits if t in echantillon.columns]
+        appris = echantillon.dropna(subset=utiles + ["cible"])
+        if appris.empty or appris["cible"].nunique() < 2:
+            self.central, self.sac = None, []
+            return self
+        self.traits = utiles
+        self.central = self._neuf().fit(appris[utiles], appris["cible"])
+
+        dates = np.array(sorted(appris["date"].unique()))
+        blocs = np.array_split(dates, max(2, len(dates) // max(1, self.horizon)))
+        rng = np.random.default_rng(self.graine)
+        self.sac = []
+        for _ in range(self.membres):
+            tirage = rng.integers(0, len(blocs), len(blocs))
+            gardees = set(np.concatenate([blocs[i] for i in tirage]))
+            part = appris[appris["date"].isin(gardees)]
+            if len(part) < 200 or part["cible"].nunique() < 2:
+                continue
+            self.sac.append(self._neuf().fit(part[utiles], part["cible"]))
+        return self
+
+    def probabilites(self, bloc: pd.DataFrame) -> pd.Series:
+        """Probabilité centrale, celle du membre entraîné sur tout."""
+        if self.central is None or bloc.empty:
+            return pd.Series(np.nan, index=bloc.index)
+        return pd.Series(
+            self.central.predict_proba(bloc[self.traits])[:, 1],
+            index=bloc.index)
+
+    def dispersion(self, bloc: pd.DataFrame) -> pd.Series:
+        """Écart-type des membres du sac, valeur par valeur.
+
+        C'est une incertitude D'ESTIMATION — de combien la probabilité
+        bougerait si l'historique avait été un autre tirage de périodes.
+        Elle ne dit rien de l'incertitude du marché lui-même, qui est
+        infiniment plus grande : une probabilité de 68 % ± 3 reste une
+        probabilité de 68 %, c'est-à-dire presque un pile ou face.
+        """
+        if len(self.sac) < 2 or bloc.empty:
+            return pd.Series(np.nan, index=bloc.index)
+        tirages = np.column_stack(
+            [m.predict_proba(bloc[self.traits])[:, 1] for m in self.sac])
+        return pd.Series(tirages.std(axis=1, ddof=1), index=bloc.index)
+
+    def coefficients(self) -> dict[str, float]:
+        """Poids appris par le membre central, sur traits standardisés."""
+        if self.central is None:
+            return {}
+        return dict(zip(self.traits,
+                        self.central[-1].coef_[0].astype(float)))
+
+
+# --- combinaison ----------------------------------------------------------
+
+def combiner(sources: dict[str, pd.Series]) -> pd.Series:
+    """Moyenne des RANGS des sources disponibles, à poids égaux.
+
+    DEUX DÉCISIONS, TOUTES DEUX MESURÉES.
+
+    Les rangs et non les valeurs : une probabilité vit dans [0,4 ; 0,6] et
+    un score composite dans [0 ; 1]. Moyenner les valeurs brutes laisserait
+    la source la plus étalée décider seule, sans que rien ne le montre.
+
+    Les poids égaux et non appris : c'est le résultat le plus contre-
+    intuitif du module. Une validation imbriquée qui estime le poids de
+    chaque source rend un IR de 0,46 ; trois poids égaux, 0,81. Quarante-
+    quatre périodes indépendantes ne suffisent pas à apprendre trois
+    poids, et l'essayer coûte plus que ça ne rapporte.
+
+    Une source qui se tait — `score_fiabilite` quand aucun trait n'a fait
+    sa preuve, le modèle quand scikit-learn manque — est simplement absente
+    du calcul. La combinaison dégrade, elle ne tombe pas.
+    """
+    utiles = {nom: serie for nom, serie in sources.items()
+              if serie is not None and serie.notna().any()}
+    if not utiles:
+        return pd.Series(dtype=float)
+    rangs = [serie.rank(pct=True) for serie in utiles.values()]
+    return sum(rangs) / len(rangs)
+
+
+class Calibrage:
+    """Rang combiné → probabilité de surperformer, apprise HORS ÉCHANTILLON.
+
+    POURQUOI CE N'EST PAS UN DÉTAIL. Le rang combiné est un nombre entre 0
+    et 1 ; l'afficher tel quel comme « probabilité » serait un mensonge de
+    présentation. La première valeur du classement aurait une probabilité
+    de 100 % de surperformer, la dernière de 0 %, alors que l'IC mesuré
+    autorise à peine à les séparer.
+
+    Le calibrage apprend la relation vraie — combien de fois, réellement,
+    une valeur de rang combiné 0,9 a-t-elle battu la médiane — sur les
+    prédictions HORS ÉCHANTILLON de la validation glissante, jamais sur
+    l'entraînement. D'où des probabilités resserrées autour de 50 %, entre
+    45 % et 55 % le plus souvent. C'est laid sur un graphique et c'est la
+    vérité : l'IC mesuré ne permet pas mieux.
+
+    Sans scikit-learn, ou faute d'assez d'observations hors échantillon, le
+    calibrage se déclare absent et `prediction` affiche le rang en le
+    nommant rang.
+    """
+
+    def __init__(self):
+        self.modele = None
+        self.observations = 0
+
+    def apprendre(self, scores: pd.Series, cibles: pd.Series) -> "Calibrage":
+        if not DISPONIBLE:
+            return self
+        table = pd.DataFrame({"s": scores, "y": cibles}).dropna()
+        if len(table) < 200 or table["y"].nunique() < 2:
+            return self
+        self.modele = LogisticRegression(C=1e6, max_iter=1000).fit(
+            table[["s"]], table["y"])
+        self.observations = len(table)
+        return self
+
+    @property
+    def disponible(self) -> bool:
+        return self.modele is not None
+
+    def appliquer(self, scores: pd.Series) -> pd.Series:
+        if self.modele is None:
+            return pd.Series(np.nan, index=scores.index)
+        propres = scores.fillna(scores.median())
+        return pd.Series(
+            self.modele.predict_proba(propres.to_frame("s"))[:, 1],
+            index=scores.index)

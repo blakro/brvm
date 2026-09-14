@@ -34,7 +34,7 @@ os.environ.setdefault(
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
-from brvm import prediction  # noqa: E402
+from brvm import apprentissage, features, prediction  # noqa: E402
 
 # Fenêtres raccourcies : la mécanique testée ne dépend pas de leur longueur,
 # et un momentum à 250 séances obligerait à fabriquer des années de cotation
@@ -51,15 +51,27 @@ REGLAGES = {
 }
 
 
-def _cours(trajectoires: dict[str, list[float]]):
+def _date(rang: int) -> str:
+    return (f"{2020 + rang // 336:04d}-{1 + (rang % 336) // 28:02d}-"
+            f"{1 + rang % 28:02d}")
+
+
+def _cours(trajectoires: dict[str, list[float]], volumes: dict | None = None):
+    """Table de cours fabriquée. Une valeur `None` dans une trajectoire est
+    une séance SANS ÉCHANGE pour ce ticker — pas un cours nul, une ligne
+    absente, ce qui est le cas normal sur cette place."""
     lignes = []
     for ticker, prix in trajectoires.items():
         for rang, valeur in enumerate(prix):
+            if valeur is None:
+                continue
+            volume = (volumes or {}).get(ticker, 5_000_000.0)
+            if not isinstance(volume, float):
+                volume = float(volume[rang])
             lignes.append({
-                "date": f"{2020 + rang // 336:04d}-"
-                        f"{1 + (rang % 336) // 28:02d}-{1 + rang % 28:02d}",
+                "date": _date(rang),
                 "ticker": ticker, "cloture": float(valeur),
-                "volume_titres": 100.0, "volume_fcfa": 5_000_000.0,
+                "volume_titres": 100.0, "volume_fcfa": volume,
             })
     return pd.DataFrame(lignes).sort_values(["date", "ticker"])
 
@@ -273,31 +285,65 @@ def test_le_rendu_ne_montre_jamais_la_precision_seule():
     référence est le score composite, pas le hasard."""
     resultat = prediction.valider(_marche_aleatoire(graine=4), REGLAGES)
     rendu = prediction.expliquer(resultat)
-    assert "IC du modèle" in rendu and "IC du score composite" in rendu
+    assert "IC de la combinaison" in rendu and "IC du score composite" in rendu
     assert "écart" in rendu
 
 
+def test_le_rendu_montre_la_dispersion_et_pas_seulement_la_moyenne():
+    """LE défaut de mesure que cette version corrige.
+
+    Un IC moyen sans sa dispersion laissait croire à une mesure stable là
+    où les périodes allaient de +0,29 à -0,28. La moyenne seule n'est pas
+    faux, elle est insuffisante — et insuffisante d'une manière qui fait
+    conclure. Le rendu doit donc porter l'IR, le compte de périodes
+    positives et la pire d'entre elles, pour chaque source.
+    """
+    resultat = prediction.valider(_marche_aleatoire(graine=4), REGLAGES)
+    rendu = prediction.expliquer(resultat)
+    assert "IR" in rendu and "périodes >0" in rendu and "pire" in rendu
+
+    for nom, mesure in resultat["sources"].items():
+        assert {"ic", "ir", "periodes", "periodes_positives", "pire"} <= set(mesure), nom
+        assert mesure["periodes"] > 1, nom
+        assert mesure["pire"] <= mesure["ic"] + 1e-12, nom
+
+
 class _sans_apprentissage:
-    """Simule l'absence de scikit-learn sans avoir à la désinstaller."""
+    """Simule l'absence de scikit-learn sans avoir à la désinstaller.
+
+    Les DEUX drapeaux sont baissés : `prediction` décide s'il construit un
+    modèle, `apprentissage` refuse d'en fabriquer un. N'en baisser qu'un
+    testerait une moitié de l'absence, c'est-à-dire un état qui n'arrive
+    jamais en vrai.
+    """
 
     def __enter__(self):
-        self.avant = prediction.APPRENTISSAGE_DISPONIBLE
+        self.avant = (prediction.APPRENTISSAGE_DISPONIBLE,
+                      apprentissage.DISPONIBLE)
         prediction.APPRENTISSAGE_DISPONIBLE = False
+        apprentissage.DISPONIBLE = False
 
     def __exit__(self, *_):
-        prediction.APPRENTISSAGE_DISPONIBLE = self.avant
+        (prediction.APPRENTISSAGE_DISPONIBLE,
+         apprentissage.DISPONIBLE) = self.avant
 
 
-def test_sans_scikit_learn_le_composite_repond_encore():
-    """L'apprentissage est la seule chose que l'absence doit coûter.
+def test_sans_scikit_learn_il_reste_deux_sources_sur_trois():
+    """L'apprentissage manquant ne doit plus coûter le classement entier.
 
-    Le score composite ne s'apprend pas : ses poids sont écrits dans la
-    configuration. Il reste donc calculable, et c'est celui-là même qui part
-    en production quand le modèle ne le devance pas.
+    AVANT, `predire` rendait un tableau vide : la seule source était la
+    régression logistique, et son absence emportait tout. Les deux autres
+    sources — le composite de la configuration, et les poids par trait
+    appris puis rétrécis — sont du pandas et se calculent sans
+    scikit-learn. La combinaison doit donc continuer de rendre un
+    classement avec ce qui reste, et le dire.
+
+    C'est `combiner` qui porte cette propriété : une source qui se tait est
+    absente du calcul, pas fatale au calcul.
     """
     cours = _marche_aleatoire(graine=7)
-    # Les pondérations sont ce qui fait exister le composite : sans elles le
-    # score est constant, et l'IC d'une constante n'est pas défini.
+    # Les pondérations font exister le composite : sans elles le score est
+    # constant, et l'IC d'une constante n'est pas défini.
     reglages = {**REGLAGES,
                 "ponderations": {"momentum": 0.5, "tendance": 0.3,
                                  "volatilite": -0.2}}
@@ -305,22 +351,27 @@ def test_sans_scikit_learn_le_composite_repond_encore():
     with _sans_apprentissage():
         validation = prediction.valider(cours, reglages)
         rendu = prediction.expliquer(validation)
-        vide = prediction.predire(cours, reglages)
+        classement = prediction.predire(cours, reglages, validation=validation)
 
         try:
-            prediction._modele()
-        except prediction.ApprentissageIndisponible:
+            apprentissage.Ensemble(prediction.TRAITS, 10)
+        except apprentissage.ApprentissageIndisponible:
             pass
         else:
-            raise AssertionError("_modele doit refuser, pas renvoyer un objet")
+            raise AssertionError("Ensemble doit refuser, pas renvoyer un objet")
 
     assert "scikit-learn" in validation["motif"]
+    assert "scikit-learn" in rendu
+    # La source manquante ne figure pas ; les deux autres, si.
+    assert "modele" not in validation["sources"]
+    assert {"composite", "combinaison"} <= set(validation["sources"])
     assert np.isfinite(validation["ic_composite"])
-    assert "scikit-learn" in rendu and "composite" in rendu
-    # Vide, et non une colonne de probabilités fabriquée : un rang composite
-    # n'est pas une probabilité, et le présenter comme telle serait pire que
-    # de ne rien présenter.
-    assert vide.empty and list(vide.columns) == ["ticker", "probabilite"]
+    # Et surtout : un classement, pas un tableau vide.
+    assert not classement.empty
+    assert classement["probabilite"].between(0, 1).all()
+    # Sans modèle il n'y a pas de sac, donc pas d'incertitude chiffrable :
+    # la colonne existe et vaut NaN, plutôt que de mentir avec un zéro.
+    assert classement["incertitude"].isna().all()
 
 
 def test_le_module_s_importe_sans_scikit_learn():
@@ -403,6 +454,260 @@ def test_chaque_trait_est_mesure_separement():
     for trait, mesure in mesures.items():
         assert {"ic", "erreur_type", "t", "significatif"} <= set(mesure), trait
 
+
+
+# --- l'univers : le défaut le plus coûteux du module ----------------------
+
+def _avec_trous(n=260, periodicite=2, graine=17):
+    """Douze valeurs quotidiennes, plus une qui ne cote qu'une séance sur
+    `periodicite` — le profil d'UNLC, qui n'échange qu'une séance sur deux
+    et n'avait donc jamais cent cotations consécutives."""
+    rng = np.random.default_rng(graine)
+    trajectoires = {
+        f"T{i:02d}": list(100 * np.exp(np.cumsum(rng.normal(0, 0.015, n))))
+        for i in range(12)
+    }
+    serie = 100 * np.exp(np.cumsum(rng.normal(0, 0.015, n)))
+    trajectoires["TROU"] = [v if r % periodicite == 0 else None
+                            for r, v in enumerate(serie)]
+    return _cours(trajectoires)
+
+
+def test_une_valeur_qui_ne_cote_pas_tous_les_jours_reste_dans_l_echantillon():
+    """LE test de non-régression du biais de sélection.
+
+    `rolling(100)` exige par défaut cent valeurs CONSÉCUTIVES. Une valeur
+    qui n'échange qu'une séance sur deux n'en a jamais cent d'affilée :
+    elle n'avait donc jamais de tendance, jamais de rang, jamais de ligne
+    dans l'échantillon. Mesuré sur l'archive réelle, cela retirait la
+    moitié illiquide du marché — 16,2 valeurs mesurées par séance sur 37,7
+    cotées — soit exactement les valeurs dont le comportement diffère le
+    plus de la moyenne.
+
+    C'était un biais de sélection silencieux : rien dans le résultat ne
+    disait que la moitié du marché manquait.
+    """
+    echantillon = prediction.construire_echantillon(_avec_trous(), REGLAGES)
+    assert not echantillon.empty
+
+    lignes = echantillon[echantillon["ticker"] == "TROU"]
+    assert not lignes.empty, (
+        "la valeur à trous est absente de l'échantillon : le biais de "
+        "sélection est revenu"
+    )
+    # Et pas une poignée de lignes rescapées : elle doit peser autant que
+    # ses cotations le permettent, à quelques séances de bord près.
+    quotidiennes = echantillon[echantillon["ticker"] == "T00"]
+    assert len(lignes) > 0.4 * len(quotidiennes), (
+        f"{len(lignes)} lignes contre {len(quotidiennes)} pour une valeur "
+        "quotidienne, alors qu'elle cote une séance sur deux"
+    )
+
+
+def test_aucune_decision_n_est_prise_sur_un_cours_reporte():
+    """Le report sert à MESURER le passé, jamais à fabriquer une occasion.
+
+    Les traits se calculent sur des cours reportés — sans quoi la moitié
+    illiquide du marché n'aurait jamais de tendance. Mais une ligne
+    d'échantillon à une date où la valeur n'a pas échangé serait un ordre
+    passé à un prix que personne n'a traité. La coupe est donc nette :
+    on mesure sur le cours reporté, on ne décide que sur une cotation.
+    """
+    cours = _avec_trous()
+    echantillon = prediction.construire_echantillon(cours, REGLAGES)
+    reelles = set(map(tuple, cours[["date", "ticker"]].to_numpy()))
+
+    produites = set(map(tuple, echantillon[["date", "ticker"]].to_numpy()))
+    orphelines = produites - reelles
+    assert not orphelines, (
+        f"{len(orphelines)} lignes sur des séances sans cotation, "
+        f"par exemple {sorted(orphelines)[:3]}"
+    )
+
+
+def test_le_report_du_cours_est_borne_et_ne_regarde_jamais_l_avenir():
+    """Deux bornes, et chacune ferme une manière de mentir.
+
+    Un titre qui n'a pas échangé depuis trois mois n'a pas un cours, il a
+    un souvenir : au-delà de la limite il doit ressortir. Et rien ne doit
+    être inventé avant la première cotation — une société introduite en
+    2021 n'a pas de cours en 2019.
+
+    Le test vérifie surtout la propriété qui ne se voit pas : le report
+    d'une date ne dépend QUE du passé. Tronquer la série ne doit déplacer
+    aucune valeur antérieure à la troncature — si c'était le cas, la
+    fonction qui prépare tous les traits consulterait l'avenir.
+    """
+    n = 60
+    brut = pd.DataFrame(
+        {"A": [100.0] * n, "B": [np.nan] * n},
+        index=[_date(r) for r in range(n)])
+    brut.loc[brut.index[20:25], "B"] = 200.0
+    brut.loc[brut.index[30:], "A"] = np.nan
+
+    reporte = features.cours_reportes(brut, limite=5)
+
+    # Avant la première cotation de B : rien n'est inventé.
+    assert reporte["B"].iloc[:20].isna().all()
+    # Après la dernière : cinq séances de report, puis plus rien. C'est
+    # aussi ce qui fait disparaître une société radiée, sans avoir eu
+    # besoin de savoir qu'elle allait l'être.
+    assert reporte["B"].iloc[25:30].notna().all(), "report trop court"
+    assert reporte["B"].iloc[30:].isna().all(), "report au-delà de la limite"
+    assert reporte["A"].iloc[35:].isna().all(), "cours trop longtemps reporté"
+
+    # Aucun regard en avant : la troncature ne déplace rien.
+    coupe = features.cours_reportes(brut.iloc[:40], limite=5)
+    pd.testing.assert_frame_equal(coupe, reporte.iloc[:40])
+
+
+def test_le_report_ne_fait_pas_passer_les_valeurs_dormantes_pour_calmes():
+    """Un cours reporté produit un rendement nul, qui n'est pas un calme
+    observé mais une absence d'observation.
+
+    Les compter écraserait l'écart-type des valeurs les moins traitées, et
+    les ferait passer pour les plus sages — exactement à l'envers, et
+    d'autant plus grave que la volatilité pèse négativement dans le score.
+    """
+    matrices = features.traits_glissants(_avec_trous(periodicite=3), REGLAGES)
+    vol = matrices["volatilite"].iloc[-1].dropna()
+    assert "TROU" in vol.index
+
+    # Elle est construite avec la même amplitude que les autres : sa
+    # volatilité doit leur ressembler, non valoir le tiers.
+    quotidiennes = vol.drop("TROU")
+    assert vol["TROU"] > 0.5 * quotidiennes.median(), (
+        f"volatilité {vol['TROU']:.3f} contre {quotidiennes.median():.3f} "
+        "pour les valeurs quotidiennes : les rendements fabriqués par le "
+        "report sont comptés"
+    )
+
+
+# --- les sources, et ce qui arrive quand l'une se tait --------------------
+
+def test_un_trait_sans_preuve_recoit_un_poids_nul():
+    """Le rétrécissement est ce qui distingue ces poids d'une régression.
+
+    Une régression donne un coefficient à chaque trait, y compris à ceux
+    qui ne portent rien. Ici, un trait dont l'IC ne se distingue pas du
+    hasard doit voir son poids ramené à zéro — quelle que soit la taille
+    de l'IC observé, qui n'est alors qu'un tirage.
+    """
+    echantillon = prediction.construire_echantillon(
+        _marche_aleatoire(n_seances=400, graine=21), REGLAGES)
+    poids = apprentissage.poids_fiabilite(
+        echantillon, prediction.TRAITS, horizon=10)
+
+    assert set(poids) == set(prediction.TRAITS)
+    # Sur du bruit pur, aucun trait ne porte rien : tous les poids doivent
+    # être petits devant l'IC brut qu'on y mesurerait.
+    for trait, valeur in poids.items():
+        assert abs(valeur) < 0.05, f"{trait} garde un poids de {valeur:+.3f}"
+
+
+def test_la_combinaison_survit_a_une_source_muette():
+    """Une source qui se tait est absente du calcul, pas fatale au calcul.
+
+    C'est la propriété qui permet au classement de tenir sans
+    scikit-learn, et à la source « fiabilité » de ne rien dire quand aucun
+    trait n'a fait sa preuve plutôt que de rendre un ordre arbitraire.
+    """
+    index = pd.RangeIndex(5)
+    parlante = pd.Series([0.1, 0.5, 0.9, 0.3, 0.7], index=index)
+    muette = pd.Series(np.nan, index=index)
+
+    seule = apprentissage.combiner({"a": parlante, "b": muette})
+    assert seule.notna().all()
+    pd.testing.assert_series_equal(
+        seule.rank(), parlante.rank(), check_names=False)
+
+    # Toutes muettes : on rend vide plutôt qu'un classement inventé.
+    assert apprentissage.combiner({"a": muette, "b": muette}).empty
+
+
+def test_une_probabilite_calibree_ne_pretend_pas_savoir():
+    """Le rang combiné vaut 1 en tête de classement et 0 en queue.
+
+    L'afficher tel quel comme « probabilité » annoncerait 100 % de chances
+    de surperformer pour la première valeur — alors que l'IC mesuré
+    autorise à peine à la distinguer de la dernière. Le calibrage apprend
+    la fréquence RÉELLE, hors échantillon, et la ramène près de 50 %.
+    """
+    cours = _marche_aleatoire(n_seances=400, graine=31)
+    validation = prediction.valider(cours, REGLAGES)
+    classement = prediction.predire(cours, REGLAGES, validation=validation)
+    assert not classement.empty
+
+    assert classement["probabilite"].between(0, 1).all()
+    assert classement["ticker"].is_unique
+    assert classement["probabilite"].is_monotonic_decreasing
+    if classement["calibree"].all():
+        etendue = (classement["probabilite"].max()
+                   - classement["probabilite"].min())
+        assert etendue < 0.5, (
+            f"étendue de {etendue:.2f} : des probabilités calibrées sur un "
+            "IC de cet ordre ne peuvent pas balayer tout l'intervalle"
+        )
+
+    # Sans validation, la fonction rend le rang et ne le déguise pas.
+    nu = prediction.predire(cours, REGLAGES)
+    assert not nu["calibree"].any()
+
+
+def test_chaque_probabilite_porte_son_incertitude():
+    """Un chiffre sans sa marge se cite tout seul, et finit par tromper."""
+    cours = _marche_aleatoire(n_seances=400, graine=33)
+    classement = prediction.predire(cours, REGLAGES)
+    assert {"incertitude", "rang_combine"} <= set(classement.columns)
+    if prediction.APPRENTISSAGE_DISPONIBLE:
+        assert classement["incertitude"].notna().any()
+        assert (classement["incertitude"].dropna() >= 0).all()
+
+
+def test_le_composite_reprend_la_main_quand_la_combinaison_ne_vaut_rien():
+    """La décision de production est écrite dans le module, pas laissée au
+    lecteur.
+
+    Un onglet qui affiche des probabilités issues d'un score dont l'IC
+    mesuré est négatif ne présente pas une prévision, il présente un bug.
+    Quand la combinaison n'a pas d'IC positif hors échantillon, c'est le
+    composite qui part — il n'estime rien, donc il ne peut pas surajuster.
+    """
+    for graine in range(12):
+        validation = prediction.valider(_marche_aleatoire(graine=graine),
+                                        REGLAGES)
+        if validation["periodes"].empty:
+            continue
+        attendu = ("combinaison" if validation["stabilite"]["ic"] > 0
+                   else "composite")
+        assert validation["retenue"] == attendu, graine
+        if validation["retenue"] == "composite":
+            assert "composite" in prediction.expliquer(validation)
+            return
+    # Aucun tirage n'a produit le cas : ce n'est pas un échec du test, mais
+    # il faut le dire plutôt que de le passer sous silence.
+    print("  (aucun tirage n'a rendu la combinaison négative)")
+
+
+def test_l_ic_vectorise_donne_la_meme_chose_que_la_version_naive():
+    """L'accélération ne doit pas déplacer un chiffre.
+
+    `ic_par_date` calcule Spearman en sommes agrégées plutôt qu'en une
+    boucle `groupby().apply()` — quarante secondes gagnées par comparaison
+    de stratégies, et c'est ce qui a rendu possible de jeter trois
+    architectures au lieu de les supposer bonnes. Une accélération de ce
+    facteur n'a aucune valeur si elle change les nombres.
+    """
+    echantillon = prediction.construire_echantillon(
+        _marche_aleatoire(n_valeurs=9, n_seances=200, graine=41), REGLAGES)
+    rapide = apprentissage.ic_par_date(echantillon, "momentum")
+    naif = echantillon.groupby("date").apply(
+        lambda g: g["momentum"].rank().corr(g["rendement_futur"].rank()),
+        include_groups=False).dropna()
+
+    pd.testing.assert_series_equal(
+        rapide.sort_index(), naif.sort_index(),
+        check_names=False, atol=1e-12)
 
 if __name__ == "__main__":
     echecs = 0

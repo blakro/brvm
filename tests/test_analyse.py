@@ -223,29 +223,54 @@ def test_les_traits_glissants_redonnent_les_traits_ponctuels():
         for i in range(6)
     }
     cours = _cours(trajectoires, volume_fcfa=3_000_000)
+    # DES TROUS, ET C'EST TOUT L'INTÉRÊT. Sur une série sans manquants, le
+    # report et `min_periods` ne changent rien : les deux chemins
+    # coïncideraient même si l'un des deux avait tort. C'est précisément la
+    # séance sans échange qui les fait diverger quand ils divergent.
+    creuses = cours["date"].isin(sorted(cours["date"].unique())[::7])
+    cours = cours[~(creuses & cours["ticker"].isin(["T01", "T04"]))]
     reglages = {"analyse": {"fenetre_momentum": 60, "saut_momentum": 5,
                             "fenetre_volatilite": 20, "fenetre_liquidite": 20,
-                            "moyenne_courte": 5, "moyenne_longue": 20}}
+                            "moyenne_courte": 5, "moyenne_longue": 20,
+                            "fenetre_retournement": 10,
+                            "fenetre_choc_court": 10, "fenetre_choc_long": 40,
+                            "report_max_seances": 20}}
 
     f = features._fenetres(reglages)
     matrices = features.traits_glissants(cours, reglages)
     dates = sorted(cours["date"].unique())
 
     compares = 0
+    effectifs = {nom: 0 for nom in
+                 [*features.TOUS_TRAITS]}
     for date in dates[::17]:
         tranche = cours[cours["date"] <= date]
-        prix = features.serie(tranche)
+        brut = features.serie(tranche)
+        # Les fonctions ponctuelles attendent des cours DÉJÀ reportés, comme
+        # la passe glissante : le report fait partie de la définition, pas
+        # d'une optimisation.
+        prix = features.cours_reportes(brut, f["report_max_seances"])
         ponctuels = {
             "momentum": features.momentum(prix, f["fenetre_momentum"],
                                           f["saut_momentum"]),
             "tendance": features.tendance(prix, f["moyenne_courte"],
                                           f["moyenne_longue"]),
-            "volatilite": features.volatilite(prix, f["fenetre_volatilite"]),
+            "volatilite": features.volatilite(prix, f["fenetre_volatilite"],
+                                              echange=brut.notna()),
             "liquidite": features.liquidite(tranche, f["fenetre_liquidite"]),
+            "retournement": features.retournement(
+                prix, f["fenetre_retournement"]),
+            "choc_volume": features.choc_volume(
+                tranche, f["fenetre_choc_court"], f["fenetre_choc_long"]),
         }
+        # Restreint aux valeurs ayant DÉJÀ coté au moins une fois : à la
+        # première séance, une valeur absente n'a pas encore de colonne
+        # dans le pivot ponctuel, là où la passe glissante connaît tout
+        # l'univers. C'est de la tenue de registre, pas une définition.
+        connues = sorted(set(tranche["ticker"]))
         for nom, attendu in ponctuels.items():
-            obtenu = matrices[nom].loc[date]
-            attendu = attendu.reindex(obtenu.index)
+            obtenu = matrices[nom].loc[date].reindex(connues)
+            attendu = attendu.reindex(connues)
             # Les manquants doivent manquer aux mêmes endroits : un trait
             # calculé « sur ce qu'on a » là où l'ancien refusait serait une
             # régression silencieuse.
@@ -256,9 +281,14 @@ def test_les_traits_glissants_redonnent_les_traits_ponctuels():
             if deux.any():
                 ecart = float((attendu[deux] - obtenu[deux]).abs().max())
                 assert ecart < 1e-9, f"{date} {nom} : écart {ecart:.2e}"
+                effectifs[nom] += int(deux.sum())
         compares += 1
 
     assert compares >= 5
+    # Un test qui ne compare que des NaN passe sans rien prouver. Chaque
+    # trait doit avoir été confronté sur de vraies valeurs.
+    manquants = [nom for nom, n in effectifs.items() if n < 10]
+    assert not manquants, f"traits jamais réellement comparés : {manquants}"
 
 
 def test_une_societe_radiee_ne_disparait_pas_du_referentiel():

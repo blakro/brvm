@@ -23,8 +23,8 @@ CLASSEMENT, là où chaque valeur prise isolément est une série trop courte
 et trop bruitée. On passe d'un problème de série temporelle mal posé à un
 problème d'ordre, qui l'est.
 
-TROIS PIÈGES, ET COMMENT ILS SONT FERMÉS
-----------------------------------------
+QUATRE PIÈGES, ET COMMENT ILS SONT FERMÉS
+-----------------------------------------
 1. FUITE TEMPORELLE. Une découpe aléatoire entraînerait sur mardi pour
    prédire lundi. La validation est donc glissante : on entraîne sur le
    passé, on teste sur la période suivante, jamais l'inverse.
@@ -39,21 +39,66 @@ TROIS PIÈGES, ET COMMENT ILS SONT FERMÉS
    résultat est rendu avec la référence à battre et l'écart ; c'est
    l'écart, et lui seul, qui porte l'information.
 
+4. TROP PEU DE PÉRIODES DE TEST POUR QUE LA MESURE TIENNE. C'est le piège
+   ajouté, et il était ouvert. Avec quatre découpes, l'IC d'une période à
+   l'autre allait de +0,29 à -0,28 : quatre tirages d'une variable dont
+   l'écart-type dépasse la moyenne d'un ordre de grandeur. On concluait sur
+   du bruit, et la conclusion changeait à chaque séance versée. Le défaut
+   est passé à dix découpes, et la validation rend désormais la DISPERSION
+   entre périodes — l'IR, la part de périodes positives, la pire — au lieu
+   de la seule moyenne qui la cachait.
+
 CE QUE VOUS DEVEZ EN ATTENDRE
 -----------------------------
 La référence n'est pas le hasard : c'est le score composite de
 `scoring.py`, momentum et liquidité sans apprentissage. Sur ce marché, un
-composite simple bat très souvent un modèle appris — et s'il gagne ici, LE
-COMPOSITE EST CE QUI DOIT PARTIR EN PRODUCTION. L'apprentissage n'ajouterait
-qu'un risque de surajustement et une dépendance de plus.
+composite simple bat très souvent un modèle appris ; ce n'est plus le cas
+ici, et il a fallu trois changements pour y arriver.
+
+Mesuré sous un protocole unique — dix découpes, archive complète, erreur-
+type conservatrice — avant et après :
+
+                                       IC       t     IR   >0    pire
+    AVANT  univers brut, 4 traits   -0,056   -1,1  -0,43  4/10  -0,240
+    APRÈS  univers corrigé,
+           6 traits, 3 sources      +0,045   +1,5  +0,51  7/10  -0,094
+
+Ce qui a changé, par ordre d'importance :
+
+1. LES DONNÉES. Une valeur qui n'échange pas tous les jours n'avait jamais
+   de tendance calculable, donc jamais de place dans l'échantillon : 16,2
+   valeurs notées par séance sur 37,7 cotées. C'était un biais de sélection
+   contre la moitié illiquide du marché. Corrigé, l'échantillon passe de
+   40 131 à 100 961 lignes — voir l'en-tête de `features.py`.
+
+2. LES TRAITS. Un seul porte un signal qui tienne, le choc de volume, et ce
+   n'est aucun de ceux que le projet mettait en avant. Ôtez-le et l'IC du
+   modèle tombe de +0,044 à +0,011.
+
+3. LA COMBINAISON. Trois sources à poids égaux — la régression, des poids
+   par trait appris puis rétrécis, le composite de la configuration —
+   plutôt qu'une seule. Les poids de combinaison APPRIS ont été essayés et
+   rejetés, mesure à l'appui : voir `apprentissage.py`.
 
 L'IC attendu d'un modèle honnête se situe entre 0,02 et 0,05 ; 0,10 est
 excellent. Au-delà de 0,30, cherchez le bug avant d'ouvrir le champagne.
 
-Enfin, un écart positif ne suffit pas à gagner de l'argent : le courtage
-SGI, la rétrocession BRVM, les frais DC/BR et les taxes font 2,5 à 3,5 %
-l'aller-retour. Le signal doit survivre à cela — c'est ce que mesure
-`backtest.py`, pas ce module.
+DEUX RÉSERVES, ET ELLES COMPTENT PLUS QUE LE TABLEAU CI-DESSUS
+--------------------------------------------------------------
+D'ABORD, +0,045 N'EST PAS SIGNIFICATIF. Le t vaut 1,5 avec l'erreur-type
+conservatrice du module ; il faudrait 2. Le signe a changé, la dispersion
+s'est réduite de moitié, sept périodes sur dix sont positives contre
+quatre — tout cela est une amélioration réelle et mesurable, et rien de
+tout cela ne permet d'affirmer que l'IC vrai est différent de zéro. Un seul
+trait franchit le seuil pris isolément, le choc de volume, à t +2,5.
+
+ENSUITE, UN IC DE 0,045 N'EST PAS DE L'ARGENT. Simulé sur l'archive avec
+dix positions, un rééquilibrage trimestriel et 3 % de frais l'aller-retour,
+ce classement ne bat PAS la simple détention équipondérée du même univers :
+le rendement moyen par période est meilleur (+4,7 % contre +3,3 %) et la
+rotation qu'il exige le mange en entier. Ce module mesure un ORDRE ;
+`backtest.py` mesure ce qu'il en reste après le courtier, et c'est lui
+qu'il faut croire avant de passer un ordre.
 """
 
 from __future__ import annotations
@@ -61,50 +106,45 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from . import exogene, features
+from . import apprentissage, exogene, features
+from .apprentissage import ApprentissageIndisponible  # noqa: F401 — API publique
 from .config import charger
 
 # scikit-learn est la SEULE dépendance lourde du projet, et elle ne sert
-# qu'ici, dans `_modele`. Tout le reste du module — l'échantillon, la purge,
-# l'IC, le score composite — est du pandas.
+# qu'au modèle appris. Tout le reste — l'échantillon, la purge, l'IC, les
+# poids de fiabilité, la combinaison — est du pandas.
 #
 # L'importer au niveau du module la rendait obligatoire pour tout le monde :
 # une absence dans l'environnement d'hébergement faisait tomber les six
 # onglets du tableau de bord, dont cinq n'en ont aucun besoin. Elle est donc
-# optionnelle, et son absence ne coûte que l'apprentissage — pas le score
-# composite, qui est de toute façon la référence à battre.
-try:
-    from sklearn.linear_model import LogisticRegression
-    from sklearn.pipeline import make_pipeline
-    from sklearn.preprocessing import StandardScaler
-
-    APPRENTISSAGE_DISPONIBLE = True
-except ImportError:  # pragma: no cover — dépend de l'environnement
-    APPRENTISSAGE_DISPONIBLE = False
+# optionnelle, et son absence ne coûte qu'une des trois sources — les deux
+# autres, et donc un classement, restent calculables.
+APPRENTISSAGE_DISPONIBLE = apprentissage.DISPONIBLE
 
 MOTIF_INDISPONIBLE = (
-    "scikit-learn n'est pas installé dans cet environnement : le modèle "
-    "appris est indisponible. Le score composite, lui, se calcule sans "
-    "apprentissage — c'est la référence que le modèle doit battre, et il y "
-    "parvient rarement sur ce marché. Pour rétablir l'apprentissage : "
-    "`pip install scikit-learn`."
+    "scikit-learn n'est pas installé dans cet environnement : la régression "
+    "logistique est indisponible. Les deux autres sources — le score "
+    "composite et les poids de fiabilité appris par trait — se calculent "
+    "sans elle, et la combinaison continue de fonctionner avec ce qui "
+    "reste. Pour rétablir la troisième : `pip install scikit-learn`."
 )
 
+# Traits utilisés par la prédiction : les quatre de la notation, plus les
+# deux retenus après mesure sur onze ans d'archive. Volontairement peu
+# nombreux : multiplier les entrées sur 47 valeurs est le moyen le plus
+# rapide de mémoriser le passé au lieu de l'apprendre. Le détail de ce qui
+# a été retenu et rejeté est dans `features.TRAITS_PREDICTION`.
+TRAITS = list(features.TOUS_TRAITS)
 
-class ApprentissageIndisponible(RuntimeError):
-    """Levée quand on demande un modèle sans que scikit-learn soit là."""
-
-# Traits utilisés. Volontairement peu nombreux et déjà éprouvés ailleurs
-# dans le projet : multiplier les entrées sur 47 valeurs est le moyen le
-# plus rapide de mémoriser le passé au lieu de l'apprendre.
-TRAITS = ["momentum", "tendance", "volatilite", "liquidite"]
+# Les trois sources combinées, dans l'ordre où elles sont rendues.
+SOURCES = ("modele", "fiabilite", "composite")
 
 AVERTISSEMENTS = (
     "cible : surperformer le marché, pas monter",
     "validation glissante avec purge des étiquettes recouvrantes",
-    "référence : le score composite sans apprentissage, qui gagne souvent",
+    "trois sources équipondérées : poids appris rejetés, faute de périodes",
     "IC exploitable : 0,02 à 0,05 ; au-delà de 0,30, cherchez la fuite",
-    "frais non comptés ici : 2,5 à 3,5 % l'aller-retour sur ce marché",
+    "l'écart mesuré ne survit pas aux 3 % de frais l'aller-retour",
 )
 
 
@@ -145,6 +185,32 @@ def _joindre_exogenes(
     return fusion, ajoutes
 
 
+# L'échantillon coûte une dizaine de secondes sur onze ans d'archive, et
+# `valider` puis `predire` le construisent tous deux à l'identique — le
+# tableau de bord payait donc deux fois. Deux entrées suffisent : l'archive
+# entière, et la tranche filtrée par les curseurs.
+_MEMO: dict[tuple, pd.DataFrame] = {}
+_MEMO_MAX = 2
+
+
+def _empreinte(cours: pd.DataFrame, conf: dict) -> tuple:
+    """Clé de mémoïsation : ce dont l'échantillon dépend, et rien d'autre.
+
+    Les bornes de dates et le nombre de lignes suffisent à distinguer deux
+    tranches de l'archive ; les réglages de fenêtres et l'horizon changent
+    le calcul et doivent donc entrer dans la clé.
+    """
+    if cours.empty:
+        return ("vide",)
+    return (
+        len(cours),
+        str(cours["date"].iloc[0]),
+        str(cours["date"].iloc[-1]),
+        repr(sorted(conf.get("analyse", {}).items())),
+        int(conf.get("prediction", {}).get("horizon", 60)),
+    )
+
+
 def construire_echantillon(
     cours: pd.DataFrame, reglages: dict | None = None
 ) -> pd.DataFrame:
@@ -152,8 +218,19 @@ def construire_echantillon(
 
     L'étiquette vaut 1 si la valeur bat la médiane des rendements de la
     séance sur l'horizon, 0 sinon.
+
+    UNE LIGNE N'EXISTE QUE SI LA VALEUR A ÉCHANGÉ CE JOUR-LÀ. Les traits se
+    calculent sur des cours reportés — sans quoi la moitié illiquide du
+    marché n'aurait jamais de tendance, voir l'en-tête de `features` — mais
+    une décision prise sur un cours reporté serait un ordre passé à un prix
+    que personne n'a traité. Le report sert à MESURER le passé, jamais à
+    fabriquer une occasion d'acheter.
     """
     conf = reglages or charger()
+    cle = _empreinte(cours, conf)
+    if cle in _MEMO:
+        return _MEMO[cle].copy()
+
     analyse = conf.get("analyse", {})
     horizon = int(conf.get("prediction", {}).get("horizon", 60))
     besoin = int(analyse.get("fenetre_momentum", 250)) + 1
@@ -178,24 +255,34 @@ def construire_echantillon(
     # `traits_glissants` qui la garantit.
     fenetre = dates[besoin - 1:len(dates) - horizon]
 
-    # `shift(-horizon)` décale de N LIGNES, donc de N séances : c'est bien
-    # `prix.iloc[i + horizon]` face à `prix.iloc[i]`, et non un décalage de
-    # jours calendaires.
-    futur = (prix.shift(-horizon) / prix - 1).replace([np.inf, -np.inf],
-                                                      np.nan)
+    # Les cours reportés portent aussi l'étiquette : un titre non échangé en
+    # t+H garde la valeur de son dernier échange, qui est ce qu'un porteur
+    # constaterait sur son relevé. Mesurer le rendement à un cours absent
+    # reviendrait à écarter l'observation, et à réintroduire par la cible le
+    # biais de sélection que le report vient de fermer.
+    reportes = matrices["cloture"]
+    futur = (reportes.shift(-horizon) / reportes - 1).replace(
+        [np.inf, -np.inf], np.nan)
 
     colonnes = {nom: matrices[nom].reindex(fenetre).stack(future_stack=True)
                 for nom in TRAITS}
     colonnes["rendement_futur"] = futur.reindex(fenetre).stack(
         future_stack=True)
+    colonnes["cotee"] = matrices["cotee"].reindex(fenetre).stack(
+        future_stack=True)
     table = pd.concat(colonnes, axis=1)
-    table = table.dropna(subset=["momentum", "tendance", "volatilite",
-                                 "rendement_futur"])
+
+    # La liquidité ne peut pas manquer — elle vaut zéro faute d'échange —
+    # mais les cinq autres traits, si. Le rendement futur non plus ne peut
+    # pas manquer : sans lui il n'y a pas d'étiquette.
+    exigees = [t for t in TRAITS if t != "liquidite"] + ["rendement_futur"]
+    table = table[table["cotee"].fillna(False).astype(bool)]
+    table = table.dropna(subset=exigees)
     if table.empty:
         return pd.DataFrame()
 
     table.index.names = ["date", "ticker"]
-    table = table.reset_index()
+    table = table.reset_index().drop(columns="cotee")
 
     # Moins de quatre valeurs cotées, et la médiane de la séance ne sépare
     # plus rien : la séance est écartée, comme dans la boucle d'origine.
@@ -214,7 +301,12 @@ def construire_echantillon(
     bloc["rendement_futur"] = table["rendement_futur"]
     bloc["date"] = table["date"]
     bloc["ticker"] = table["ticker"]
-    return bloc.reset_index(drop=True)
+    bloc = bloc.reset_index(drop=True)
+
+    if len(_MEMO) >= _MEMO_MAX:
+        _MEMO.clear()
+    _MEMO[cle] = bloc
+    return bloc.copy()
 
 
 def _ic(scores: pd.Series, rendements: pd.Series) -> float:
@@ -235,18 +327,8 @@ def _ic(scores: pd.Series, rendements: pd.Series) -> float:
 
 
 def _score_composite(bloc: pd.DataFrame, poids: dict) -> pd.Series:
-    """La référence à battre : somme pondérée des rangs, sans apprentissage.
-
-    C'est le score de `scoring.py`, recalculé ici sur les mêmes traits. Sur
-    ce marché, un composite simple bat très souvent un modèle appris ; s'il
-    le bat encore ici, c'est lui qui doit partir en production, et le
-    module de prédiction n'est qu'une vérification coûteuse.
-    """
-    utiles = {t: p for t, p in poids.items() if t in bloc.columns}
-    if not utiles:
-        return pd.Series(0.0, index=bloc.index)
-    total = sum(abs(p) for p in utiles.values()) or 1.0
-    return sum(p * bloc[t] for t, p in utiles.items()) / total
+    """La référence à battre : somme pondérée des rangs, sans apprentissage."""
+    return apprentissage.score_composite(bloc, poids)
 
 
 def _ic_par_seance(bloc: pd.DataFrame, colonne: str) -> float:
@@ -255,12 +337,8 @@ def _ic_par_seance(bloc: pd.DataFrame, colonne: str) -> float:
     Agrégé d'un coup sur toutes les dates, il mélangerait les écarts entre
     dates avec les écarts entre valeurs — et mesurerait surtout le marché.
     """
-    return float(
-        bloc.groupby("date")
-        .apply(lambda g: _ic(g[colonne], g["rendement_futur"]),
-               include_groups=False)
-        .mean()
-    )
+    ics = apprentissage.ic_par_date(bloc, colonne)
+    return float(ics.mean()) if len(ics) else float("nan")
 
 
 def mesurer_ic(bloc: pd.DataFrame, colonne: str, horizon: int) -> dict:
@@ -283,64 +361,76 @@ def mesurer_ic(bloc: pd.DataFrame, colonne: str, horizon: int) -> dict:
     bon côté duquel se tromper quand on cherche un signal qui n'existe
     probablement pas.
     """
-    par_date = bloc.groupby("date").apply(
-        lambda g: _ic(g[colonne], g["rendement_futur"]),
-        include_groups=False,
-    ).dropna()
-
-    vide = {"ic": float("nan"), "erreur_type": float("nan"),
-            "t": float("nan"), "dates": 0, "dates_independantes": 0,
-            "significatif": False}
-    if par_date.empty:
-        return vide
-
-    moyenne = float(par_date.mean())
-    independantes = max(1, int(np.ceil(len(par_date) / max(1, horizon))))
-    if len(par_date) < 2 or independantes < 2:
-        return {**vide, "ic": moyenne, "dates": len(par_date),
-                "dates_independantes": independantes}
-
-    erreur = float(par_date.std(ddof=1) / np.sqrt(independantes))
-    t = moyenne / erreur if erreur else float("nan")
+    mesure = apprentissage.mesure_ic(
+        apprentissage.ic_par_date(bloc, colonne), horizon)
     return {
-        "ic": moyenne,
-        "erreur_type": erreur,
-        "t": t,
-        "dates": len(par_date),
-        "dates_independantes": independantes,
-        # Deux erreurs-types : le seuil usuel, et il n'est pas atteint par
-        # grand-chose sur ce marché.
-        "significatif": bool(abs(t) > 2) if erreur else False,
+        "ic": mesure["ic"],
+        "erreur_type": mesure["erreur_type"],
+        "t": mesure["t"],
+        "dates": mesure["dates"],
+        # Le nom d'origine est conservé : c'est celui que lisent l'app, la
+        # ligne de commande et les tests.
+        "dates_independantes": mesure["blocs"],
+        "significatif": mesure["significatif"],
     }
 
 
-def _valider_composite(echantillon: pd.DataFrame, poids: dict) -> float:
-    """IC du composite sur tout l'échantillon, sans découpe ni purge.
+def _stabilite(ics: list[float]) -> dict:
+    """Ce que la moyenne des périodes cache : sa propre dispersion.
 
-    Le composite n'apprend rien : ses poids sont fixés à la main dans la
-    configuration. Il n'y a donc pas d'entraînement dont une étiquette
-    pourrait déborder, et le découpage glissant n'aurait ici aucun objet —
-    il ne ferait que rétrécir l'échantillon sans rien protéger.
+    L'IR — IC moyen sur écart-type entre périodes — est la mesure de
+    fiabilité que l'ancienne validation ne rendait pas. Deux stratégies au
+    même IC moyen ne se valent pas si l'une le réalise à chaque période et
+    l'autre une fois sur deux, et c'est justement la différence entre les
+    architectures comparées dans `apprentissage.py`.
     """
-    bloc = echantillon.copy()
-    bloc["score_composite"] = _score_composite(bloc, poids)
-    return _ic_par_seance(bloc, "score_composite")
+    valeurs = np.asarray([v for v in ics if np.isfinite(v)], dtype=float)
+    if len(valeurs) == 0:
+        return {"ic": float("nan"), "ir": float("nan"), "ecart_type": float("nan"),
+                "periodes": 0, "periodes_positives": 0, "part_positives": float("nan"),
+                "pire": float("nan"), "meilleure": float("nan")}
+    ecart = float(valeurs.std(ddof=1)) if len(valeurs) > 1 else float("nan")
+    return {
+        "ic": float(valeurs.mean()),
+        "ir": float(valeurs.mean() / ecart) if ecart and ecart > 0 else float("nan"),
+        "ecart_type": ecart,
+        "periodes": len(valeurs),
+        "periodes_positives": int((valeurs > 0).sum()),
+        "part_positives": float((valeurs > 0).mean()),
+        "pire": float(valeurs.min()),
+        "meilleure": float(valeurs.max()),
+    }
 
 
-def _modele():
-    """Régression logistique standardisée, volontairement bridée.
+def _scores_des_sources(
+    train: pd.DataFrame,
+    test: pd.DataFrame,
+    traits: list[str],
+    poids_config: dict,
+    horizon: int,
+    exigence: float,
+    membres: int,
+) -> tuple[dict[str, pd.Series], dict]:
+    """Les trois sources, apprises sur `train`, appliquées sur `test`.
 
-    Pas de forêt ni de gradient boosting : sur quelques milliers de lignes
-    issues de 47 valeurs corrélées entre elles, un modèle souple apprend le
-    bruit et le restitue comme un signal. La régularisation est laissée
-    forte (C petit) pour la même raison.
+    Rien de ce qui suit ne regarde `test` autrement qu'en lui appliquant un
+    objet déjà figé : les poids de fiabilité comme les coefficients de la
+    régression sortent du seul `train`, dont les étiquettes recouvrantes
+    ont déjà été purgées par l'appelant.
     """
-    if not APPRENTISSAGE_DISPONIBLE:
-        raise ApprentissageIndisponible(MOTIF_INDISPONIBLE)
-    return make_pipeline(
-        StandardScaler(),
-        LogisticRegression(C=0.1, max_iter=1000),
-    )
+    poids_fiab = apprentissage.poids_fiabilite(train, traits, horizon, exigence)
+    sources = {
+        "fiabilite": apprentissage.score_fiabilite(test, poids_fiab),
+        "composite": apprentissage.score_composite(test, poids_config),
+    }
+    detail = {"poids_fiabilite": poids_fiab, "coefficients": {}}
+
+    if APPRENTISSAGE_DISPONIBLE:
+        ensemble = apprentissage.Ensemble(traits, horizon, membres=membres)
+        ensemble.entrainer(train)
+        sources["modele"] = ensemble.probabilites(test)
+        detail["coefficients"] = ensemble.coefficients()
+    return sources, detail
 
 
 def valider(
@@ -349,13 +439,26 @@ def valider(
     exogenes: pd.DataFrame | None = None,
     referentiel: pd.DataFrame | None = None,
 ) -> dict:
-    """Validation glissante, purgée. Renvoie mesures et détail par période."""
+    """Validation glissante, purgée. Renvoie mesures, dispersion et détail.
+
+    Ce que la fonction rend, et pourquoi chaque pièce y est :
+
+        periodes        une ligne par période de test, avec l'IC de chaque
+                        source — c'est là qu'on voit la dispersion
+        sources         par source : IC, IR, périodes positives, pire
+                        période, et le t sur blocs disjoints
+        stabilite       la même chose pour la combinaison retenue
+        retenue         ce qui part en production, et pourquoi
+        calibrage       rang combiné → probabilité, appris hors échantillon
+    """
     conf = reglages or charger()
     pred = conf.get("prediction", {})
-    poids = conf.get("ponderations", {})
+    poids_config = conf.get("ponderations", {})
     horizon = int(pred.get("horizon", 60))
-    decoupes = int(pred.get("decoupes", 4))
+    decoupes = int(pred.get("decoupes", 10))
     minimum = int(pred.get("lignes_minimum", 400))
+    exigence = float(pred.get("exigence_preuve", 4.0))
+    membres = int(pred.get("membres_sac", 8))
 
     echantillon = construire_echantillon(cours, conf)
     echantillon, exo = _joindre_exogenes(echantillon, exogenes, referentiel, conf)
@@ -367,6 +470,10 @@ def valider(
         "lignes_minimum": minimum,
         "horizon": horizon,
         "motif": None,
+        "sources": {},
+        "stabilite": _stabilite([]),
+        "retenue": "composite",
+        "calibrage": apprentissage.Calibrage(),
         "avertissements": AVERTISSEMENTS,
     }
     if len(echantillon) < minimum:
@@ -376,17 +483,11 @@ def valider(
     if len(dates) < decoupes + 2:
         return vide
 
-    # Sans scikit-learn il n'y a pas de modèle à valider, mais il reste la
-    # référence — et c'est elle qui part en production quand le modèle ne la
-    # bat pas, c'est-à-dire presque toujours ici. La renvoyer seule vaut
-    # mieux que ne rien renvoyer.
-    if not APPRENTISSAGE_DISPONIBLE:
-        return {**vide, "motif": MOTIF_INDISPONIBLE,
-                "ic_composite": _valider_composite(echantillon, poids)}
-
     frontieres = np.array_split(np.array(dates), decoupes + 1)
-    resultats = []
+    resultats: list[dict] = []
     tests: list[pd.DataFrame] = []
+    dernier_detail: dict = {"poids_fiabilite": {}, "coefficients": {}}
+
     for rang in range(1, len(frontieres)):
         test_dates = set(frontieres[rang])
         debut_test = min(frontieres[rang])
@@ -403,52 +504,96 @@ def valider(
         test = echantillon[echantillon["date"].isin(test_dates)]
         if train.empty or test.empty or train["cible"].nunique() < 2:
             continue
+        if len(train) < minimum // 2:
+            continue
 
-        modele = _modele()
-        modele.fit(train[traits], train["cible"])
         test = test.copy()
-        test["score_modele"] = modele.predict_proba(test[traits])[:, 1]
-        test["score_composite"] = _score_composite(test, poids)
+        sources, dernier_detail = _scores_des_sources(
+            train, test, traits, poids_config, horizon, exigence, membres)
+        for nom, serie in sources.items():
+            test[f"score_{nom}"] = serie
+        test["score_combinaison"] = apprentissage.combiner(sources)
 
-        ic_modele = _ic_par_seance(test, "score_modele")
-        ic_composite = _ic_par_seance(test, "score_composite")
-
-        tests.append(test)
-        prevu = (test["score_modele"] >= 0.5).astype(int)
-        resultats.append({
+        ligne = {
             "periode": f"{min(frontieres[rang])} → {max(frontieres[rang])}",
             "lignes_entrainement": len(train),
             "lignes_test": len(test),
-            "ic_modele": float(ic_modele),
-            "ic_composite": float(ic_composite),
-            "precision": float((prevu == test["cible"]).mean()),
-        })
+            "ic_combinaison": _ic_par_seance(test, "score_combinaison"),
+        }
+        for nom in SOURCES:
+            colonne = f"score_{nom}"
+            ligne[f"ic_{nom}"] = (_ic_par_seance(test, colonne)
+                                  if colonne in test.columns else float("nan"))
+        # La précision binaire est conservée parce qu'elle est lisible, et
+        # rendue avec l'IC parce que seule elle trompe : un modèle qui a
+        # raison à 51 % sur les paris serrés et tort sur les écarts nets
+        # affiche une bonne précision et perd de l'argent.
+        prevu = (test["score_combinaison"].rank(pct=True) >= 0.5).astype(int)
+        ligne["precision"] = float((prevu == test["cible"]).mean())
+        resultats.append(ligne)
+        tests.append(test)
 
     if not resultats:
         return vide
 
     periodes = pd.DataFrame(resultats)
-    ic = float(periodes["ic_modele"].mean())
-    ic_composite = float(periodes["ic_composite"].mean())
-
-    # L'incertitude se mesure sur l'ensemble des périodes de test réunies :
-    # la moyenne de quatre moyennes ne dit rien de sa propre précision.
     tout = pd.concat(tests, ignore_index=True)
-    mesure_modele = mesurer_ic(tout, "score_modele", horizon)
-    mesure_composite = mesurer_ic(tout, "score_composite", horizon)
 
+    # Par source : la moyenne, sa dispersion entre périodes, et le t sur
+    # blocs disjoints de l'ensemble des périodes réunies. La moyenne de dix
+    # moyennes ne dit rien de sa propre précision, d'où les deux.
+    detail_sources: dict[str, dict] = {}
+    for nom in ("combinaison", *SOURCES):
+        colonne = f"ic_{nom}"
+        if colonne not in periodes.columns:
+            continue
+        stab = _stabilite(list(periodes[colonne]))
+        if not np.isfinite(stab["ic"]):
+            continue
+        detail_sources[nom] = {
+            **stab, "mesure": mesurer_ic(tout, f"score_{nom}", horizon)}
+
+    stabilite = detail_sources.get("combinaison", _stabilite([]))
+
+    # LA DÉCISION DE PRODUCTION, ET ELLE EST ÉCRITE ICI PLUTÔT QUE LAISSÉE
+    # À L'UTILISATEUR. La combinaison part en production tant qu'elle
+    # montre un IC hors échantillon positif ; sinon c'est le composite,
+    # qui n'estime rien et ne peut donc pas surajuster. Un onglet qui
+    # affiche des probabilités issues d'un score dont l'IC mesuré est
+    # négatif ne présente pas une prévision, il présente un bug.
+    retenue = "combinaison" if stabilite["ic"] > 0 else "composite"
+
+    # Le calibrage s'apprend sur les prédictions HORS ÉCHANTILLON de toutes
+    # les périodes réunies — le seul endroit du calcul où la relation entre
+    # rang et fréquence de surperformance soit observable honnêtement.
+    calibrage = apprentissage.Calibrage().apprendre(
+        tout[f"score_{retenue}"].rank(pct=True), tout["cible"])
+
+    ic = float(periodes["ic_combinaison"].mean())
+    ic_composite = float(periodes["ic_composite"].mean())
     return {
         "periodes": periodes,
         "traits": traits,
         "lignes": len(echantillon),
+        "lignes_minimum": minimum,
         "horizon": horizon,
+        "motif": None if APPRENTISSAGE_DISPONIBLE else MOTIF_INDISPONIBLE,
+        # `ic` désigne ce qui part en production, c'est-à-dire la
+        # combinaison ; les noms d'origine sont conservés pour l'app et la
+        # ligne de commande.
         "ic": ic,
         "ic_composite": ic_composite,
         "ecart": ic - ic_composite,
         "precision": float(periodes["precision"].mean()),
-        "mesure": mesure_modele,
-        "mesure_composite": mesure_composite,
-        # Les traits un par un : c'est là qu'on voit sur quoi le composite
+        "mesure": mesurer_ic(tout, "score_combinaison", horizon),
+        "mesure_composite": mesurer_ic(tout, "score_composite", horizon),
+        "sources": detail_sources,
+        "stabilite": stabilite,
+        "retenue": retenue,
+        "calibrage": calibrage,
+        "poids_fiabilite": dernier_detail["poids_fiabilite"],
+        "coefficients": dernier_detail["coefficients"],
+        # Les traits un par un : c'est là qu'on voit sur quoi le classement
         # repose réellement, et le constat est sévère.
         "traits_mesures": {
             trait: mesurer_ic(tout, trait, horizon)
@@ -463,47 +608,103 @@ def predire(
     reglages: dict | None = None,
     exogenes: pd.DataFrame | None = None,
     referentiel: pd.DataFrame | None = None,
+    validation: dict | None = None,
 ) -> pd.DataFrame:
-    """Probabilité de battre la médiane, par valeur, à la dernière date.
+    """Probabilité de surperformer le marché, par valeur, à la dernière date.
 
-    Entraîné sur tout l'historique disponible. Renvoie un tableau vide si
-    l'échantillon est trop maigre — une probabilité tirée de deux cents
-    lignes serait un nombre, pas une prévision.
+    Une ligne par valeur cotée lors de la dernière séance, avec :
+
+        probabilite     calibrée hors échantillon quand `validation` est
+                        fournie, sinon le rang combiné tel quel
+        incertitude     deux écarts-types entre les membres du sac — de
+                        combien la probabilité bougerait si l'historique
+                        avait été un autre tirage de périodes
+        rang_combine    la position dans le classement, qui est ce que le
+                        module sait vraiment produire
+        et une colonne par source, pour voir laquelle porte la valeur
+
+    PASSEZ-LUI LA VALIDATION. Sans elle, la fonction rend le rang combiné
+    en guise de probabilité, ce qui donne un 100 % en tête de classement et
+    un 0 % en queue — deux nombres que l'IC mesuré n'autorise pas. Avec
+    elle, le calibrage resserre l'échelle autour de 50 %, ce qui est laid et
+    vrai.
     """
     conf = reglages or charger()
     pred = conf.get("prediction", {})
+    poids_config = conf.get("ponderations", {})
+    horizon = int(pred.get("horizon", 60))
     minimum = int(pred.get("lignes_minimum", 400))
+    exigence = float(pred.get("exigence_preuve", 4.0))
+    membres = int(pred.get("membres_sac", 8))
 
-    if not APPRENTISSAGE_DISPONIBLE:
-        return pd.DataFrame(columns=["ticker", "probabilite"])
-
+    colonnes_vides = ["ticker", "probabilite", "incertitude", "rang_combine"]
     echantillon = construire_echantillon(cours, conf)
     echantillon, exo = _joindre_exogenes(echantillon, exogenes, referentiel, conf)
-    traits_utiles = TRAITS + exo
+    traits = TRAITS + exo
     if len(echantillon) < minimum or echantillon["cible"].nunique() < 2:
-        return pd.DataFrame(columns=["ticker", "probabilite"])
+        return pd.DataFrame(columns=colonnes_vides)
 
-    modele = _modele()
-    modele.fit(echantillon[traits_utiles], echantillon["cible"])
+    # Les traits de la dernière séance, rangés dans cette séance comme dans
+    # l'échantillon. `cotee` écarte les valeurs qui n'ont pas échangé : leur
+    # cours reporté suffit à les mesurer, pas à les acheter.
+    courant = features.calculer(cours, conf)
+    if courant.empty:
+        return pd.DataFrame(columns=colonnes_vides)
+    exigees = [t for t in TRAITS if t != "liquidite"]
+    courant = courant[courant["cotee"].fillna(False).astype(bool)]
+    courant = courant.dropna(subset=[t for t in exigees if t in courant.columns])
+    if courant.empty:
+        return pd.DataFrame(columns=colonnes_vides)
 
-    traits = features.calculer(cours, conf).dropna(
-        subset=["momentum", "tendance", "volatilite"]
-    )
-    if traits.empty:
-        return pd.DataFrame(columns=["ticker", "probabilite"])
-
-    courant = pd.DataFrame({t: _rangs(traits[t]) for t in TRAITS})
-    # Les colonnes exogènes de la date courante : mêmes noms, valeur du
-    # jour, zéro hors du secteur visé.
-    for colonne in exo:
+    bloc = pd.DataFrame({t: _rangs(courant[t]) for t in TRAITS},
+                        index=courant.index)
+    # Colonnes exogènes de la date courante : mêmes noms, valeur du jour,
+    # zéro hors du secteur visé.
+    if exo:
         derniere = echantillon[echantillon["date"] == echantillon["date"].max()]
-        par_ticker = derniere.set_index("ticker")[colonne]
-        courant[colonne] = courant.index.map(par_ticker).fillna(0.0)
+        for colonne in exo:
+            par_ticker = derniere.set_index("ticker")[colonne]
+            bloc[colonne] = bloc.index.map(par_ticker).fillna(0.0)
+
+    poids_fiab = apprentissage.poids_fiabilite(
+        echantillon, traits, horizon, exigence)
+    sources = {
+        "fiabilite": apprentissage.score_fiabilite(bloc, poids_fiab),
+        "composite": apprentissage.score_composite(bloc, poids_config),
+    }
+    incertitude = pd.Series(np.nan, index=bloc.index)
+    if APPRENTISSAGE_DISPONIBLE:
+        ensemble = apprentissage.Ensemble(traits, horizon, membres=membres)
+        ensemble.entrainer(echantillon)
+        sources["modele"] = ensemble.probabilites(bloc)
+        incertitude = ensemble.dispersion(bloc)
+
+    retenue = (validation or {}).get("retenue", "combinaison")
+    score = (apprentissage.combiner(sources) if retenue == "combinaison"
+             else sources["composite"])
+    if score.empty:
+        return pd.DataFrame(columns=colonnes_vides)
+
+    rang = score.rank(pct=True)
+    calibrage = (validation or {}).get("calibrage")
+    if calibrage is not None and getattr(calibrage, "disponible", False):
+        probabilite = calibrage.appliquer(rang)
+    else:
+        probabilite = rang
+
     resultat = pd.DataFrame({
-        "ticker": traits.index,
-        "probabilite": modele.predict_proba(courant[traits_utiles])[:, 1],
+        "ticker": bloc.index,
+        "probabilite": probabilite.to_numpy(),
+        "incertitude": 2 * incertitude.to_numpy(),
+        "rang_combine": rang.to_numpy(),
     })
-    return resultat.sort_values("probabilite", ascending=False).reset_index(drop=True)
+    for nom in SOURCES:
+        if nom in sources:
+            resultat[f"rang_{nom}"] = sources[nom].rank(pct=True).to_numpy()
+    resultat["calibree"] = bool(
+        calibrage is not None and getattr(calibrage, "disponible", False))
+    return resultat.sort_values(
+        "probabilite", ascending=False).reset_index(drop=True)
 
 
 def _avec_incertitude(mesure: dict) -> str:
@@ -523,23 +724,19 @@ def _avec_incertitude(mesure: dict) -> str:
             f"(t={mesure['t']:+.1f}, {verdict})")
 
 
+LIBELLES_SOURCES = {
+    "combinaison": "combinaison (retenue)",
+    "modele": "régression logistique",
+    "fiabilite": "poids de fiabilité appris",
+    "composite": "composite de la configuration",
+}
+
+
 def expliquer(validation: dict) -> str:
     """Rendu texte. La référence n'est jamais séparée de la précision."""
-    if validation.get("motif"):
-        lignes = [validation["motif"]]
-        if "ic_composite" in validation:
-            lignes += [
-                "",
-                f"  IC du score composite  {validation['ic_composite']:+.3f}",
-                f"  ({validation['lignes']} observations, horizon "
-                f"{validation['horizon']} séances)",
-                "",
-                "Un IC exploitable se situe entre 0,02 et 0,05 ; au-delà de "
-                "0,30, cherchez une fuite avant d'y croire.",
-            ]
-        return "\n".join(lignes)
-
     if validation["periodes"].empty:
+        if validation.get("motif") and validation["lignes"] == 0:
+            return validation["motif"]
         return (
             f"Pas assez de données pour valider : {validation['lignes']} "
             f"observations, {validation['lignes_minimum']} au minimum. "
@@ -549,55 +746,93 @@ def expliquer(validation: dict) -> str:
         )
 
     m, c = validation["mesure"], validation["mesure_composite"]
-    lignes = [
+    stab = validation["stabilite"]
+    lignes = []
+    if validation.get("motif"):
+        lignes += [validation["motif"], ""]
+    lignes += [
         f"Horizon : {validation['horizon']} séances (~"
         f"{validation['horizon'] // 20} mois). {validation['lignes']} "
         f"observations, {len(validation['periodes'])} périodes de test.",
         "",
-        f"  IC du modèle           {_avec_incertitude(m)}",
+        f"  IC de la combinaison   {_avec_incertitude(m)}",
         f"  IC du score composite  {_avec_incertitude(c)}",
         f"  écart                  {validation['ecart']:+.3f}",
         f"  (précision binaire     {validation['precision']:.1%})",
         "",
-        f"L'intervalle couvre deux erreurs-types, calculées sur "
-        f"{m['dates_independantes']} périodes disjointes et non sur les "
+    ]
+
+    # LA DISPERSION, QUI EST LE VRAI SUJET. Un IC moyen sans elle laissait
+    # croire à une mesure stable là où les périodes allaient de +0,29 à
+    # -0,28.
+    lignes += [
+        "Ce que la moyenne cache — dispersion d'une période à l'autre :",
+        "",
+        f"  {'source':<26} {'IC':>7} {'IR':>6} {'périodes >0':>12} {'pire':>7}",
+        f"  {'-' * 26} {'-' * 7} {'-' * 6} {'-' * 12} {'-' * 7}",
+    ]
+    for nom, mes in validation["sources"].items():
+        lignes.append(
+            f"  {LIBELLES_SOURCES.get(nom, nom):<26} {mes['ic']:>+7.3f} "
+            f"{mes['ir']:>+6.2f} "
+            f"{mes['periodes_positives']:>5} / {mes['periodes']:<4} "
+            f"{mes['pire']:>+7.3f}")
+    lignes += [
+        "",
+        "L'IR — IC moyen divisé par son écart-type entre périodes — est la "
+        "mesure de fiabilité : deux sources au même IC ne se valent pas si "
+        "l'une le réalise à chaque période et l'autre une fois sur deux.",
+        "",
+        f"L'intervalle des IC ci-dessus couvre deux erreurs-types, calculées "
+        f"sur {m['dates_independantes']} périodes disjointes et non sur les "
         f"{m['dates']} dates de test : avec un horizon de "
         f"{validation['horizon']} séances, deux dates voisines racontent "
         "la même histoire.",
         "",
     ]
 
+    poids = validation.get("poids_fiabilite") or {}
+    if poids:
+        lignes.append("Poids appris par trait, rétrécis par la force de la preuve :")
+        for trait, valeur in sorted(poids.items(), key=lambda kv: -abs(kv[1])):
+            marque = "  (mis à zéro)" if abs(valeur) < 1e-4 else ""
+            lignes.append(f"  {trait:<14} {valeur:+.4f}{marque}")
+        lignes.append("")
+
     mesures = validation.get("traits_mesures") or {}
     if mesures:
         lignes.append("Ce que vaut chaque trait, pris séparément :")
         for trait, mes in mesures.items():
-            lignes.append(f"  {trait:<12} {_avec_incertitude(mes)}")
+            lignes.append(f"  {trait:<14} {_avec_incertitude(mes)}")
         if not any(mes["significatif"] for mes in mesures.values()):
             lignes += [
                 "",
-                "AUCUN TRAIT NE SE DISTINGUE DU HASARD. Le classement reste "
-                "une description du marché — qui a monté, qui s'échange — "
-                "mais rien ici n'autorise à en attendre un rendement.",
+                "AUCUN TRAIT NE SE DISTINGUE DU HASARD sur les seules "
+                "périodes de test. Le classement reste une description du "
+                "marché — qui a monté, qui s'échange — mais rien ici "
+                "n'autorise à en attendre un rendement.",
             ]
         lignes.append("")
-    if validation["ecart"] <= 0:
+
+    if validation["retenue"] == "composite":
         lignes.append(
-            "LE MODÈLE NE BAT PAS LE SCORE COMPOSITE. C'est le cas le plus "
-            "fréquent sur ce marché, et ce n'est pas un échec du code : "
-            "c'est le composite qui doit partir en production, l'apprentissage "
-            "n'ajoutant qu'un risque de surajustement."
+            "LA COMBINAISON N'A PAS D'IC POSITIF HORS ÉCHANTILLON : c'est le "
+            "score composite qui part en production, faute de mieux. Il "
+            "n'estime rien, donc il ne peut pas surajuster."
         )
     elif validation["ic"] > 0.30:
         lignes.append(
             "IC anormalement élevé pour ce problème : cherchez une fuite "
             "avant d'y croire. Un IC exploitable se situe entre 0,02 et 0,05."
         )
-    else:
+    elif np.isfinite(stab["ir"]):
         lignes.append(
-            "Le modèle devance le composite. Cela ne le rend pas rentable "
-            "pour autant : à 2,5–3,5 % l'aller-retour, l'écart doit survivre "
-            "aux frais avant de valoir quoi que ce soit — voir l'onglet "
-            "Backtest."
+            f"La combinaison part en production : IC {stab['ic']:+.3f}, IR "
+            f"{stab['ir']:+.2f}, positive sur {stab['periodes_positives']} "
+            f"des {stab['periodes']} périodes de test. "
+            "CELA NE LA REND PAS RENTABLE : à 3 % l'aller-retour, un écart "
+            "d'IC de cette taille ne survit pas à la rotation qu'il exige — "
+            "voir l'onglet Backtest, et l'en-tête de ce module."
         )
     lignes += [""] + [f"  - {a}" for a in validation["avertissements"]]
     return "\n".join(lignes)

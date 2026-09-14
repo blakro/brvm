@@ -541,15 +541,36 @@ def _predire(args) -> int:
     validation = prediction.valider(cours)
     print(prediction.expliquer(validation))
 
-    classement = prediction.predire(cours)
+    # La validation est PASSÉE à `predire`, et ce n'est pas une commodité :
+    # c'est elle qui porte le calibrage appris hors échantillon, et qui dit
+    # laquelle des sources part en production. Sans elle, la fonction rend
+    # le rang combiné en guise de probabilité — donc 100 % en tête de
+    # classement, un nombre que l'IC mesuré n'autorise pas.
+    classement = prediction.predire(cours, validation=validation)
     if classement.empty:
         return 1
 
     referentiel = db.lire("referentiel")
     if not referentiel.empty:
         classement = classement.merge(referentiel, on="ticker", how="left")
-    print("\nProbabilité de surperformer le marché :")
-    print(classement.head(args.nombre).to_string(index=False))
+
+    colonnes = [c for c in ["ticker", "nom", "probabilite", "incertitude",
+                            "rang_combine"] if c in classement.columns]
+    tete = classement.head(args.nombre)[colonnes].copy()
+    if "incertitude" in tete:
+        # La probabilité et sa marge dans la même case : séparées, la
+        # première voyage seule et la seconde ne voyage pas.
+        tete["probabilite"] = [
+            f"{p:.1%}" + ("" if i != i else f" ± {i:.1%}")
+            for p, i in zip(tete["probabilite"], tete["incertitude"])]
+        tete = tete.drop(columns="incertitude")
+
+    entete = ("Probabilité de surperformer le marché"
+              if classement["calibree"].all() else
+              "Rang combiné (calibrage indisponible : ce n'est PAS une "
+              "probabilité)")
+    print(f"\n{entete} :")
+    print(tete.to_string(index=False))
     return 0
 
 

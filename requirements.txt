@@ -10,8 +10,10 @@ beautifulsoup4>=4.11
 # onglet qu'on quitte, vient du même palier.
 streamlit>=1.61
 altair>=5.5
-# Ne sert qu'au modèle appris de l'onglet Prédiction. Son absence bride cet
-# onglet et rien d'autre : le module la charge en import optionnel, pour
-# qu'un environnement incomplet ne fasse plus tomber les cinq onglets.
+# Ne sert qu'à UNE des trois sources de la prédiction — la régression
+# logistique — et au calibrage des probabilités. Les deux autres sources
+# sont du pandas : sans scikit-learn la section rend encore un classement,
+# et le dit. Chargée en import optionnel, pour qu'un environnement
+# incomplet ne fasse pas tomber les cinq onglets.
 scikit-learn>=1.3
 -e .
