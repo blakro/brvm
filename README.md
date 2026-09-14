@@ -186,7 +186,7 @@ Trois changements, par ordre d'importance :
    logistique, des poids par trait appris puis rétrécis vers zéro selon la
    force de leur preuve, et le composite de la configuration.
 
-Et **trois idées reçues, mesurées puis jetées** — elles sont documentées
+Et **quatre idées reçues, mesurées puis jetées** — elles sont documentées
 dans `src/brvm/apprentissage.py`, parce qu'un échec qu'on ne consigne pas
 sera retenté :
 
@@ -206,6 +206,16 @@ sera retenté :
   seule fenêtre d'entraînement rendent moins que de ne rien sélectionner.
   L'écart entre +0,076 et +0,044 est la mesure exacte de ce qu'un
   backtest gagne à tricher.
+- **Le gradient boosting et les forêts.** Huit configurations, du plus
+  bridé au plus libre : la meilleure rend +0,031 contre +0,044 pour la
+  régression logistique, et la forêt la moins bridée est la plus mauvaise
+  des huit. Quand la meilleure case d'un balayage perd de 29 %, il n'y a
+  pas de case à cueillir. La raison est plus utile que le verdict : les
+  traits sont des rangs centiles, donc un arbre ne gagne rien sur une
+  transformation monotone, et il n'y a pas d'interaction à trouver — les
+  15 produits croisés et les carrés donnés à la régression déplacent l'IC
+  de 0,005, contre une erreur-type de 0,03. L'arbre paie une variance pour
+  chercher ce qui n'est pas là.
 
 **Deux réserves, plus importantes que le tableau.** D'abord +0,045 n'est
 pas significatif : le t vaut 1,5 là où il en faudrait 2. Le signe a
