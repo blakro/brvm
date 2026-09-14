@@ -3,8 +3,9 @@
 `prediction.py` pose la question et juge la réponse ; ce module fabrique la
 réponse. La séparation n'est pas décorative — elle permet de mesurer chaque
 brique contre les autres, et c'est en les mesurant qu'on a découvert que
-trois des recettes usuelles de la fiabilité — l'ensemble, l'empilement, la
-sélection de traits — ne fonctionnent pas ici, et pourquoi.
+quatre des recettes usuelles de la fiabilité — l'ensemble, l'empilement, la
+sélection de traits, les modèles à arbres — ne fonctionnent pas ici, et
+pourquoi.
 
 CE QUI A ÉTÉ MESURÉ, ET CE QUI A ÉTÉ JETÉ
 -----------------------------------------
@@ -83,15 +84,64 @@ documente.
    RÉTRÉCIS, et à condition de servir de SOURCE et non de sélecteur. Voir
    `poids_fiabilite`.
 
-CE QUE CE MODULE NE FAIT PAS
-----------------------------
-Ni forêt, ni gradient boosting, ni réseau. Ce n'est pas de la timidité :
-sur quarante-deux périodes indépendantes et six traits, un modèle souple a
-assez de degrés de liberté pour mémoriser l'échantillon entier. Et la
-puissance n'a jamais été ce qui manquait — la même régression logistique,
-sur l'univers non corrigé et les quatre traits d'origine, rend un IC de
--0,056 ; ce n'est pas son manque de souplesse qui l'en empêchait, ce sont
-ses données et ses entrées. Le risque ici n'est pas de manquer de
+NI FORÊT, NI GRADIENT BOOSTING — ET C'EST MESURÉ, PAS ARGUMENTÉ
+---------------------------------------------------------------
+Cette section affirmait qu'un modèle souple surajusterait ici. Un argument
+n'est pas une mesure, et celui-là est le plus facile à contester : « vous
+n'avez pas essayé ». Essayé, donc, sous le protocole ci-dessus, du plus
+bridé au plus libre :
+
+    régression logistique (livrée)      IC +0,0437   IR 0,66   7/10
+    ---
+    GBM défauts                         IC +0,0309   IR 0,46   6/10
+    GBM modéré                          IC +0,0302   IR 0,52   7/10
+    GBM libre                           IC +0,0295   IR 0,45   6/10
+    GBM bridé                           IC +0,0280   IR 0,45   6/10
+    GBM très bridé                      IC +0,0276   IR 0,35   6/10
+    forêt bridée                        IC +0,0299   IR 0,37   6/10
+    forêt modérée                       IC +0,0265   IR 0,37   6/10
+    forêt libre                         IC +0,0197   IR 0,32   6/10
+
+Aucune des huit configurations n'approche la régression, ni en IC ni en IR.
+La conclusion ne demande même pas de se méfier du choix d'hyperparamètres :
+quand la MEILLEURE case d'un balayage perd de 29 %, il n'y a pas de case à
+cueillir. Et la forêt la moins bridée est la plus mauvaise des huit, ce qui
+est la signature du surajustement plutôt que du hasard.
+
+POURQUOI, ET C'EST LA PARTIE UTILE. Un arbre n'apporte rien sur une
+transformation monotone — les traits sont déjà des rangs centiles, qui en
+sont une. Son seul avantage possible est de capter ce qu'une somme pondérée
+ne peut pas : une interaction (« le choc de volume ne paie que quand la
+volatilité est basse ») ou une non-monotonie. On a donc cherché ces effets
+directement, en les donnant à la régression sous forme lisible :
+
+    traits seuls (livré)                IC +0,0437   IR 0,66
+    + 15 produits croisés               IC +0,0456   IR 0,62
+    + carrés (non-monotonie)            IC +0,0448   IR 0,76
+    + croisés ET carrés                 IC +0,0484   IR 0,69
+
+Tout tient dans une bande de 0,005, contre une erreur-type de 0,03. Il n'y
+a pas d'interaction à trouver : l'arbre n'est pas battu parce qu'il est mal
+réglé, il est battu parce qu'il paie une variance pour chercher quelque
+chose qui n'est pas là.
+
+RESTAIT UNE AVENUE : un modèle médiocre seul peut valoir dans un mélange
+s'il se trompe ailleurs que les autres. La condition est remplie — la
+corrélation de rang entre le GBM et la régression n'est que de 0,37 — et
+pourtant l'ajouter en quatrième source ne change rien :
+
+    3 sources (livrée)                  IC +0,0453   IR 0,51   pire -0,094
+    4 sources, avec GBM                 IC +0,0451   IR 0,53   pire -0,070
+
+La pire période s'adoucit de deux points et demi, et c'est le seul gain
+candidat. Il repose sur UN nombre tiré de dix périodes, là où l'IC ne bouge
+pas et l'IR bouge dans le bruit. Ce n'est pas assez pour ajouter une
+dépendance, quatre secondes de calcul par ajustement et un mode de panne.
+
+Et la puissance n'a jamais été ce qui manquait : la même régression
+logistique, sur l'univers non corrigé et les quatre traits d'origine, rend
+un IC de -0,056. Ce n'est pas son manque de souplesse qui l'en empêchait,
+ce sont ses données et ses entrées. Le risque ici n'est pas de manquer de
 puissance, il est d'en avoir trop.
 """
 
