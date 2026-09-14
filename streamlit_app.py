@@ -26,8 +26,8 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from brvm import (backtest, db, dividende, features, pedagogie, prediction,
-                  qualite, scoring)
+from brvm import (backtest, conseil, db, dividende, features, pedagogie,
+                  prediction, qualite, scoring)
 from brvm.config import DEFAUTS
 from brvm.ingestion import brvm_org
 
@@ -532,6 +532,35 @@ def calculer_backtest(_cours, _referentiel, _fondamentaux, _dividendes,
                       "frais_pourcent": frais, "impact_pourcent": impact}},
         fondamentaux=_fondamentaux, dividendes=_dividendes,
     )
+
+
+@st.cache_data(max_entries=4, show_spinner=False)
+def echantillon_prediction(_cours, archive, univers):
+    """L'échantillon de prédiction, pour en tirer la dispersion transversale.
+
+    Mémoïsé ici en plus du mémo interne de `prediction` : la dispersion sert
+    à chaque mouvement de curseur de frais, et reconstruire cent mille lignes
+    pour un écart-type serait payer très cher un nombre qui ne change pas.
+    """
+    return prediction.construire_echantillon(_cours, DEFAUTS)
+
+
+@st.cache_data(max_entries=8, show_spinner="Arithmétique de l'arbitrage…")
+def calculer_conseil(_cours, _classement, _mesure, dispersion, archive, univers,
+                     detenu, frais, impact, positions, prudence):
+    """Acheter, conserver, vendre — aux frais que l'utilisateur a saisis.
+
+    Les frais entrent dans la clé de cache : c'est le paramètre dont toute la
+    réponse dépend, et deux niveaux différents doivent donner deux résultats
+    différents sans qu'on lise celui de l'autre.
+    """
+    reglages = {"analyse": DEFAUTS["analyse"],
+                "ponderations": DEFAUTS["ponderations"],
+                "backtest": {**DEFAUTS["backtest"], "positions": positions,
+                             "frais_pourcent": frais, "impact_pourcent": impact}}
+    return conseil.conseiller(_classement, detenu=list(detenu), mesure=_mesure,
+                              dispersion_=dispersion, reglages=reglages,
+                              prudence=prudence)
 
 
 @st.cache_data(max_entries=4, show_spinner="Recherche du seuil de frais…")
@@ -1503,6 +1532,126 @@ if onglets[2].open:
 
         _glossaire("momentum", "tendance", "volatilite", "liquidite", "score",
                    "rang", "dividende", "rendement", "frais")
+
+
+# --- Conseil --------------------------------------------------------------
+# LA SECTION QUI RÉPOND À LA QUESTION QU'ON SE POSE VRAIMENT. Le classement
+# dit qui est devant ; il ne dit pas s'il faut vendre ce qu'on détient pour
+# l'acheter. Cette réponse dépend de trois choses que le classement ignore :
+# ce que vous avez, ce que l'arbitrage rapporterait, et ce qu'il coûte chez
+# VOTRE intermédiaire — lequel change d'un pays de l'UEMOA à l'autre.
+#
+# Elle passe AVANT la prédiction : c'est la sortie actionnable, et la
+# hiérarchie de la page doit dire ce qui sert.
+if onglets[2].open:
+    with onglets[2]:
+        st.divider()
+        st.subheader("Que faire, concrètement")
+        st.caption(
+            "Un classement ne dit pas s'il faut vendre. Un arbitrage ne se "
+            "fait que si son gain attendu dépasse ses frais — et sur cette "
+            "place les frais se comptent en **pourcents**, pas en points de "
+            "base. Saisissez ce que vous détenez et ce que votre SGI vous "
+            "facture."
+        )
+        saisie = st.columns([3, 1, 1])
+        detenu = saisie[0].multiselect(
+            "Ce que vous détenez", options=list(classement["ticker"])
+            if not classement.empty else [],
+            key="cs_detenu", persist_state="session",
+            help="Laissez vide pour savoir quoi acheter en partant de zéro.")
+        frais_cs = saisie[1].number_input(
+            "Frais par sens (%)", 0.0, 5.0, 1.0, 0.05, key="cs_frais",
+            persist_state="session",
+            help="Ce que votre SGI facture à l'achat comme à la vente. Il "
+                 "varie fortement d'un intermédiaire et d'un pays à l'autre.")
+        impact_cs = saisie[2].number_input(
+            "Impact (%)", 0.0, 5.0, 0.5, 0.05, key="cs_impact",
+            persist_state="session",
+            help="Écart entre le cours affiché et le cours obtenu, sur des "
+                 "lignes qui ne s'échangent pas tous les jours.")
+
+        if classement.empty:
+            st.info("Aucune valeur classée : il faut un an de cotation avant "
+                    "que la première soit classable.")
+        else:
+            prudence = not st.toggle(
+                "Employer l'IC ponctuel plutôt que sa borne basse",
+                value=False, key="cs_ponctuel", persist_state="session",
+                help="Par défaut, le gain attendu est calculé sur la borne "
+                     "basse de l'intervalle de confiance de l'IC : c'est ce "
+                     "qu'on peut défendre face à un coût certain. L'IC "
+                     "ponctuel fait recommander des arbitrages que la preuve "
+                     "ne soutient pas.")
+            validation_cs = valider_modele(cours_filtre, referentiel_filtre,
+                                           ARCHIVE, UNIVERS)
+            echantillon_cs = echantillon_prediction(cours_filtre, ARCHIVE, UNIVERS)
+            avis = calculer_conseil(
+                cours_filtre, classement, validation_cs.get("mesure"),
+                conseil.dispersion(echantillon_cs), ARCHIVE, UNIVERS,
+                tuple(detenu), frais_cs, impact_cs,
+                int(DEFAUTS["backtest"]["positions"]), prudence)
+
+            tuiles = st.columns(3)
+            _tuile(tuiles[0], "IC employé", f"{avis['ic']:+.4f}",
+                   sens=1 if avis["ic"] > 0 else -1,
+                   note="borne basse de l'intervalle à 95 %" if prudence
+                        else "estimation ponctuelle")
+            seuil_cs = avis["ecart_minimal"]
+            _tuile(tuiles[1], "Écart de score requis",
+                   "aucun ne suffit" if seuil_cs == float("inf")
+                   else f"{seuil_cs:.2f}",
+                   note=f"aller-retour à {2 * avis['cout']:.2%}")
+            _tuile(tuiles[2], "Arbitrages qui se paient",
+                   f"{avis['arbitrages']}",
+                   sens=1 if avis["arbitrages"] else 0,
+                   note="sur votre portefeuille, à vos frais")
+
+            if avis["arbitrages"] == 0:
+                st.success(
+                    "**Conseil : ne rien faire.** Ce n'est pas une absence de "
+                    "réponse. Le classement distingue bien des valeurs, mais "
+                    "l'écart qu'il mesure entre elles est plus petit que ce "
+                    "que coûte le fait d'y réagir. Sur cette place, "
+                    "l'inaction est la décision la plus souvent correcte."
+                )
+            else:
+                st.warning(
+                    f"**{avis['arbitrages']} arbitrage(s) couvrent leurs "
+                    "frais.** Le gain et les frais affichés sont ceux de la "
+                    "PAIRE : les deux jambes portent le même net, qui est "
+                    "celui de la décision."
+                )
+
+            if not avis["lignes"].empty:
+                st.dataframe(
+                    avis["lignes"].style.map(
+                        lambda v: _fond_divergent(v, plafond=0.02),
+                        subset=["net"]),
+                    width="stretch", hide_index=True,
+                    column_config={
+                        "ticker": st.column_config.TextColumn("Symbole"),
+                        "nom": st.column_config.TextColumn("Société"),
+                        "detenu": st.column_config.CheckboxColumn("Détenu"),
+                        "rang": st.column_config.NumberColumn("Rang",
+                                                              format="%d"),
+                        "action": st.column_config.TextColumn("Action"),
+                        "paire": st.column_config.TextColumn("Échangée avec"),
+                        "gain_attendu": st.column_config.NumberColumn(
+                            "Gain attendu", format="percent",
+                            help="IC × dispersion transversale × écart de "
+                                 "score. Pour un échange, le gain de la paire."),
+                        "cout": st.column_config.NumberColumn(
+                            "Frais", format="percent"),
+                        "net": st.column_config.NumberColumn(
+                            "Net", format="percent"),
+                        "motif": st.column_config.TextColumn("Motif"),
+                    })
+                _telecharger(avis["lignes"], "conseil.csv", "dl_conseil")
+
+            st.error("**Ce que ceci n'est pas.** "
+                     + " ; ".join(avis["avertissements"]) + ".")
+        _glossaire("score", "rang", "frais", "ic", "rotation")
 
 
 # --- Prédiction -----------------------------------------------------------
