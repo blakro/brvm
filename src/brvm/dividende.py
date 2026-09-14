@@ -304,6 +304,252 @@ def rendement_courant(
     return (glissant / prix.replace(0, np.nan)).replace([np.inf, -np.inf], np.nan)
 
 
+# Bandes de rendement du dividende pour le diagnostic d'ajustement. Les
+# bornes ne sont pas arbitraires : elles encadrent la limite de variation de
+# ±7,5 % par séance, qui est l'explication qu'on cherche à confirmer ou à
+# écarter.
+BANDES_RENDEMENT = ((0.0, 0.05), (0.05, 0.075), (0.075, 0.15), (0.15, PLAFOND_RENDEMENT))
+
+
+def ajustement(cours: pd.DataFrame, dividendes: pd.DataFrame,
+               fenetres: tuple[int, ...] = (1, 2, 5, 10, 20, 40)) -> dict:
+    """Le cours reflète-t-il vraiment le dividende qu'il vient de détacher ?
+
+    POURQUOI CETTE MESURE EXISTE, ET CE QU'ELLE A ÉVITÉ
+    ---------------------------------------------------
+    Un rendement total se calcule en ajoutant le dividende au rendement du
+    cours. L'opération suppose une chose qu'on ne vérifiait pas : que le
+    cours archivé ait BAISSÉ du montant détaché. Si le cours ne baisse que
+    de la moitié, l'addition fabrique la moitié restante — un rendement qui
+    n'a jamais été touché par personne.
+
+    Mesuré sur l'archive, 261 détachements confrontés au cours de la veille,
+    nets de la tendance du marché. La part reflétée est la SOMME des baisses
+    rapportée à la SOMME des dividendes — voir `_part_refletee` pour
+    pourquoi ce n'est pas une moyenne de rapports :
+
+        séances après le détachement    1    2    5   10   20   40
+        part du dividende reflétée     42 % 46 % 56 % 69 % 77 % 88 %
+
+    L'ajustement se fait, mais lentement, et à deux séances il manque plus
+    de la moitié. Et il en manque partout, pas seulement sur les gros
+    dividendes :
+
+        dividende versé      0-5 %   5-7,5 %   7,5-15 %   15-40 %
+        reflété à 2 séances   48 %      54 %       54 %      32 %
+
+    LA PREMIÈRE VERSION DE CE DIAGNOSTIC CONCLUAIT « UTILISABLE », et
+    l'erreur vaut d'être consignée. Elle lisait la médiane des cas à
+    quarante séances — 95 % — et non l'agrégat à deux séances. Deux fautes
+    qui allaient dans le même sens : la médiane décrit le détachement
+    typique là où la question porte sur ce qu'une étiquette fabrique sur des
+    milliers de lignes, et quarante séances mesurent deux mois de marché
+    ordinaire bien plus que le détachement. Une mesure trop longue et une
+    statistique trop clémente suffisent à valider ce qu'il fallait refuser.
+
+    CE QU'ON NE PEUT PAS SÉPARER, et qu'il faut dire. Plusieurs causes
+    concourent et l'archive ne permet pas de les départager : la limite de
+    variation de ±7,5 % par séance, qui interdit à un dividende de 9 % de
+    tomber d'un coup — 132 détachements sur 261 la dépassent ; les séances
+    sans échange, où le cours reporté garde la valeur d'avant détachement ;
+    et d'éventuelles incompatibilités d'échelle entre montants publiés et
+    cours archivés, dont ce dépôt a déjà rencontré la trace ailleurs (voir
+    les séances fantômes de `qualite.py`). Il reste aussi possible qu'une
+    part du manque soit réelle : sur les places de frontière, l'ajustement
+    incomplet au détachement est documenté. Non séparable veut dire non
+    exploitable.
+
+    CE QUE ÇA INTERDIT. Toute étiquette de rendement total sur cette archive
+    crédite un dividende que le cours n'a pas rendu — plus de la moitié, en
+    agrégat. Un trait qui prédit « un détachement approche » prédit alors ce
+    rendement fantôme et non un gain : mesuré, « jours depuis le dernier
+    détachement » rend un IC de +0,098 avec un t de +2,5 contre une
+    étiquette totale, sur les seules lignes couvertes. Entièrement
+    artificiel. C'est ce diagnostic qui l'a démasqué, et c'est pour cela que
+    `prediction.construire_echantillon` garde une étiquette de cours nu.
+
+    Rend la part reflétée par fenêtre, la même par bande de rendement, et le
+    nombre de détachements confrontés.
+    """
+    prix = features.serie(cours)
+    vide = {"detachements": 0, "rendement_moyen": float("nan"),
+            "par_fenetre": {}, "par_bande": {}, "utilisable": False}
+    if prix.empty or dividendes is None or dividendes.empty:
+        return vide
+
+    dates = list(prix.index)
+    rang = {date: i for i, date in enumerate(dates)}
+    # La tendance du marché est retirée : sans cela, une chute générale sur
+    # la période serait comptée comme un ajustement au dividende.
+    marche = prix.pct_change().mean(axis=1).fillna(0.0).cumsum().to_numpy()
+
+    div = dividendes.dropna(subset=["date_detachement", "montant"]).copy()
+    div["date_detachement"] = div["date_detachement"].astype(str)
+    lignes = []
+    for ligne in div.itertuples():
+        ticker, jour = ligne.ticker, ligne.date_detachement
+        if ticker not in prix.columns or jour not in rang:
+            continue
+        i = rang[jour]
+        if i < 1:
+            continue
+        veille = prix[ticker].iloc[i - 1]
+        if not (np.isfinite(veille) and veille > 0):
+            continue
+        rendement = float(ligne.montant) / veille
+        # Le plafond écarte les incompatibilités d'échelle, pas les
+        # dividendes généreux — voir PLAFOND_RENDEMENT.
+        if not 0 < rendement < PLAFOND_RENDEMENT:
+            continue
+        mesure = {"rendement": rendement}
+        for fenetre in fenetres:
+            j = i - 1 + fenetre
+            if j >= len(dates):
+                mesure[fenetre] = np.nan
+                continue
+            cours_apres = prix[ticker].iloc[j]
+            if not np.isfinite(cours_apres):
+                mesure[fenetre] = np.nan
+                continue
+            variation = (cours_apres / veille - 1) - (marche[j] - marche[i - 1])
+            # LA BAISSE, PAS LE RATIO. Moyenner des rapports dont le
+            # dénominateur peut valoir 1 % donne n'importe quoi : un
+            # dividende de 3 % assorti d'une baisse de 60 % rend « 2 000 %
+            # de reflet ». On garde les deux grandeurs et on agrège
+            # ensuite — voir `_part_refletee`.
+            mesure[fenetre] = -variation
+        lignes.append(mesure)
+
+    if not lignes:
+        return vide
+    table = pd.DataFrame(lignes)
+
+    def _part_refletee(part: pd.DataFrame, fenetre: int) -> float:
+        """Somme des baisses rapportée à la somme des dividendes.
+
+        LE RAPPORT DES AGRÉGATS, et non la moyenne des rapports. C'est la
+        grandeur qui gouverne le rendement fantôme d'une étiquette totale :
+        sur mille lignes, ce qui se fabrique est la somme de ce qui n'est
+        pas tombé, divisée par la somme de ce qui a été versé. Une moyenne
+        de ratios répondrait à une autre question, et mal.
+        """
+        propre = part[["rendement", fenetre]].dropna()
+        total = propre["rendement"].sum()
+        if total <= 0:
+            return float("nan")
+        return float(propre[fenetre].sum() / total)
+    # LA MOYENNE ET LA MÉDIANE, PARCE QU'ELLES NE DISENT PAS LA MÊME CHOSE ET
+    # QUE LA DIFFÉRENCE A FAILLI FAIRE CONCLURE À L'ENVERS. À quarante
+    # séances, la médiane vaut 95 % et la moyenne 78 % : une minorité de
+    # détachements très mal reflétés tire la seconde. Or la question posée
+    # — « une étiquette de rendement total fabrique-t-elle du rendement ? »
+    # — porte sur l'AGRÉGAT de milliers de lignes, donc sur la moyenne. Un
+    # diagnostic bâti sur la médiane rassurait à tort.
+    par_fenetre = {int(f): {
+        "agregat": _part_refletee(table, f),
+        # La médiane des cas individuels, pour information seulement : elle
+        # décrit le détachement typique, pas ce qu'une étiquette fabrique.
+        # À quarante séances elle vaut 95 % là où l'agrégat vaut 78 %, et
+        # s'y fier faisait conclure à l'envers.
+        "mediane_des_cas": float((table[f] / table["rendement"]).median()),
+    } for f in fenetres if f in table and table[f].notna().any()}
+
+    # LE VERDICT SE PREND SUR UNE FENÊTRE COURTE, et c'est un choix de
+    # méthode. Plus la fenêtre s'allonge, moins ce qu'on mesure a de rapport
+    # avec le détachement : à quarante séances, deux mois de marché ordinaire
+    # noient l'effet et on lit des « 185 % de reflet » qui ne sont que du
+    # bruit. Deux séances laissent à la limite de ±7,5 % le temps d'agir
+    # deux fois, et restent assez proches pour que l'attribution tienne.
+    reference = min(f for f in par_fenetre) if par_fenetre else None
+    for candidat in (2, 1):
+        if candidat in par_fenetre:
+            reference = candidat
+            break
+
+    par_bande = {}
+    for bas, haut in BANDES_RENDEMENT:
+        part = table[(table["rendement"] >= bas) & (table["rendement"] < haut)]
+        if len(part) < 5 or reference is None or reference not in part:
+            continue
+        par_bande[(bas, haut)] = {
+            "detachements": len(part),
+            "rendement_moyen": float(part["rendement"].mean()),
+            "part_refletee": _part_refletee(part, reference),
+        }
+    refletee = (par_fenetre[reference]["agregat"]
+                if reference is not None else float("nan"))
+    return {
+        "detachements": len(table),
+        "rendement_moyen": float(table["rendement"].mean()),
+        "par_fenetre": par_fenetre,
+        "par_bande": par_bande,
+        "fenetre_verdict": reference,
+        "part_refletee": refletee,
+        # LE VERDICT, BINAIRE PAR DESSEIN. Sous 90 % de reflet, une étiquette
+        # de rendement total crédite plus d'un point de rendement fantôme par
+        # détachement — sur un dividende moyen de 9 %, c'est près de six
+        # points. Ce n'est pas une imprécision à mentionner en note, c'est
+        # une mesure à ne pas faire.
+        "utilisable": bool(np.isfinite(refletee) and refletee >= 0.90),
+    }
+
+
+def expliquer_ajustement(resultat: dict) -> str:
+    """Rendu texte. Le verdict d'utilisabilité n'est jamais séparé du chiffre."""
+    if not resultat["detachements"]:
+        return ("Aucun détachement confrontable au cours : calendrier absent, "
+                "ou dates hors de l'archive.")
+    lignes = [
+        f"{resultat['detachements']} détachements confrontés au cours de la "
+        f"veille, nets de la tendance du marché.",
+        f"Rendement moyen détaché : {resultat['rendement_moyen']:+.2%}.",
+        "",
+        "  séances après " + "".join(f"{f:>8}" for f in resultat["par_fenetre"]),
+        "  reflété (agrég.)" + "".join(f"{m['agregat']:>6.0%} " for m in
+                                       resultat["par_fenetre"].values()),
+        "  cas médian     " + "".join(f"{m['mediane_des_cas']:>6.0%} " for m in
+                                      resultat["par_fenetre"].values()),
+        "",
+        "  L'agrégat décide — somme des baisses sur somme des dividendes : "
+        "c'est lui",
+        "  qui gouverne ce qu'une étiquette totale fabrique sur des milliers de",
+        f"  lignes. Le verdict se prend à {resultat['fenetre_verdict']} séances, "
+        "parce qu'au-delà c'est le",
+        "  marché qu'on mesure et non le détachement.",
+    ]
+    if resultat["par_bande"]:
+        lignes += ["", "  par taille du dividende détaché :"]
+        for (bas, haut), mesure in resultat["par_bande"].items():
+            lignes.append(
+                f"    {bas:>5.0%}–{haut:<5.0%} {mesure['detachements']:>4} cas, "
+                f"versé {mesure['rendement_moyen']:+.1%}, reflété à "
+                f"{mesure['part_refletee']:.0%}")
+        lignes += [
+            "",
+            "Le manque est partout, pas seulement sur les gros dividendes : "
+            "même sous la",
+            "limite de ±7,5 % par séance, il manque la moitié. Plusieurs "
+            "causes concourent",
+            "— la limite, les séances sans échange, d'éventuels écarts "
+            "d'échelle entre",
+            "montants publiés et cours archivés — et l'archive ne permet pas "
+            "de les départager.",
+        ]
+    lignes += [""]
+    if resultat["utilisable"]:
+        lignes.append(
+            "UTILISABLE : le cours reflète le dividende. Une étiquette de "
+            "rendement total ne fabriquerait rien.")
+    else:
+        lignes.append(
+            "INUTILISABLE POUR UN RENDEMENT TOTAL. Ajouter le dividende au "
+            "rendement du cours créditerait ce que le cours n'a pas rendu, "
+            "d'autant plus que le dividende est gros. Un trait qui prédit "
+            "l'approche d'un détachement prédirait alors ce rendement "
+            "fantôme : c'est arrivé, voir la docstring d'`ajustement`.")
+    return "\n".join(lignes)
+
+
 # Valeur critique de Dickey-Fuller à 5 %, régression avec constante sans
 # tendance. En deçà, l'hypothèse « la série n'a pas de moyenne où revenir »
 # n'est pas rejetée.

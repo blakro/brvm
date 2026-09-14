@@ -275,6 +275,55 @@ pour amortir un aller-retour à 3 %, et le choc de volume retombe au pur
 hasard en deux périodes. On ne peut pas détenir pour amortir un frais quand
 ce qu'on détient a cessé d'être bon.
 
+### 6. Les dividendes : l'archive n'est pas encore utilisable
+
+C'était la piste la plus prometteuse — le dividende fait 7 à 10 % du
+rendement annuel contre 2,8 % pour le cours, et 309 détachements datés
+dormaient en base sans que la prédiction s'en serve. Elle est fermée, pour
+une raison qu'il valait la peine de mesurer.
+
+L'étiquette de la prédiction est un rendement de **cours**. La corriger en
+rendement **total** fait passer l'IC de +0,045 (t 1,5) à **+0,079 (t 2,3)** —
+le seuil de signification franchi pour la première fois. Le chiffre ne vaut
+rien :
+
+- **La couverture.** 26 % des lignes n'ont aucun dividende connu et
+  reçoivent donc zéro. Ce zéro n'est pas une société qui n'a rien versé :
+  sur les 16 années-sociétés non datées que les fondamentaux peuvent
+  arbitrer, **16 versaient bien un dividende**. C'est une donnée manquante
+  déguisée en fait. Restreinte aux lignes couvertes, l'amélioration retombe
+  à +0,050 (t 1,52) — non significative.
+- **Le cours ne reflète pas ce qu'il détache.** `python -m brvm rendement
+  --ajustement` le mesure : deux séances après un détachement, le cours
+  archivé n'a rendu que **46 %** du dividende versé, en agrégat.
+
+| Séances après le détachement | 1 | 2 | 5 | 10 | 20 | 40 |
+|---|---|---|---|---|---|---|
+| Part du dividende reflétée | 42 % | 46 % | 56 % | 69 % | 77 % | 88 % |
+
+Ajouter le dividende entier crédite donc la moitié qui n'est jamais tombée.
+Et tout trait qui prédit « un détachement approche » prédit alors ce
+**rendement fantôme** : « jours depuis le dernier détachement » rend ainsi un
+IC de +0,098 et un t de +2,5, entièrement artificiel. C'est le diagnostic qui
+l'a démasqué.
+
+Plusieurs causes concourent sans qu'on puisse les départager : la limite de
+variation de ±7,5 % par séance, qui interdit à un dividende de 9 % de tomber
+d'un coup ; les séances sans échange, où le cours reporté garde la valeur
+d'avant détachement ; d'éventuels écarts d'échelle entre montants publiés et
+cours archivés. Non séparable veut dire non exploitable.
+
+Les cinq traits tirés du calendrier — rendement, croissance, régularité,
+temps depuis le détachement, saisonnalité — mesurés contre l'étiquette de
+cours, donnent tous entre −0,018 et +0,006 d'IC, |t| au plus 0,5, positifs
+quatre à cinq années sur onze. Aucun n'entre dans le modèle.
+
+Le verrou n'est donc ni le modèle ni le trait : il faut un calendrier de
+détachements **complet** et un cours qui les **reflète**. Le jour où
+`python -m brvm rendement --ajustement` répondra « utilisable », cette
+section sera à refaire — et c'est le seul endroit du projet où il reste un
+gain probable à prendre.
+
 ### Ce que ça change pour vous
 
 Sur un marché où toute stratégie qui tourne plus de quelques fois par an
@@ -310,7 +359,7 @@ src/brvm/
   prediction.py             la prédiction : échantillon, validation, rendu
   apprentissage.py          son cœur appris : poids, ensemble, combinaison
   recherche.py              balayage systématique des prédicteurs
-  dividende.py              logique des détachements
+  dividende.py              détachements, et si le cours les reflète
   exogene.py                séries externes
   qualite.py                détection des anomalies d'archive
   pedagogie.py              les textes explicatifs de l'app
@@ -319,7 +368,7 @@ src/brvm/
     sikafinance.py            l'historique
     dividendes.py             les calendriers de dividendes
 
-tests/                    272 tests, tous hors ligne
+tests/                    276 tests, tous hors ligne
   donnees/                  captures réelles de pages web, servant de témoins
 
 .github/workflows/
@@ -445,6 +494,8 @@ python -m brvm noter         # classe les valeurs
 python -m brvm rechercher --valeurs   # quel prédicteur marche, et où
 python -m brvm predire       # probabilité de surperformance à 3 mois
 python -m brvm rendement     # retour à la moyenne du rendement du dividende
+python -m brvm rendement --ajustement
+                             # le cours reflète-t-il le dividende détaché ?
 python -m brvm backtester    # rejoue le classement dans le temps
 python -m brvm backtester --signal choc_volume --seuil-frais
                              # à partir de quels frais ce signal cesse de payer
