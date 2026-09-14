@@ -231,6 +231,8 @@ def test_la_section_prediction_se_rend_sans_lever(lanceur):
     def rendue(*exigees):
         return any(set(exigees) <= c for c in colonnes)
 
+    assert rendue("ticker", "action", "paire", "net"), \
+        "table de conseil absente — acheter/conserver/vendre n'est pas rendu"
     assert rendue("source", "IC", "IR", "pire période"), \
         "table de dispersion par source absente"
     assert rendue("trait", "IC", "poids retenu"), \

@@ -324,6 +324,63 @@ détachements **complet** et un cours qui les **reflète**. Le jour où
 section sera à refaire — et c'est le seul endroit du projet où il reste un
 gain probable à prendre.
 
+### 7. Ce que l'application vous dit de faire
+
+Tout ce qui précède mesure. Cette section-ci décide — parce qu'un classement
+ne répond pas à la question qu'on se pose vraiment : *dois-je vendre ce que
+je détiens pour acheter ce qui est devant ?*
+
+```bash
+python -m brvm conseiller --detenu SGBC BOAC SNTS --frais 1.0 --impact 0.5
+```
+
+La règle est celle de n'importe quel arbitrage : **il ne se fait que si son
+gain attendu dépasse son coût.** Le gain se calcule (relation de Grinold) :
+
+    gain = IC × dispersion transversale × écart de score
+
+L'IC vient de la validation, la dispersion de l'archive, les frais de **votre
+SGI** — et c'est le seul paramètre qui vous appartient. Il varie fortement
+d'un intermédiaire et d'un pays de l'UEMOA à l'autre, donc la réponse n'est
+pas la même pour tout le monde. L'application vous demande vos frais plutôt
+que de supposer les siens.
+
+**Le nombre le plus utile** est l'écart de score qu'un arbitrage doit
+franchir pour se payer : `2 × frais / (IC × dispersion)`. Sur 44 valeurs
+classées, l'échelle des scores va d'environ −2 à +2. Ce que ça donne :
+
+| Frais par sens | Écart requis | Arbitrages qui se paient |
+|---|---|---|
+| 1,50 % (IC prudent) | aucun ne suffit | **0** |
+| 1,50 % (IC ponctuel) | 3,06 | 1, net +0,08 % |
+| 0,25 % | 0,51 | 4, net jusqu'à +2,58 % |
+
+**Par défaut, le conseil est de ne rien faire** — et ce n'est pas une absence
+de réponse. Le classement distingue bien des valeurs, mais l'écart qu'il
+mesure entre elles est plus petit que ce que coûte le fait d'y réagir. Sur
+cette place, l'inaction est la décision la plus souvent correcte.
+
+**Le défaut emploie la borne basse de l'intervalle de l'IC**, pas son
+estimation ponctuelle. Un arbitrage se décide contre un coût *certain* :
+parier sur +0,045 quand l'intervalle à 95 % contient zéro revient à engager
+une dépense sûre contre un gain non établi. Vous pouvez basculer sur
+l'estimation ponctuelle — l'application le propose — et elle vous
+recommandera alors des arbitrages que la preuve ne soutient pas.
+
+Deux actions ne dépendent pas de cette arithmétique :
+
+- **Constituer un portefeuille depuis zéro** : les frais ne sont payés qu'une
+  fois, il n'y a pas d'aller-retour à amortir. Les premières du classement
+  sont à acheter.
+- **Une ligne sortie de l'univers classable** — devenue illiquide, ou plus
+  cotée — est à vendre. Le motif n'est pas un gain attendu, c'est le risque
+  de ne plus pouvoir en sortir.
+
+Et ce que ce n'est pas : une arithmétique d'arbitrage, pas un conseil
+d'investissement. L'application ne connaît ni votre fiscalité, ni votre
+horizon, ni votre tolérance au risque, ni la part que ces titres
+représentent chez vous.
+
 ### Ce que ça change pour vous
 
 Sur un marché où toute stratégie qui tourne plus de quelques fois par an
@@ -355,6 +412,7 @@ src/brvm/
   db.py                     schéma SQLite et accès
   features.py               calcul des indicateurs
   scoring.py                le classement
+  conseil.py                acheter, conserver, vendre — à vos frais
   backtest.py               rejeu de n'importe quel signal, et seuil de frais
   prediction.py             la prédiction : échantillon, validation, rendu
   apprentissage.py          son cœur appris : poids, ensemble, combinaison
@@ -368,7 +426,7 @@ src/brvm/
     sikafinance.py            l'historique
     dividendes.py             les calendriers de dividendes
 
-tests/                    276 tests, tous hors ligne
+tests/                    289 tests, tous hors ligne
   donnees/                  captures réelles de pages web, servant de témoins
 
 .github/workflows/
@@ -398,7 +456,7 @@ s'applique où :
 |---|---|
 | **Marché** | L'état du jour : qui monte, qui baisse, quels volumes. |
 | **Valeur** | La fiche d'une société : son cours dans le temps, ses dividendes. |
-| **Classement** | Les valeurs ordonnées, et ce que vaut cet ordre. La section « modèle appris » y est incluse, avec la dispersion de ses mesures d'une période à l'autre. |
+| **Classement** | Les valeurs ordonnées, ce que vaut cet ordre, et **quoi faire** : saisissez ce que vous détenez et vos frais, l'application dit acheter, conserver ou vendre. La section « modèle appris » y est incluse. |
 | **Backtest** | Ce qu'aurait donné le classement s'il avait été suivi. |
 | **Données** | La couverture de l'archive et le journal de collecte. |
 
@@ -497,6 +555,8 @@ python -m brvm rendement     # retour à la moyenne du rendement du dividende
 python -m brvm rendement --ajustement
                              # le cours reflète-t-il le dividende détaché ?
 python -m brvm backtester    # rejoue le classement dans le temps
+python -m brvm conseiller --detenu SGBC BOAC --frais 1.0
+                             # acheter, conserver ou vendre, à VOS frais
 python -m brvm backtester --signal choc_volume --seuil-frais
                              # à partir de quels frais ce signal cesse de payer
 ```

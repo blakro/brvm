@@ -33,8 +33,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from . import (backtest, db, dividende, exogene, features, prediction,
-               qualite, recherche, scoring)
+from . import (backtest, config, conseil, db, dividende, exogene, features,
+               prediction, qualite, recherche, scoring)
 from .ingestion import brvm_org, dividendes as source_dividendes, sikafinance
 
 
@@ -563,6 +563,46 @@ def _backtester(args) -> int:
     return 0 if not resultat["etapes"].empty else 1
 
 
+def _conseiller(args) -> int:
+    cours = db.lire("cours")
+    if cours.empty:
+        print("aucun cours en base — lancez « brvm ingerer »", file=sys.stderr)
+        return 1
+
+    reglages = config.charger()
+    bt = dict(reglages.get("backtest", {}))
+    if args.frais is not None:
+        bt["frais_pourcent"] = args.frais
+    if args.impact is not None:
+        bt["impact_pourcent"] = args.impact
+    if args.positions is not None:
+        bt["positions"] = args.positions
+    reglages = {**reglages, "backtest": bt}
+
+    referentiel = db.lire("referentiel")
+    traits = features.calculer(cours, reglages)
+    classement = scoring.noter(traits, referentiel, reglages)
+    if classement.empty:
+        print("aucune valeur classée : historique trop court ou filtre de "
+              "liquidité trop haut", file=sys.stderr)
+        return 1
+
+    # LA MESURE D'IC VIENT DE LA VALIDATION, PAS D'UNE CONSTANTE. C'est elle
+    # qui fixe le gain attendu d'un arbitrage ; la coder en dur reviendrait à
+    # figer une qualité de classement qui change à chaque séance versée.
+    validation = prediction.valider(cours, reglages, referentiel=referentiel)
+    echantillon = prediction.construire_echantillon(cours, reglages)
+    resultat = conseil.conseiller(
+        classement, detenu=args.detenu, mesure=validation.get("mesure"),
+        dispersion_=conseil.dispersion(echantillon), reglages=reglages,
+        prudence=not args.ponctuel)
+    print(f"Séance du {traits.attrs.get('date', '?')} — "
+          f"{len(classement)} valeurs classées")
+    print()
+    print(conseil.expliquer(resultat))
+    return 0
+
+
 def _predire(args) -> int:
     cours = db.lire("cours")
     if cours.empty:
@@ -1060,6 +1100,25 @@ def construire_analyseur() -> argparse.ArgumentParser:
         "--seuil-frais", action="store_true", dest="seuil_frais",
         help="à partir de quels frais la stratégie cesse de battre l'univers")
     backtester.set_defaults(fonction=_backtester)
+
+    conseiller = commandes.add_parser(
+        "conseiller", help="acheter, conserver ou vendre, à VOS frais"
+    )
+    conseiller.add_argument("--detenu", nargs="*", default=None, metavar="TICKER",
+                            help="ce que vous avez en portefeuille")
+    conseiller.add_argument("--frais", type=float, default=None,
+                            help="frais de courtage par sens, en %% "
+                                 "(défaut : configuration)")
+    conseiller.add_argument("--impact", type=float, default=None,
+                            help="impact de marché par sens, en %%")
+    conseiller.add_argument("--positions", type=int, default=None,
+                            help="lignes visées en portefeuille")
+    conseiller.add_argument(
+        "--ponctuel", action="store_true",
+        help="employer l'IC ponctuel au lieu de la borne basse de son "
+             "intervalle ; fait recommander des arbitrages que la preuve "
+             "ne soutient pas")
+    conseiller.set_defaults(fonction=_conseiller)
 
     predire = commandes.add_parser(
         "predire", help="probabilité de surperformance, et sa validation"
