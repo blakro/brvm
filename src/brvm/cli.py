@@ -516,15 +516,46 @@ def _noter(args) -> int:
     return 0 if not classement.empty else 1
 
 
+def _scores_du_signal(cours, nom: str):
+    """Matrice dates × tickers du signal demandé, ou None pour le composite.
+
+    Les traits se calculent en une passe glissante et ne demandent aucun
+    apprentissage : le backtest peut donc rejouer n'importe lequel d'entre
+    eux sans réentraîner quoi que ce soit à chaque rééquilibrage, et sans
+    le risque de fuite qui va avec.
+    """
+    if nom == "composite":
+        return None
+    matrices = features.traits_glissants(cours)
+    if nom not in matrices:
+        connus = ", ".join(["composite", *features.TOUS_TRAITS])
+        raise SystemExit(f"signal inconnu : {nom}. Au choix : {connus}.")
+    # La volatilité et le retournement se lisent à l'envers : le classement
+    # trie du plus grand au plus petit, et ces deux-là pénalisent.
+    signe = -1.0 if nom in ("volatilite", "retournement") else 1.0
+    return matrices[nom] * signe
+
+
 def _backtester(args) -> int:
     cours = db.lire("cours")
     if cours.empty:
         print("aucun cours en base — lancez « brvm ingerer »", file=sys.stderr)
         return 1
 
-    resultat = backtest.backtester(cours, db.lire("referentiel"),
-                                   fondamentaux=db.lire("fondamentaux"),
-                                   dividendes=db.lire("dividendes"))
+    scores = _scores_du_signal(cours, args.signal)
+    commun = dict(fondamentaux=db.lire("fondamentaux"),
+                  dividendes=db.lire("dividendes"), scores=scores)
+    referentiel = db.lire("referentiel")
+
+    if args.seuil_frais:
+        # LA QUESTION QUI COMPTE, ET ELLE N'ÉTAIT PAS POSABLE. « Ça ne
+        # survit pas aux frais » ne dit pas si on en est loin de 10 % ou
+        # d'un facteur dix. Le seuil, lui, se compare au devis d'une SGI.
+        resultat = backtest.seuil_frais(cours, referentiel, None, **commun)
+        print(backtest.expliquer_seuil(resultat))
+        return 0 if not resultat["niveaux"].empty else 1
+
+    resultat = backtest.backtester(cours, referentiel, **commun)
     print(backtest.expliquer(resultat))
     if args.journal and not resultat["etapes"].empty:
         print("\nJournal des rééquilibrages :")
@@ -1011,6 +1042,13 @@ def construire_analyseur() -> argparse.ArgumentParser:
     )
     backtester.add_argument("--journal", action="store_true",
                             help="détailler chaque rééquilibrage")
+    backtester.add_argument(
+        "--signal", default="composite",
+        help="ce qu'on rejoue : composite (défaut), ou un trait — "
+             + ", ".join(features.TOUS_TRAITS))
+    backtester.add_argument(
+        "--seuil-frais", action="store_true", dest="seuil_frais",
+        help="à partir de quels frais la stratégie cesse de battre l'univers")
     backtester.set_defaults(fonction=_backtester)
 
     predire = commandes.add_parser(

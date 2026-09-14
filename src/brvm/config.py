@@ -162,6 +162,18 @@ DEFAUTS: dict[str, dict] = {
         # Écart entre le cours affiché et le cours réellement obtenu, sur
         # des lignes qui ne s'échangent parfois pas tous les jours.
         "impact_pourcent": 0.5,
+        # Zone tampon : une ligne détenue est conservée tant qu'elle reste
+        # dans les `positions × tampon` premiers, au lieu d'être vendue dès
+        # qu'elle quitte les `positions` premiers. À 1, pas de tampon.
+        #
+        # LE DÉFAUT RESTE 1, ET C'EST UN RÉSULTAT, PAS UNE OMISSION. Le
+        # tampon réduit bien la rotation — de 64 % à 17 % à 3,0 — mais
+        # l'avantage baisse avec elle, et aucun réglage n'est positif hors
+        # échantillon : celui que la première moitié de l'archive désigne
+        # (3,0) est parmi les pires sur la seconde. Le détail chiffré est
+        # dans `backtest.backtester`, à l'endroit où le tampon s'applique.
+        # Le réglage existe pour qu'on puisse refaire la mesure.
+        "tampon": 1.0,
     },
     # Contribution de chaque trait au score. Le signe compte : la
     # volatilité pénalise.

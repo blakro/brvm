@@ -29,7 +29,51 @@ en courbe magnifique. Deux garde-fous :
   classement étant recalculé sur une tranche coupée à `t` ;
 - l'exécution est retardée d'une séance : on décide sur la clôture de `t`,
   on achète à celle de `t+1`. Décider et exécuter au même cours revient à
-  passer un ordre à un prix déjà connu.
+  passer un ordre à un prix déjà connu ;
+- on ne décide que sur une COTATION RÉELLE. Les traits se calculent sur des
+  cours reportés, faute de quoi la moitié illiquide du marché sort du
+  classement — mais choisir une valeur le jour où elle n'a pas échangé
+  revient à passer un ordre à un prix que personne n'a traité, et c'est le
+  regard en avant le plus rentable qui existe : on achèterait
+  systématiquement au dernier cours connu d'un titre en train de bouger.
+
+LA QUESTION DES FRAIS, ET POURQUOI ELLE SE POSE ICI
+---------------------------------------------------
+Sur cette place, les frais ne rabotent pas un avantage, ils le renversent.
+Le courtage SGI, la rétrocession BRVM, les frais DC/BR et les taxes font 2,5
+à 3,5 % l'aller-retour — des POURCENTS, là où les places développées
+comptent en points de base. Tout résultat de ce module se lit donc contre sa
+référence, jamais contre zéro.
+
+Deux outils pour cela, et le second est le plus utile :
+
+- `backtester(scores=...)` rejoue N'IMPORTE QUEL signal, et non plus le seul
+  composite de la configuration. C'était un angle mort : `prediction.py`,
+  le module dont on veut le plus savoir s'il gagne de l'argent, n'était pas
+  backtestable. On mesurait son IC, jamais ce qu'il en reste après le
+  courtier.
+
+- `seuil_frais(...)` rend le NIVEAU DE FRAIS auquel la stratégie cesse de
+  battre la simple détention du même univers. « Ça ne survit pas aux
+  frais » est vrai et inutilisable : le lecteur ne sait pas s'il en est loin
+  de 10 % ou d'un facteur dix. Le seuil, lui, se compare au devis d'une SGI.
+
+CE QUE LES DEUX DONNENT SUR L'ARCHIVE, et il faut le lire en entier :
+
+                                  écart sans frais   seuil   réel
+    composite de la configuration        -5,42 %      aucun   1,50 %
+    choc de volume                       +3,37 %     0,69 %   1,50 %
+
+Le composite PERD contre l'univers équipondéré même à frais nuls : ce n'est
+pas le courtier qui le condamne, c'est le signal. Le choc de volume, lui,
+gagne réellement avant frais — mais son seuil vaut 0,69 % par sens quand le
+marché en coûte 1,50 %. Il manque un facteur deux, et la relation de Grinold
+(alpha = IC × dispersion × écart de score) donne indépendamment 0,43 % : deux
+méthodes, le même ordre de grandeur, le même verdict.
+
+Il ne manque donc pas un réglage. La zone tampon a été essayée pour réduire
+la rotation — voir `tampon` dans `backtester` — et aucun réglage n'est
+positif hors échantillon.
 """
 
 from __future__ import annotations
@@ -99,18 +143,34 @@ def backtester(
     reglages: dict | None = None,
     fondamentaux: pd.DataFrame | None = None,
     dividendes: pd.DataFrame | None = None,
+    scores: pd.DataFrame | None = None,
 ) -> dict:
-    """Rejoue le classement dans le temps. Renvoie mesures et journal.
+    """Rejoue un classement dans le temps. Renvoie mesures et journal.
 
     Le journal (`etapes`) porte une ligne par rééquilibrage, avec les dates
     de décision, d'entrée et de sortie : c'est lui qu'on relit quand un
     résultat paraît trop beau.
+
+    `scores` — une matrice dates × tickers — REMPLACE le score composite
+    pour l'ordre du classement. `scoring.noter` continue de décider QUI est
+    éligible (liquidité, traits mesurables) ; le score fourni décide
+    seulement dans quel ordre. La séparation compte : sans elle, changer de
+    signal changerait aussi l'univers, et deux signaux ne seraient plus
+    comparables.
+
+    POURQUOI CE PARAMÈTRE EXISTE. Ce module ne savait rejouer qu'une seule
+    chose, le composite de la configuration — et `prediction.py`, qui est le
+    module dont on veut le plus savoir s'il gagne de l'argent, n'était donc
+    pas backtestable. On mesurait son IC, jamais ce qu'il en reste après le
+    courtier. La question « ce signal survit-il aux frais ? » ne pouvait
+    littéralement pas être posée.
     """
     conf = reglages or charger()
     bt = conf.get("backtest", {})
     positions = int(bt.get("positions", 10))
     pas = int(bt.get("pas_rebalancement", 20))
     delai = int(bt.get("delai_execution", 1))
+    tampon = float(bt.get("tampon", 1.0))
     cout_unitaire = (
         float(bt.get("frais_pourcent", 1.0)) + float(bt.get("impact_pourcent", 0.5))
     ) / 100.0
@@ -171,12 +231,65 @@ def backtester(
              for nom in ["cloture", *features.TRAITS]}
         )
         traits.index.name = "ticker"
+        # ON NE DÉCIDE QUE SUR UNE COTATION RÉELLE. Les traits se calculent
+        # sur des cours reportés — il le faut, sinon la moitié illiquide du
+        # marché sort du classement, voir l'en-tête de `features`. Mais
+        # choisir une valeur sur son cours reporté, c'est la choisir sur un
+        # prix que personne n'a traité ce jour-là. `prediction` applique la
+        # même règle ; les deux modules ne peuvent donc pas diverger sur
+        # l'univers.
+        cotee = matrices["cotee"].loc[dates[i]]
+        traits = traits[cotee.reindex(traits.index).fillna(False).astype(bool)]
         classement = scoring.noter(traits, referentiel, conf)
         if classement.empty:
             continue
 
-        choisis = list(classement.head(positions)["ticker"])
         eligibles = list(classement["ticker"])
+        if scores is not None and dates[i] in scores.index:
+            # L'éligibilité reste celle de `noter` ; seul l'ordre change.
+            ordre = (scores.loc[dates[i]].reindex(eligibles).dropna()
+                     .sort_values(ascending=False))
+            eligibles = list(ordre.index)
+        if not eligibles:
+            continue
+
+        # ZONE TAMPON. Une ligne détenue est conservée tant qu'elle reste
+        # dans les `positions × tampon` premiers, au lieu d'être vendue dès
+        # qu'elle quitte les `positions` premiers. À 1, c'est le
+        # comportement d'origine.
+        #
+        # MESURÉE, ELLE NE SAUVE PAS LE SIGNAL, et c'est écrit ici pour que
+        # personne ne la retente en espérant mieux. Écart annualisé contre
+        # l'univers éligible, signal du choc de volume, frais réels :
+        #
+        #     tampon   tout   1re moitié   2nde moitié   rotation
+        #        1,0  -3,86 %    -5,58 %      -4,60 %      64 %
+        #        1,5  -0,59 %    -0,43 %      -3,43 %      48 %
+        #        2,0  -2,98 %    -0,22 %      -1,25 %      35 %
+        #        3,0  +0,46 %    +1,13 %      -4,56 %      17 %
+        #
+        # Lire la dernière ligne lentement. Sur l'historique entier, 3,0 est
+        # le seul réglage POSITIF, et il est le meilleur sur la première
+        # moitié — donc celui qu'on choisirait. Sur la seconde, jamais
+        # consultée, il est parmi les PIRES. Le +0,46 % n'existe pas : c'est
+        # la meilleure case d'une grille, et une grille a toujours une
+        # meilleure case.
+        #
+        # La rotation baisse bien, de 64 % à 17 %, mais l'avantage baisse
+        # avec elle. La raison est mesurable ailleurs : le choc de volume
+        # retombe au pur hasard en deux périodes (voir
+        # `features.TRAITS_PREDICTION`). On ne peut pas détenir pour amortir
+        # un frais quand ce qu'on détient a cessé d'être bon — et il faudrait
+        # détenir dix mois pour amortir un aller-retour à 3 %.
+        #
+        # Le défaut reste donc 1,0. Le réglage existe pour qu'on puisse
+        # refaire la mesure, pas pour qu'on l'utilise.
+        large = int(round(positions * max(1.0, tampon)))
+        gardes: list[str] = []
+        if tampon > 1.0 and detenu:
+            gardes = [t for t in eligibles[:large] if t in detenu][:positions]
+        choisis = gardes + [t for t in eligibles if t not in gardes]
+        choisis = choisis[:positions]
 
         depart = prix.iloc[entree]
         arrivee = prix.iloc[sortie]
@@ -252,6 +365,146 @@ def backtester(
         "avertissements": avertissements,
         "couverture_dividende": couverture,
     }
+
+
+def seuil_frais(
+    cours: pd.DataFrame,
+    referentiel: pd.DataFrame | None = None,
+    reglages: dict | None = None,
+    fondamentaux: pd.DataFrame | None = None,
+    dividendes: pd.DataFrame | None = None,
+    scores: pd.DataFrame | None = None,
+    niveaux: tuple[float, ...] = (0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0),
+) -> dict:
+    """À partir de quels frais la stratégie cesse-t-elle de battre l'univers ?
+
+    POURQUOI CETTE FONCTION VAUT MIEUX QU'UN VERDICT. « Ça ne survit pas aux
+    frais » est vrai et inutilisable : le lecteur ne sait pas s'il en est
+    loin de 10 % ou d'un facteur dix, ni ce que changerait un courtier moins
+    cher. Le seuil, lui, est actionnable — et il se compare directement au
+    devis d'une SGI.
+
+    `niveaux` est en POURCENT PAR SENS, frais et impact confondus : c'est la
+    grandeur que facture un intermédiaire. L'aller-retour vaut le double.
+
+    Ce que la fonction rend, sur l'archive et pour le signal du choc de
+    volume — le seul du projet dont le pouvoir prédictif tienne :
+
+        seuil mesuré        0,25 à 0,50 % par sens selon la moitié
+                            d'historique retenue
+        seuil théorique     0,43 % par sens, par la relation de Grinold
+                            (alpha = IC × dispersion × écart de score)
+        réel               1,50 % par sens dans la configuration
+
+    Deux méthodes indépendantes, le même ordre de grandeur, et le même
+    verdict : il manque un facteur trois à six. Ce n'est pas un réglage à
+    trouver, c'est un marché trop cher pour ce signal.
+    """
+    conf = reglages or charger()
+    base = conf.get("backtest", {})
+    lignes = []
+    # Les avertissements sont repris du backtest RÉELLEMENT exécuté, et non
+    # figés ici : ils changent selon que le dividende a pu être compté et
+    # daté, et un avertissement qui décrit autre chose que le calcul rendu
+    # est pire que pas d'avertissement.
+    avertissements = AVERTISSEMENTS
+    for niveau in niveaux:
+        # `frais` porte tout : séparer frais et impact n'aurait de sens que
+        # si on cherchait lequel des deux mord, et ils mordent pareil.
+        essai = {**conf, "backtest": {**base, "frais_pourcent": float(niveau),
+                                      "impact_pourcent": 0.0}}
+        resultat = backtester(cours, referentiel, essai, fondamentaux,
+                             dividendes, scores=scores)
+        if resultat["etapes"].empty:
+            continue
+        avertissements = resultat["avertissements"]
+        ecart = (resultat["rendement_annualise"]
+                 - resultat["reference_annualisee"])
+        lignes.append({
+            "frais_par_sens": niveau / 100.0,
+            "aller_retour": 2 * niveau / 100.0,
+            "rendement_annualise": resultat["rendement_annualise"],
+            "reference_annualisee": resultat["reference_annualisee"],
+            "ecart": ecart,
+            "rotation_moyenne": resultat["rotation_moyenne"],
+        })
+
+    table = pd.DataFrame(lignes)
+    vide = {"niveaux": table, "seuil": float("nan"),
+            "ecart_sans_frais": float("nan"), "reel": None,
+            "avertissements": avertissements}
+    if table.empty:
+        return vide
+
+    # Le seuil : dernier niveau où l'écart est encore positif, interpolé
+    # linéairement avec le premier où il ne l'est plus. L'interpolation n'est
+    # pas de la précision — c'est pour ne pas faire croire que le seuil est
+    # l'un des niveaux qu'on a choisi de tester.
+    positifs = table[table["ecart"] > 0]
+    negatifs = table[table["ecart"] <= 0]
+    seuil = float("nan")
+    if not positifs.empty and not negatifs.empty:
+        bas = positifs.iloc[-1]
+        haut = negatifs.iloc[0]
+        largeur = haut["ecart"] - bas["ecart"]
+        part = bas["ecart"] / (bas["ecart"] - haut["ecart"]) if largeur else 0.0
+        seuil = float(bas["frais_par_sens"]
+                      + part * (haut["frais_par_sens"] - bas["frais_par_sens"]))
+    elif not positifs.empty:
+        # Positif partout, jusqu'au niveau le plus élevé testé : on le dit
+        # comme une borne, pas comme un seuil.
+        seuil = float(positifs.iloc[-1]["frais_par_sens"])
+
+    reel = (float(base.get("frais_pourcent", 1.0))
+            + float(base.get("impact_pourcent", 0.5))) / 100.0
+    return {
+        "niveaux": table,
+        "seuil": seuil,
+        "ecart_sans_frais": float(table.iloc[0]["ecart"]),
+        "reel": reel,
+        "avertissements": avertissements,
+    }
+
+
+def expliquer_seuil(resultat: dict) -> str:
+    """Rendu texte du seuil de frais. Le réel à côté du seuil, toujours."""
+    if resultat["niveaux"].empty:
+        return ("Seuil de frais incalculable : pas assez de séances pour un "
+                "seul rééquilibrage.")
+    seuil, reel = resultat["seuil"], resultat["reel"]
+    lignes = [
+        f"Écart contre l'univers éligible, SANS frais : "
+        f"{resultat['ecart_sans_frais']:+.2%} l'an.",
+        "",
+        f"  {'frais par sens':>15}{'aller-retour':>14}{'écart':>10}{'rotation':>10}",
+        f"  {'-' * 15}{'-' * 14}{'-' * 10}{'-' * 10}",
+    ]
+    for ligne in resultat["niveaux"].itertuples():
+        marque = "  ←" if reel and abs(ligne.frais_par_sens - reel) < 1e-9 else ""
+        lignes.append(
+            f"  {ligne.frais_par_sens:>15.2%}{ligne.aller_retour:>14.1%}"
+            f"{ligne.ecart:>+10.2%}{ligne.rotation_moyenne:>10.0%}{marque}")
+    lignes.append("")
+    if seuil != seuil:  # NaN
+        lignes.append("Aucun seuil dans la plage testée : l'écart ne change "
+                      "pas de signe.")
+    else:
+        lignes.append(
+            f"SEUIL : {seuil:.2%} par sens. Au-delà, la stratégie rend moins "
+            f"que la simple détention du même univers.")
+    if reel is not None and seuil == seuil:
+        if reel > seuil:
+            lignes.append(
+                f"Les frais réels valent {reel:.2%} par sens, soit "
+                f"{reel / seuil:.1f} fois le seuil. Il ne manque pas un "
+                "réglage, il manque un courtier.")
+        else:
+            lignes.append(
+                f"Les frais réels ({reel:.2%}) sont sous le seuil — "
+                "vérifiez la rotation et les avertissements avant d'y croire.")
+    lignes += ["", "À retenir avant de citer ces chiffres :"]
+    lignes += [f"  - {a}" for a in resultat["avertissements"]]
+    return "\n".join(lignes)
 
 
 def expliquer(resultat: dict) -> str:

@@ -47,19 +47,12 @@ REGLAGES = {
 }
 
 
-def _cours(trajectoires: dict[str, list[float]], volume_fcfa: float = 5_000_000):
-    lignes = []
-    for ticker, prix in trajectoires.items():
-        for rang, valeur in enumerate(prix):
-            lignes.append({
-                "date": f"{2020 + rang // 336:04d}-{1 + (rang % 336) // 28:02d}-"
-                        f"{1 + rang % 28:02d}",
-                "ticker": ticker,
-                "cloture": valeur,
-                "volume_titres": 100.0,
-                "volume_fcfa": volume_fcfa,
-            })
-    return pd.DataFrame(lignes).sort_values(["date", "ticker"])
+# UNE SEULE FABRIQUE DE COURS, ET C'EST UNE CORRECTION. Il y en avait deux,
+# du même nom : la seconde masquait la première, qui était donc du code mort
+# depuis toujours — et tous les tests d'au-dessus employaient déjà la
+# seconde sans que rien ne le dise. Une deuxième définition homonyme est un
+# piège à qui lit le fichier de haut en bas : on croit modifier ce que la
+# suite emploie.
 
 
 def _plat(n, depart=100.0):
@@ -188,6 +181,198 @@ def test_historique_insuffisant_refuse_de_conclure():
 
     message = backtest.expliquer(resultat)
     assert "30 séances" in message and "nécessaires" in message
+
+
+def _matrice(cours, valeurs: dict[str, float]):
+    """Un score constant par ticker, en matrice dates × tickers.
+
+    Constant dans le temps : ce qu'on veut éprouver est la substitution du
+    score, pas sa dynamique.
+    """
+    dates = sorted(cours["date"].unique())
+    tickers = sorted(cours["ticker"].unique())
+    return pd.DataFrame(
+        [[valeurs.get(t, 0.0) for t in tickers]] * len(dates),
+        index=dates, columns=tickers)
+
+
+def test_un_score_fourni_commande_l_ordre_mais_pas_l_univers():
+    """LE contrat de `scores`, et il n'est pas négociable.
+
+    `scoring.noter` décide QUI est éligible — liquidité, traits mesurables.
+    Le score fourni décide seulement DANS QUEL ORDRE. Si le score pouvait
+    aussi changer l'univers, deux signaux ne seraient plus comparables :
+    l'un gagnerait parce qu'il choisit mieux, l'autre parce qu'il a exclu
+    les perdantes de sa référence, et rien ne dirait lequel.
+    """
+    n = 120
+    cours = _cours({"AAA": _plat(n), "BBB": _plat(n), "CCC": _plat(n)})
+    # Une valeur illiquide : elle doit rester hors de l'univers quel que
+    # soit le score qu'on lui donne.
+    illiquide = _cours({"ZZZ": _plat(n)}, volume_fcfa=1.0)
+    cours = pd.concat([cours, illiquide]).sort_values(["date", "ticker"])
+
+    reglages = {**REGLAGES, "backtest": {**REGLAGES["backtest"], "positions": 1}}
+    # ZZZ reçoit le meilleur score du marché. Elle ne doit pas entrer.
+    scores = _matrice(cours, {"ZZZ": 10.0, "AAA": 3.0, "BBB": 2.0, "CCC": 1.0})
+    resultat = backtest.backtester(cours, None, reglages, scores=scores)
+    assert not resultat["etapes"].empty
+    retenues = set(resultat["etapes"]["positions"])
+    assert "ZZZ" not in retenues, (
+        "un score élevé a fait entrer une valeur que le filtre de liquidité "
+        "écarte : le score commande l'univers, ce qu'il ne doit pas faire"
+    )
+    assert retenues == {"AAA"}, retenues
+
+
+def test_le_score_fourni_remplace_bien_le_composite():
+    """Sans quoi le paramètre serait décoratif — et le test précédent
+    passerait tout aussi bien avec un `scores` ignoré."""
+    n = 120
+    # BBB monte, AAA est plate : le composite (momentum seul ici) choisit BBB.
+    cours = _cours({"AAA": _plat(n),
+                    "BBB": [100 * 1.01 ** i for i in range(n)]})
+    reglages = {**REGLAGES, "backtest": {**REGLAGES["backtest"], "positions": 1}}
+
+    composite = backtest.backtester(cours, None, reglages)
+    assert set(composite["etapes"]["positions"]) == {"BBB"}
+
+    # Le score inverse l'ordre : AAA doit être retenue malgré son momentum nul.
+    inverse = backtest.backtester(
+        cours, None, reglages, scores=_matrice(cours, {"AAA": 2.0, "BBB": 1.0}))
+    assert set(inverse["etapes"]["positions"]) == {"AAA"}
+
+
+def test_on_ne_decide_jamais_sur_un_cours_reporte():
+    """Les traits se calculent sur des cours reportés ; les décisions, non.
+
+    Le report existe pour que la moitié illiquide du marché reste mesurable
+    (voir l'en-tête de `features`). Mais choisir une valeur le jour où elle
+    n'a pas coté, c'est passer un ordre à un prix que personne n'a traité —
+    et c'est le regard en avant le plus rentable qui existe, puisqu'on
+    achèterait systématiquement au dernier cours connu d'un titre en train
+    de bouger.
+    """
+    n = 120
+    cours = _cours({"AAA": _plat(n), "BBB": _plat(n), "CCC": _plat(n)})
+    dates = sorted(cours["date"].unique())
+    # AAA ne cote plus du tout dans la seconde moitié, mais son dernier
+    # cours reste reporté vingt séances durant.
+    muette = (cours["ticker"] == "AAA") & (cours["date"] > dates[n // 2])
+    ampute = cours[~muette]
+
+    reglages = {**REGLAGES, "backtest": {**REGLAGES["backtest"], "positions": 1}}
+    scores = _matrice(cours, {"AAA": 10.0, "BBB": 2.0, "CCC": 1.0})
+    resultat = backtest.backtester(ampute, None, reglages, scores=scores)
+    assert not resultat["etapes"].empty
+
+    tardives = resultat["etapes"][
+        resultat["etapes"]["date_decision"] > dates[n // 2 + 25]]
+    if not tardives.empty:
+        assert "AAA" not in set(tardives["positions"]), (
+            "une valeur qui n'a pas coté depuis des semaines a été choisie "
+            "sur son cours reporté"
+        )
+
+
+def test_la_zone_tampon_reduit_la_rotation():
+    """Le tampon ne sauve pas le signal — c'est mesuré ailleurs — mais il
+    doit au moins faire ce qu'il annonce, sinon le réglage mentirait."""
+    n = 240
+    import numpy as np
+    rng = np.random.default_rng(5)
+    # Six valeurs qui se croisent : sans tampon, le portefeuille tourne.
+    cours = _cours({f"T{i}": list(100 * np.exp(np.cumsum(
+        rng.normal(0, 0.02, n)))) for i in range(6)})
+    base = {**REGLAGES, "backtest": {**REGLAGES["backtest"], "positions": 2}}
+    avec = {**base, "backtest": {**base["backtest"], "tampon": 3.0}}
+
+    sans_tampon = backtest.backtester(cours, None, base)
+    tamponne = backtest.backtester(cours, None, avec)
+    assert not sans_tampon["etapes"].empty and not tamponne["etapes"].empty
+    assert tamponne["rotation_moyenne"] <= sans_tampon["rotation_moyenne"], (
+        f"tampon 3,0 : rotation {tamponne['rotation_moyenne']:.0%} contre "
+        f"{sans_tampon['rotation_moyenne']:.0%} sans tampon"
+    )
+    assert tamponne["cout_cumule"] <= sans_tampon["cout_cumule"] + 1e-12
+
+
+# --- le seuil de frais ----------------------------------------------------
+
+def test_l_ecart_decroit_quand_les_frais_montent():
+    """La monotonie est la propriété qui rend un seuil interprétable.
+
+    Si l'écart ne décroissait pas avec les frais, « le seuil » ne voudrait
+    rien dire : il y en aurait plusieurs, ou aucun.
+    """
+    n = 240
+    import numpy as np
+    rng = np.random.default_rng(9)
+    cours = _cours({f"T{i}": list(100 * np.exp(np.cumsum(
+        rng.normal(0, 0.02, n)))) for i in range(6)})
+    reglages = {**REGLAGES, "backtest": {**REGLAGES["backtest"], "positions": 2}}
+
+    resultat = backtest.seuil_frais(cours, None, reglages)
+    table = resultat["niveaux"]
+    assert len(table) >= 4
+    ecarts = list(table["ecart"])
+    assert ecarts == sorted(ecarts, reverse=True), ecarts
+    # Sans frais, aucun coût ne peut être imputé.
+    assert abs(table.iloc[0]["frais_par_sens"]) < 1e-12
+
+
+def test_le_seuil_tombe_entre_les_deux_niveaux_qui_l_encadrent():
+    """Le seuil est interpolé, et il doit rester dans son encadrement.
+
+    L'interpolation n'est pas de la précision : c'est pour ne pas faire
+    croire que le seuil est l'un des niveaux qu'on a choisi de tester.
+    """
+    n = 240
+    import numpy as np
+    # Graine choisie pour que l'écart change bien de signe dans la plage
+    # testée. Un `pytest.skip` faute d'encadrement laisserait le test vert
+    # sans avoir rien vérifié — et c'est précisément la propriété du seuil
+    # qu'on veut protéger.
+    rng = np.random.default_rng(1)
+    cours = _cours({f"T{i}": list(100 * np.exp(np.cumsum(
+        rng.normal(0, 0.02, n)))) for i in range(8)})
+    reglages = {**REGLAGES, "backtest": {**REGLAGES["backtest"], "positions": 3}}
+
+    resultat = backtest.seuil_frais(cours, None, reglages)
+    table, seuil = resultat["niveaux"], resultat["seuil"]
+    positifs = table[table["ecart"] > 0]
+    negatifs = table[table["ecart"] <= 0]
+    assert not positifs.empty and not negatifs.empty, (
+        "la plage testée n'encadre pas le seuil : le test ne vérifie rien")
+    assert (positifs.iloc[-1]["frais_par_sens"] <= seuil
+            <= negatifs.iloc[0]["frais_par_sens"]), (seuil, table)
+    # Et il n'est pas posé sur l'un des niveaux testés par hasard : il est
+    # strictement à l'intérieur de son encadrement dès que les deux bornes
+    # diffèrent.
+    assert seuil == seuil, "seuil non calculé alors qu'il est encadré"
+
+
+def test_le_seuil_rend_les_avertissements_du_calcul_reellement_fait():
+    """Un avertissement qui décrit autre chose que le calcul rendu est pire
+    que pas d'avertissement — il rassure à tort.
+
+    Ici : le dividende EST fourni, donc le jeu d'avertissements doit être
+    celui qui le dit, et non celui qui annonce son absence.
+    """
+    n = 240
+    cours = _marche_regulier(n)
+    tickers = sorted(cours["ticker"].unique())
+    annees = sorted({d[:4] for d in cours["date"]})
+    resultat = backtest.seuil_frais(
+        cours, None, REGLAGES, fondamentaux=_fondamentaux(tickers, annees))
+    if resultat["niveaux"].empty:
+        pytest.skip("historique trop court sur ce montage")
+    assert resultat["avertissements"] != backtest.AVERTISSEMENTS
+    assert any("dividende" in a for a in resultat["avertissements"])
+
+    rendu = backtest.expliquer_seuil(resultat)
+    assert "SEUIL" in rendu or "Aucun seuil" in rendu
+    assert "frais par sens" in rendu
 
 
 def test_les_avertissements_accompagnent_tout_resultat():
@@ -369,13 +554,15 @@ if __name__ == "__main__":
 # Le détachement daté
 # --------------------------------------------------------------------
 
-def _cours(prix_par_ticker, debut="2020-01-01"):
+def _cours(prix_par_ticker, debut="2020-01-01", volume_fcfa=1e6):
+    """Table de cours fabriquée. `volume_fcfa` sert à franchir — ou non — le
+    filtre de liquidité, qui est la seule chose décidant de l'univers."""
     dates = pd.bdate_range(debut, periods=len(next(iter(prix_par_ticker.values()))))
     lignes = []
     for t, serie in prix_par_ticker.items():
         for d, c in zip(dates, serie):
             lignes.append({"date": d.strftime("%Y-%m-%d"), "ticker": t,
-                           "cloture": c, "volume_fcfa": 1e6})
+                           "cloture": c, "volume_fcfa": volume_fcfa})
     return pd.DataFrame(lignes)
 
 

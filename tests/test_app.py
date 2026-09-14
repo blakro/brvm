@@ -241,6 +241,29 @@ def test_la_section_prediction_se_rend_sans_lever(lanceur):
         "classement des probabilités absent — ou privé de son incertitude"
 
 
+def test_la_section_seuil_de_frais_se_rend_sans_lever(lanceur):
+    """L'onglet Backtest porte désormais un second calcul complet.
+
+    Le seuil de frais rejoue le backtest à huit niveaux de coût, avec un
+    sélecteur de signal, trois tuiles, un graphique et une table. Beaucoup
+    de choses à casser pour un onglet que la suite ne rendait pas — et un
+    `column_config` sur une colonne disparue emporte la page entière.
+    """
+    at = _app(lanceur)
+    at.query_params["onglet"] = "Backtest"
+    at.run()
+    assert not at.exception, [str(e) for e in at.exception]
+
+    colonnes = [set(d.value.columns) for d in at.dataframe]
+    assert any({"frais_par_sens", "ecart", "rotation_moyenne"} <= c
+               for c in colonnes), (
+        "la table du seuil de frais est absente : la section n'a pas été "
+        "rendue, ou ses colonnes ont changé de nom"
+    )
+    textes = " ".join(bloc.value for bloc in at.markdown)
+    assert "Seuil de rentabilité" in textes and "Frais réels" in textes
+
+
 def test_un_symbole_inconnu_dans_l_URL_ne_fait_pas_tomber_l_app(lanceur):
     """Un lien peut désigner une valeur radiée, ou mal recopiée. Le
     sélecteur reste seul juge de ce qui existe : il retombe sur sa première
