@@ -92,6 +92,45 @@ quatre — tout cela est une amélioration réelle et mesurable, et rien de
 tout cela ne permet d'affirmer que l'IC vrai est différent de zéro. Un seul
 trait franchit le seuil pris isolément, le choc de volume, à t +2,5.
 
+L'ÉTIQUETTE EST UN RENDEMENT DE COURS NU, ET CE N'EST PAS UN OUBLI
+-----------------------------------------------------------------
+Sur cette place le dividende fait 7 à 10 % l'an quand le cours en rend 2,8 :
+prédire le cours seul revient à ignorer la moitié de ce qu'un porteur
+touche, et à le faire systématiquement contre les valeurs de rendement. Le
+backtest a été corrigé de ce défaut ; l'étiquette de prédiction, non — et
+c'est délibéré.
+
+Essayée, l'étiquette totale fait passer l'IC de la combinaison de +0,045
+(t 1,5) à +0,079 (t 2,3), soit le seuil de signification franchi pour la
+première fois du projet. Le chiffre ne vaut rien, pour deux raisons
+mesurées :
+
+1. LA COUVERTURE. 26 % des lignes n'ont aucun dividende connu et reçoivent
+   donc zéro. Ce zéro n'est pas une société qui n'a rien versé : sur les
+   seize années-sociétés non datées que les fondamentaux peuvent arbitrer,
+   SEIZE versaient bien un dividende. C'est une donnée manquante déguisée en
+   fait. Restreinte aux lignes réellement couvertes, l'amélioration retombe
+   de +0,045 à +0,050 — t 1,52, non significatif.
+
+2. LE COURS NE REFLÈTE PAS CE QU'IL DÉTACHE. En agrégat, deux séances après
+   un détachement, le cours archivé n'a rendu que 46 % du dividende versé.
+   Ajouter le dividende entier crédite donc la moitié restante, qui n'a
+   jamais été touchée par personne. Un trait qui prédit « un détachement
+   approche » prédit alors ce rendement fantôme : « jours depuis le dernier
+   détachement » rend ainsi un IC de +0,098 et un t de +2,5, entièrement
+   artificiel. Voir `dividende.ajustement`, et
+   `python -m brvm rendement --ajustement`.
+
+Les cinq traits tirés du calendrier — rendement, croissance, régularité,
+temps depuis le détachement, saisonnalité — ont été mesurés contre
+l'étiquette de cours : tous entre -0,018 et +0,006 d'IC, |t| au plus 0,5,
+positifs quatre à cinq années sur onze. Aucun n'entre dans le modèle.
+
+Le verrou n'est donc pas le modèle ni le trait, c'est l'archive : il manque
+un calendrier de détachements complet ET un cours qui les reflète. Le jour
+où `dividende.ajustement` rendra « utilisable », cette section sera à
+refaire.
+
 ENSUITE, UN IC DE 0,045 N'EST PAS DE L'ARGENT. Simulé sur l'archive avec
 dix positions, un rééquilibrage trimestriel et 3 % de frais l'aller-retour,
 ce classement ne bat PAS la simple détention équipondérée du même univers :

@@ -650,6 +650,16 @@ def _rendement(args) -> int:
     if not referentiel.empty:
         tickers = list(referentiel[referentiel["secteur"].isin(secteurs)]["ticker"])
 
+    if args.ajustement:
+        # LA QUESTION PRÉALABLE À TOUT USAGE DU DIVIDENDE. Avant de demander
+        # si le rendement du dividende prédit quelque chose, il faut savoir
+        # si le cours archivé baisse bien quand le dividende se détache.
+        # Sinon, additionner les deux fabrique du rendement — et n'importe
+        # quel trait qui prédit l'approche d'un détachement paraîtra marcher.
+        resultat = dividende.ajustement(cours, dividendes)
+        print(dividende.expliquer_ajustement(resultat))
+        return 0 if resultat["detachements"] else 1
+
     tableau = dividende.signal(cours, dividendes, tickers)
     print(dividende.expliquer(tableau))
     return 0 if not tableau.empty else 1
@@ -1073,6 +1083,10 @@ def construire_analyseur() -> argparse.ArgumentParser:
     rendement.add_argument("--secteurs", nargs="*", default=None,
                            help="secteurs analysés (télécoms et services "
                                 "publics par défaut)")
+    rendement.add_argument("--ajustement", action="store_true",
+                           help="le cours archivé reflète-t-il le dividende "
+                                "qu'il détache ? (préalable à tout rendement "
+                                "total)")
     rendement.set_defaults(fonction=_rendement)
 
     veille = commandes.add_parser(

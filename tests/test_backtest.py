@@ -635,6 +635,120 @@ def test_pas_de_double_compte_entre_calendrier_et_fondamentaux():
     assert etale == pytest.approx(0.08)
 
 
+def test_un_cours_qui_reflete_son_dividende_est_declare_utilisable():
+    """Le cas sain, et il faut le tester pour que le verdict veuille dire
+    quelque chose : un diagnostic qui refuse tout ne diagnostique rien.
+
+    AAA vaut 100, détache 5, et le cours tombe à 95 le jour même : le
+    dividende est reflété en entier.
+    """
+    dates = pd.bdate_range("2020-01-01", periods=40)
+    # DOUZE VALEURS PLATES AUTOUR, ET C'EST NÉCESSAIRE. Le diagnostic retire
+    # la tendance du marché — sans quoi une baisse générale passerait pour un
+    # ajustement. Avec deux valeurs seulement, AAA EST la moitié du marché :
+    # sa propre chute entre dans la moyenne qu'on lui soustrait, et le reflet
+    # mesuré tombe à 50 % pour un dividende parfaitement reflété. Sur
+    # l'archive réelle, une société pèse un quarantième et l'effet est
+    # négligeable — mais un montage à deux valeurs le rend maximal.
+    trajectoires = {"AAA": [100.0] * 20 + [95.0] * 20}
+    trajectoires.update({f"P{i:02d}": [50.0] * 40 for i in range(12)})
+    cours = _cours(trajectoires)
+    detach = pd.DataFrame([{"ticker": "AAA",
+                            "date_detachement": dates[20].strftime("%Y-%m-%d"),
+                            "montant": 5.0, "exercice": 2019}])
+
+    resultat = dividende.ajustement(cours, detach, fenetres=(1, 2))
+    assert resultat["detachements"] == 1
+    assert resultat["part_refletee"] > 0.9, resultat
+    assert resultat["utilisable"] is True
+    assert "UTILISABLE" in dividende.expliquer_ajustement(resultat)
+
+
+def test_un_cours_qui_ne_bouge_pas_est_declare_inutilisable():
+    """Le cas que l'archive présente, et le seul qui compte vraiment.
+
+    Si le cours ne baisse pas au détachement, additionner le dividende au
+    rendement du cours FABRIQUE du rendement — et un trait qui prédit
+    l'approche d'un détachement prédirait ce rendement fantôme. Le
+    diagnostic doit le refuser, pas le mentionner en note.
+    """
+    dates = pd.bdate_range("2020-01-01", periods=40)
+    cours = _cours({"AAA": [100.0] * 40, "BBB": [50.0] * 40})
+    detach = pd.DataFrame([{"ticker": "AAA",
+                            "date_detachement": dates[20].strftime("%Y-%m-%d"),
+                            "montant": 9.0, "exercice": 2019}])
+
+    resultat = dividende.ajustement(cours, detach, fenetres=(1, 2))
+    assert resultat["detachements"] == 1
+    assert abs(resultat["part_refletee"]) < 0.1, resultat
+    assert resultat["utilisable"] is False
+    rendu = dividende.expliquer_ajustement(resultat)
+    assert "INUTILISABLE" in rendu and "fantôme" in rendu
+
+
+def test_la_part_refletee_agrege_au_lieu_de_moyenner_des_rapports():
+    """LA CORRECTION QUI A RETOURNÉ LE VERDICT.
+
+    La première version moyennait les rapports baisse/dividende. Un
+    dividende minuscule assorti d'une variation de cours ordinaire donne
+    alors un rapport énorme — « 2 000 % de reflet » — et quelques cas de ce
+    genre suffisent à faire déclarer utilisable une archive qui ne l'est
+    pas.
+
+    Le montage ci-dessous le reproduit : PETIT détache 0,1 % et baisse de
+    2 %, ce qui vaut vingt fois son dividende ; GROS détache 20 % et ne
+    baisse pas du tout. Une moyenne de rapports conclurait à un reflet de
+    dix fois le dividende ; l'agrégat, correctement, à presque rien — car
+    ce qui manque, c'est la baisse de GROS.
+    """
+    dates = pd.bdate_range("2020-01-01", periods=40)
+    jour = dates[20].strftime("%Y-%m-%d")
+    cours = _cours({
+        "PETIT": [100.0] * 20 + [98.0] * 20,   # -2 % pour 0,1 de dividende
+        "GROS": [100.0] * 40,                  # rien, pour 20 de dividende
+        "BBB": [50.0] * 40,
+    })
+    detach = pd.DataFrame([
+        {"ticker": "PETIT", "date_detachement": jour, "montant": 0.1,
+         "exercice": 2019},
+        {"ticker": "GROS", "date_detachement": jour, "montant": 20.0,
+         "exercice": 2019},
+    ])
+
+    resultat = dividende.ajustement(cours, detach, fenetres=(1, 2))
+    assert resultat["detachements"] == 2
+    # Somme des baisses ≈ 2,0 ; somme des dividendes ≈ 20,1 : environ 10 %.
+    assert resultat["part_refletee"] < 0.25, resultat
+    assert resultat["utilisable"] is False
+    # Et la médiane des cas, elle, est trompeuse — on la garde exposée pour
+    # information, jamais pour décider.
+    mediane = resultat["par_fenetre"][1]["mediane_des_cas"]
+    assert mediane > resultat["par_fenetre"][1]["agregat"], (mediane, resultat)
+
+
+def test_le_diagnostic_retire_la_tendance_du_marche():
+    """Une baisse générale ne doit pas passer pour un ajustement.
+
+    Sans cette correction, il suffirait qu'un marché baisse de 10 % le mois
+    du détachement pour que l'archive paraisse refléter parfaitement des
+    dividendes qu'elle ne reflète pas.
+    """
+    dates = pd.bdate_range("2020-01-01", periods=40)
+    jour = dates[20].strftime("%Y-%m-%d")
+    # Tout le marché perd 9 % le jour du détachement, AAA comprise : son
+    # cours ne reflète donc RIEN de son dividende en propre.
+    chute = [100.0] * 20 + [91.0] * 20
+    cours = _cours({"AAA": chute, "BBB": [50.0] * 20 + [45.5] * 20,
+                    "CCC": [200.0] * 20 + [182.0] * 20})
+    detach = pd.DataFrame([{"ticker": "AAA", "date_detachement": jour,
+                            "montant": 9.0, "exercice": 2019}])
+
+    resultat = dividende.ajustement(cours, detach, fenetres=(1, 2))
+    assert abs(resultat["part_refletee"]) < 0.15, (
+        "la baisse générale du marché a été comptée comme un ajustement au "
+        f"dividende : {resultat}")
+
+
 def test_la_couverture_ne_se_compte_pas_en_seances_creditees():
     """Depuis le détachement daté, le dividende ne touche qu'une séance
     par an. Compter les séances créditées ferait chuter la couverture
