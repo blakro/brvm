@@ -199,6 +199,48 @@ def test_l_onglet_et_la_societe_se_relisent_dans_l_URL(lanceur):
     assert at.session_state["valeur"] == "SNTS"
 
 
+def test_la_section_prediction_se_rend_sans_lever(lanceur):
+    """L'ONGLET LE PLUS COÛTEUX À CASSER, ET LE SEUL QUE LA SUITE NE
+    RENDAIT PAS.
+
+    Le corps des onglets fermés n'est pas exécuté — c'est voulu, et c'est
+    ce qui rend l'app rapide. Mais cela veut dire qu'un rendu par défaut
+    ne prouve rien du contenu de « Classement », qui porte la section
+    Prédiction : ses tuiles, sa table de dispersion, son graphique à
+    barres d'erreur et ses `column_config`. Une clé de colonne qui
+    n'existe plus dans le tableau des périodes, un `_panneau` employé sans
+    son conteneur, et la page entière tombe — sans qu'aucun test ne
+    bronche.
+
+    C'est exactement la famille de défauts pour laquelle ce fichier
+    existe, appliquée à la partie du code qui vient de changer le plus.
+    """
+    at = _app(lanceur)
+    at.query_params["onglet"] = "Classement"
+    at.run()
+    assert not at.exception, [str(e) for e in at.exception]
+    assert at.session_state["onglet"] == "Classement"
+
+    # Rendue, et pas seulement sans erreur. La preuve passe par les
+    # TABLEAUX plutôt que par le texte : un test qui cherche un mot dans la
+    # page trouve toujours quelque chose, et passerait sur une section
+    # vide. Chaque table ci-dessous n'existe que si le code qui la
+    # construit est allé au bout.
+    colonnes = [set(d.value.columns) for d in at.dataframe]
+
+    def rendue(*exigees):
+        return any(set(exigees) <= c for c in colonnes)
+
+    assert rendue("source", "IC", "IR", "pire période"), \
+        "table de dispersion par source absente"
+    assert rendue("trait", "IC", "poids retenu"), \
+        "table des traits et de leurs poids appris absente"
+    assert rendue("periode", "ic_combinaison", "ic_composite"), \
+        "journal des périodes de test absent"
+    assert rendue("ticker", "probabilite", "incertitude", "rang_combine"), \
+        "classement des probabilités absent — ou privé de son incertitude"
+
+
 def test_un_symbole_inconnu_dans_l_URL_ne_fait_pas_tomber_l_app(lanceur):
     """Un lien peut désigner une valeur radiée, ou mal recopiée. Le
     sélecteur reste seul juge de ce qui existe : il retombe sur sa première

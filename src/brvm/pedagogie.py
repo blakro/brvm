@@ -55,6 +55,23 @@ GLOSSAIRE: dict[str, str] = {
     "liquidite":
         "Le montant qui s'échange en moyenne chaque séance. Une valeur peu "
         "liquide s'achète difficilement, et se revend encore moins bien.",
+    "choc_volume":
+        "Le montant échangé ces dernières semaines rapporté à celui de "
+        "l'année : non pas « cette valeur s'échange beaucoup », mais « elle "
+        "s'échange soudain plus que d'habitude ». Le seul des six traits "
+        "dont le pouvoir prédictif tienne sur onze ans d'archive.",
+    "retournement":
+        "Ce que la valeur a fait le mois dernier — l'exact contraire du "
+        "momentum, qui ignore justement le dernier mois. Une valeur qui "
+        "vient de bondir tend à en rendre une part, d'où un signe négatif.",
+    "ir":
+        "L'IC moyen divisé par ses écarts d'une période à l'autre. Deux "
+        "méthodes au même IC ne se valent pas si l'une le réalise à chaque "
+        "période et l'autre une fois sur deux.",
+    "calibrage":
+        "La conversion d'un rang en probabilité, apprise sur les périodes "
+        "de test et non sur l'entraînement. C'est ce qui empêche d'annoncer "
+        "100 % pour la valeur en tête d'un classement incertain.",
     "score":
         "La note qui sert à ordonner les valeurs entre elles. Elle n'a pas "
         "d'unité et ne se compare pas d'un jour à l'autre : seul le rang "
@@ -112,6 +129,10 @@ GLOSSAIRE: dict[str, str] = {
 LIBELLES: dict[str, str] = {
     "volatilite": "volatilité",
     "liquidite": "liquidité",
+    "choc_volume": "choc de volume",
+    "retournement": "retournement à un mois",
+    "ir": "IR (IC rapporté à sa dispersion)",
+    "calibrage": "calibrage des probabilités",
     "score": "score composite",
     "limite": "limite de ±7,5 %",
     "rendement": "rendement du dividende",

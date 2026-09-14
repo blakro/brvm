@@ -102,21 +102,45 @@ Sur les quatre exercices connus, le dividende rapporte 7 à 10 % par an,
 Conséquence : une analyse qui ne regarde que les cours ignore la partie
 la plus régulière du rendement, et ne garde que la plus bruyante.
 
-### 2. Aucun facteur de prix ne bat le hasard
+### 2. Un seul effet sur 162 résiste, et il ne paie pas
 
-On a testé **144 combinaisons** — huit méthodes × six segments de marché
-× trois horizons de temps. Une seule survit une fois corrigée le fait
-qu'en testant 144 choses, on en trouve forcément quelques-unes « qui
+On a testé **162 combinaisons** — neuf méthodes × six segments de marché
+× trois horizons de temps. Une seule survit une fois corrigé le fait
+qu'en testant 162 choses, on en trouve forcément quelques-unes « qui
 marchent » par pur hasard.
 
-Cette unique survivante — le fait qu'une action qui a beaucoup baissé sur
-un mois a tendance à remonter le mois suivant — **rapporte moins que les
-frais qu'elle coûte**. Simulée avec dix lignes et un rééquilibrage
-mensuel : +7,2 % par an avant frais, **−8,3 % après**. Les frais valent
-huit fois le gain.
+Cette unique survivante est le **choc de volume** : une action qui
+s'échange soudain beaucoup plus que d'habitude tend à surperformer le
+mois suivant. Ce n'est pas « une action très échangée » — ce niveau-là,
+la liquidité, ne prédit rien — c'est le changement de régime.
+
+Et elle ne paie pas. Simulée avec dix lignes et un rééquilibrage mensuel :
+
+| | Avant frais | Après frais | Rotation |
+|---|---|---|---|
+| Choc de volume | +27,1 %/an | **+6,2 %/an** | 48 % × 12/an |
+| Retournement à un mois | +14,8 %/an | **−14,3 %/an** | 78 % × 12/an |
+| Ne rien faire (détention équipondérée) | +14,8 %/an | **+14,8 %/an** | aucune |
+
+Les frais ne rabotent pas l'avantage, ils **renversent le classement** :
+le signal le plus fort du marché, exploité comme il se doit, rend moins
+de la moitié de ce que rapporte le fait de tout acheter et de ne plus y
+toucher. (Ces rendements sont eux-mêmes gonflés par l'absence des
+sociétés radiées — voir les avertissements. C'est la comparaison entre
+les lignes qui vaut, pas leur niveau.)
 
 Momentum, tendance, volatilité, liquidité : indiscernables du bruit sur
 onze ans et demi.
+
+> **Cette conclusion a changé, et c'est instructif.** Jusqu'à récemment
+> ce dépôt annonçait le *retournement à un mois* comme seul survivant.
+> Le balayage écartait alors sans le dire les valeurs qui ne cotent pas
+> tous les jours : une moyenne mobile à 100 séances exige, dans pandas,
+> 100 cotations **consécutives**, qu'une action échangée une séance sur
+> deux n'a jamais. La grille se prononçait sur la moitié la plus
+> régulièrement traitée du marché en croyant se prononcer sur le marché.
+> Corrigée, elle désigne un autre vainqueur. Le détail est dans l'en-tête
+> de `src/brvm/features.py`.
 
 ### 3. Sur le rendement du dividende, on ne peut pas conclure
 
@@ -126,10 +150,74 @@ Le rendement du dividende connu au moment du détachement, confronté à la
 performance du cours des douze mois suivants, donne un IC de **+0,086**.
 Positif sur 6 saisons sur 9 — mais avec seulement neuf saisons, la marge
 d'erreur est trop large pour trancher. Là où les facteurs de prix ont été
-**réfutés** sur 148 périodes, celui-ci n'a simplement pas encore pu être
+**réfutés** sur 151 périodes, celui-ci n'a simplement pas encore pu être
 testé, faute d'historique.
 
 L'absence de preuve n'est pas une preuve d'absence.
+
+### 4. Ce que l'apprentissage ajoute, et ce qu'il n'ajoute pas
+
+L'onglet Classement porte une section « modèle appris » qui, pour chaque
+valeur, estime sa probabilité de **surperformer le marché sur trois
+mois**. Mesurée sous un protocole unique — dix périodes de test
+successives, entraînement toujours antérieur, étiquettes qui débordent
+purgées :
+
+| | IC | t | IR | Périodes positives | Pire période |
+|---|---|---|---|---|---|
+| Avant | −0,056 | −1,1 | −0,43 | 4 / 10 | −0,240 |
+| **Après** | **+0,045** | **+1,5** | **+0,51** | **7 / 10** | **−0,094** |
+
+L'IC mesure si l'ordre proposé ressemble à l'ordre réalisé ; l'IR le
+rapporte à ses écarts d'une période à l'autre, et c'est lui qui dit la
+**fiabilité** — deux méthodes au même IC ne se valent pas si l'une le
+réalise à chaque période et l'autre une fois sur deux.
+
+Trois changements, par ordre d'importance :
+
+1. **Les données.** Une valeur qui n'échange pas tous les jours n'avait
+   jamais de tendance calculable, donc jamais de place dans
+   l'échantillon : 16 valeurs mesurées par séance sur 38 cotées. Corrigé,
+   l'échantillon passe de 40 131 à 100 961 lignes.
+2. **Les traits.** Le choc de volume et le retournement à un mois entrent ;
+   ce sont eux qui portent tout. Ôtez le premier, l'IC retombe de +0,044
+   à +0,011.
+3. **La combinaison.** Trois sources à poids égaux — une régression
+   logistique, des poids par trait appris puis rétrécis vers zéro selon la
+   force de leur preuve, et le composite de la configuration.
+
+Et **trois idées reçues, mesurées puis jetées** — elles sont documentées
+dans `src/brvm/apprentissage.py`, parce qu'un échec qu'on ne consigne pas
+sera retenté :
+
+- **Apprendre les poids de la combinaison** par validation imbriquée : IC
+  +0,036 contre +0,045 pour trois poids égaux décidés d'avance. Onze ans
+  à trois mois d'horizon ne font que 42 périodes vraiment indépendantes —
+  on n'y apprend pas trois poids, on y apprend du bruit.
+- **Moyenner plusieurs régressions** (l'« ensemble ») : +0,037 contre
+  +0,044 pour une seule. Six coefficients sur cent mille lignes, il n'y
+  avait pas de variance à réduire. L'ensemble est conservé quand même,
+  pour une autre raison : l'écart entre ses membres donne la **barre
+  d'erreur** affichée à côté de chaque probabilité.
+- **Sélectionner les traits qui marchent.** En retirant après coup les
+  trois traits qui n'ont rien porté on lit +0,076 et un IR de 0,96 — le
+  double. Ce chiffre n'existe pas : il suppose de savoir d'avance
+  lesquels retirer. Toutes les façons honnêtes de faire ce choix sur la
+  seule fenêtre d'entraînement rendent moins que de ne rien sélectionner.
+  L'écart entre +0,076 et +0,044 est la mesure exacte de ce qu'un
+  backtest gagne à tricher.
+
+**Deux réserves, plus importantes que le tableau.** D'abord +0,045 n'est
+pas significatif : le t vaut 1,5 là où il en faudrait 2. Le signe a
+changé, la dispersion a fondu, sept périodes sur dix sont positives —
+rien de tout cela n'autorise à dire que l'IC vrai diffère de zéro.
+Ensuite, un IC de 0,045 n'est pas de l'argent : à 3 % l'aller-retour,
+l'ordre proposé ne bat pas la simple détention du même univers.
+
+C'est pourquoi les probabilités affichées sont **calibrées** : elles
+tiennent entre 45 % et 54 %, et non entre 0 et 100 %. La première valeur
+du classement bat le marché un peu plus souvent qu'une pièce. L'afficher
+autrement serait un mensonge de présentation.
 
 ### Ce que ça change pour vous
 
@@ -163,7 +251,8 @@ src/brvm/
   features.py               calcul des indicateurs
   scoring.py                le classement
   backtest.py               rejeu de la stratégie dans le temps
-  prediction.py             modèle appris, et sa validation
+  prediction.py             la prédiction : échantillon, validation, rendu
+  apprentissage.py          son cœur appris : poids, ensemble, combinaison
   recherche.py              balayage systématique des prédicteurs
   dividende.py              logique des détachements
   exogene.py                séries externes
@@ -174,7 +263,7 @@ src/brvm/
     sikafinance.py            l'historique
     dividendes.py             les calendriers de dividendes
 
-tests/                    237 tests, tous hors ligne
+tests/                    264 tests, tous hors ligne
   donnees/                  captures réelles de pages web, servant de témoins
 
 .github/workflows/
@@ -204,13 +293,14 @@ s'applique où :
 |---|---|
 | **Marché** | L'état du jour : qui monte, qui baisse, quels volumes. |
 | **Valeur** | La fiche d'une société : son cours dans le temps, ses dividendes. |
-| **Classement** | Les valeurs ordonnées, et ce que vaut cet ordre. La section « modèle appris » y est incluse. |
+| **Classement** | Les valeurs ordonnées, et ce que vaut cet ordre. La section « modèle appris » y est incluse, avec la dispersion de ses mesures d'une période à l'autre. |
 | **Backtest** | Ce qu'aurait donné le classement s'il avait été suivi. |
 | **Données** | La couverture de l'archive et le journal de collecte. |
 
-Le résultat le mieux établi du projet — aucun facteur de prix ne bat le
-hasard — s'affiche **avant** les onglets, pas au fond de l'un d'eux : la
-hiérarchie visuelle doit dire la force de la preuve.
+Le résultat le mieux établi du projet — un seul effet sur 162 résiste, et
+il coûte plus de frais qu'il ne rapporte — s'affiche **avant** les
+onglets, pas au fond de l'un d'eux : la hiérarchie visuelle doit dire la
+force de la preuve.
 
 Chaque tableau s'exporte en CSV, et chaque graphique a son jumeau
 tabulaire. Une infobulle ne doit jamais être le seul accès à un chiffre.
@@ -592,10 +682,19 @@ Le préalable est toujours **la donnée**, jamais le code.
 | **Les fondamentaux des émetteurs** (PER, ROE, P/B) | Un des quatre facteurs du cadre initial n'a jamais pu être testé. |
 | **Les cours des commodités et le taux BCEAO** | Aucune source n'est joignable depuis ce projet ; le chargement se fait à la main par `importer-exogenes`. |
 
-Et une **question ouverte** : le retournement à un mois, seul effet retenu
-par le balayage, est-il un artefact de détachement ? Un dividende fait
-chuter le cours mécaniquement, et « baisse puis reprise » est exactement
-la forme du signal.
+Et deux **questions ouvertes**, l'une et l'autre sur le seul effet que le
+balayage retient :
+
+- Le **choc de volume** mesure-t-il un comportement de marché, ou
+  simplement la proximité d'un événement d'entreprise — détachement de
+  dividende, augmentation de capital, entrée d'un actionnaire ? Les deux
+  produiraient la même signature. Le calendrier des détachements est en
+  base ; celui des autres opérations ne l'est pas.
+- Le **retournement à un mois**, qui survivait au balayage avant la
+  correction de l'univers et arrive aujourd'hui juste sous le seuil,
+  est-il un artefact de détachement ? Un dividende fait chuter le cours
+  mécaniquement, et « baisse puis reprise » est exactement la forme du
+  signal.
 
 ### Pourquoi il n'y a pas de modèle par secteur
 

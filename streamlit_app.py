@@ -540,8 +540,21 @@ def valider_modele(_cours, _referentiel, archive, univers):
 
 
 @st.cache_data(max_entries=8, show_spinner="Application du modèle…")
-def appliquer_modele(_cours, _referentiel, archive, univers):
-    return prediction.predire(_cours, referentiel=_referentiel)
+def appliquer_modele(_cours, _referentiel, archive, univers, _validation):
+    """La validation est PASSÉE au modèle, et ce n'est pas une commodité.
+
+    C'est elle qui porte le calibrage appris hors échantillon, et qui dit
+    laquelle des sources part en production. Sans elle, `predire` rend le
+    rang combiné en guise de probabilité : 100 % pour la première valeur du
+    classement, 0 % pour la dernière — deux nombres que l'IC mesuré
+    n'autorise pas, et que personne ne lirait comme des rangs.
+
+    Le tiret initial exclut l'argument du hachage de cache (il contient des
+    objets non hachables) ; `archive` et `univers`, eux, changent dès que la
+    validation change, et suffisent donc à distinguer les entrées.
+    """
+    return prediction.predire(_cours, referentiel=_referentiel,
+                              validation=_validation)
 
 
 @st.cache_data(max_entries=8, show_spinner=False)
@@ -712,12 +725,18 @@ ARCHIVE = _empreinte(cours, referentiel, dividendes, fondamentaux)
 UNIVERS = tuple(sorted(retenus))
 
 # CINQ ONGLETS, ET « PRÉDICTION » N'EN EST PLUS UN. Un onglet est une
-# promesse : il annonce qu'il y a quelque chose à voir. Or le modèle
-# appris mesure un IC de −0,045 — pire que la référence, pire que le
-# hasard. Lui donner le même rang qu'au marché lui prêtait une autorité
-# que la mesure lui refuse, et le message rouge à l'intérieur ne la
-# reprenait pas : on lit la structure avant le texte. Il devient une
-# section du classement, ce qu'il est.
+# promesse : il annonce qu'il y a quelque chose à voir. Le modèle appris
+# mesurait alors un IC de −0,045 — pire que la référence, pire que le
+# hasard — et lui donner le même rang qu'au marché lui prêtait une
+# autorité que la mesure lui refusait ; le message rouge à l'intérieur ne
+# la reprenait pas, car on lit la structure avant le texte.
+#
+# IL MESURE AUJOURD'HUI +0,045, ET IL RESTE UNE SECTION. Le signe a
+# changé, la dispersion a fondu, sept périodes de test sur dix sont
+# positives — mais le t vaut 1,5 là où il en faudrait 2, et l'écart ne
+# survit pas aux frais. Une promesse se tient sur une preuve, pas sur une
+# amélioration : l'onglet se regagnera quand la mesure sera significative
+# ET rentable, pas avant.
 # LE RÉSULTAT LE MIEUX ÉTABLI DU PROJET N'AVAIT AUCUNE PLACE À L'ÉCRAN.
 # Il vivait dans le README et dans un message rouge au fond d'un onglet,
 # pendant que la plus grosse tuile affichait un rendement gonflé par le
@@ -730,14 +749,20 @@ _constat.markdown(
     f'<div class="tuile-label" style="color:{ENCRE}">Ce que onze ans et '
     'demi de cotation disent</div>'
     f'<div style="margin-top:.4rem;line-height:1.55;color:{ENCRE}">'
-    '<b>Aucun facteur de prix ne bat le hasard.</b> Momentum, tendance, '
-    'volatilité et liquidité sont indiscernables du bruit sur 144 cases '
-    'balayées et 148 périodes disjointes. Le seul effet qui survit à la '
-    'correction du test multiple — le retournement à un mois — rapporte '
-    'moins que les frais qu\'il coûte.</div>'
+    '<b>Un seul effet sur 162 résiste, et il ne paie pas.</b> Sur 162 cases '
+    'balayées et jusqu\'à 151 périodes disjointes, le <b>choc de volume</b> '
+    'à un mois — une valeur qui s\'échange soudain plus que d\'habitude — '
+    'est le seul prédicteur à franchir la correction du test multiple '
+    '(t&nbsp;=&nbsp;+3,8). Exploité à son horizon, il exige 48&nbsp;% de '
+    'rotation douze fois l\'an : +6,2&nbsp;%/an contre +14,8&nbsp;% pour la '
+    'simple détention du même univers. Le momentum, la tendance et la '
+    'liquidité, eux, restent indiscernables du bruit.</div>'
     f'<div class="tuile-note" style="margin-top:.5rem">C\'est la mesure la '
-    'plus solide de ce tableau de bord. Tout rendement positif affiché '
-    'plus bas repose, lui, sur un univers sans les sociétés radiées.</div>',
+    'plus solide de ce tableau de bord. Elle a changé de réponse le jour où '
+    'l\'on a cessé d\'écarter les valeurs qui ne cotent pas tous les jours : '
+    'sur l\'univers tronqué, c\'était le retournement à un mois qui '
+    'ressortait. Tout rendement positif affiché plus bas repose, lui, sur un '
+    'univers sans les sociétés radiées.</div>',
     unsafe_allow_html=True)
 st.write("")
 
@@ -1474,15 +1499,11 @@ if onglets[2].open:
                                     ARCHIVE, UNIVERS)
 
         if validation.get("motif"):
-            # L'apprentissage manque, le reste de l'app tient debout. On le dit
-            # sans dramatiser : le composite est la référence, et elle est là.
-            st.warning(prediction.expliquer(validation))
-            st.caption(
-                "Le classement composite reste disponible dans l'onglet "
-                "**Classement** — c'est lui qui part en production quand le "
-                "modèle appris ne le devance pas."
-            )
-        elif validation["periodes"].empty:
+            # L'apprentissage manque : une source sur trois, pas l'onglet.
+            # On le dit sans dramatiser, parce que le classement tient.
+            st.info(validation["motif"])
+
+        if validation["periodes"].empty:
             _attente(
                 "Prédiction",
                 validation["lignes"], validation["lignes_minimum"],
@@ -1497,14 +1518,13 @@ if onglets[2].open:
             # donc l'intervalle en légende, là où le chiffre ne peut pas
             # partir sans lui.
             m, c = validation["mesure"], validation["mesure_composite"]
-            # L'intervalle passe en légende et non en `delta` : Streamlit dessine
-            # une flèche devant un delta, et une incertitude n'a pas de sens de
-            # variation — « ↑ ± 0,117 » se lit comme une hausse.
-            mesures = st.columns(3)
+            stab = validation["stabilite"]
             # L'intervalle passe en note et non en écart : Streamlit dessine
             # une flèche devant un delta, et une incertitude n'a pas de sens
-            # de variation.
-            _tuile(mesures[0], "IC du modèle", f"{validation['ic']:+.3f}",
+            # de variation — « ↑ ± 0,117 » se lit comme une hausse.
+            mesures = st.columns(3)
+            _tuile(mesures[0], "IC de la combinaison",
+                   f"{validation['ic']:+.3f}",
                    note=f"± {2 * m['erreur_type']:.3f} · t = {m['t']:+.1f} · "
                         + ("significatif" if m["significatif"]
                            else "indiscernable du hasard"))
@@ -1515,7 +1535,7 @@ if onglets[2].open:
                            else "indiscernable du hasard"))
             _tuile(mesures[2], "Écart", f"{validation['ecart']:+.3f}",
                    sens=1 if validation["ecart"] > 0 else -1,
-                   note="le modèle moins le composite")
+                   note="la combinaison moins le composite")
 
             st.caption(
                 f"L'intervalle couvre deux erreurs-types, calculées sur "
@@ -1526,14 +1546,61 @@ if onglets[2].open:
                 "multiplie la certitude apparente par huit."
             )
 
+            # CE QUE LA MOYENNE CACHAIT, ET QUI MANQUAIT À CET ONGLET. Un IC
+            # moyen sans sa dispersion laissait croire à une mesure stable là
+            # où les périodes allaient de +0,29 à -0,28.
+            if validation["sources"]:
+                dispersion = pd.DataFrame([
+                    {"source": prediction.LIBELLES_SOURCES.get(nom, nom),
+                     "IC": mes["ic"], "IR": mes["ir"],
+                     "périodes positives": mes["part_positives"],
+                     "pire période": mes["pire"]}
+                    for nom, mes in validation["sources"].items()
+                ])
+                _panneau("Ce que la moyenne cache",
+                         "dispersion d'une période de test à l'autre").dataframe(
+                    dispersion.style.map(
+                        lambda v: _fond_divergent(v, plafond=0.05),
+                        subset=["IC", "pire période"]),
+                    width="stretch", hide_index=True,
+                    column_config={
+                        "source": st.column_config.TextColumn("Source"),
+                        "IC": st.column_config.NumberColumn(format="%+.3f"),
+                        "IR": st.column_config.NumberColumn(
+                            format="%+.2f",
+                            help="IC moyen rapporté à son écart-type entre "
+                                 "périodes. C'est la mesure de fiabilité : "
+                                 "deux sources au même IC ne se valent pas "
+                                 "si l'une le réalise à chaque période et "
+                                 "l'autre une fois sur deux."),
+                        "périodes positives": st.column_config.NumberColumn(
+                            format="percent"),
+                        "pire période": st.column_config.NumberColumn(
+                            format="%+.3f",
+                            help="Ce qu'aurait coûté la pire période de test. "
+                                 "Une source au bon IC moyen mais à la pire "
+                                 "période profonde s'abandonne au creux."),
+                    },
+                )
+                st.caption(
+                    "La combinaison est la moyenne des **rangs** des trois "
+                    "sources, à poids égaux. Des poids appris par validation "
+                    "imbriquée ont été essayés : ils font moins bien "
+                    "(IC +0,036 contre +0,045). Onze ans à trois mois "
+                    "d'horizon ne font que quarante-deux périodes vraiment "
+                    "indépendantes — trop peu pour apprendre trois poids."
+                )
+
             # Le constat le plus important de l'onglet, et il ne tient pas
             # dans une tuile : sur quoi le classement repose-t-il vraiment ?
             traits_mesures = validation.get("traits_mesures") or {}
+            poids_fiab = validation.get("poids_fiabilite") or {}
             if traits_mesures:
                 table = pd.DataFrame([
                     {"trait": pedagogie.LIBELLES.get(t, t), "IC": mes["ic"],
                      "± 2 erreurs-types": 2 * mes["erreur_type"],
                      "t": mes["t"],
+                     "poids retenu": poids_fiab.get(t, float("nan")),
                      "verdict": "significatif" if mes["significatif"]
                                 else "indiscernable du hasard"}
                     for t, mes in traits_mesures.items()
@@ -1559,25 +1626,51 @@ if onglets[2].open:
                             "± 2 erreurs-types":
                                 st.column_config.NumberColumn(format="%.3f"),
                             "t": st.column_config.NumberColumn(format="%+.1f"),
+                            "poids retenu": st.column_config.NumberColumn(
+                                format="%+.4f",
+                                help="Le poids appris, rétréci par la force de "
+                                     "la preuve : un trait dont l'IC ne se "
+                                     "distingue pas du hasard tombe à zéro, "
+                                     "quelle que soit la taille de cet IC."),
                             "verdict": st.column_config.TextColumn("Verdict"),
                         },
                     )
+                    st.caption(
+                        "Les deux traits qui portent le classement — le choc "
+                        "de volume et le retournement à un mois — ne "
+                        "figuraient pas dans le projet à l'origine. Le "
+                        "momentum et la tendance, qui en étaient le cœur, "
+                        "reçoivent un poids nul."
+                    )
 
-            if validation["ecart"] <= 0:
+            if validation["retenue"] == "composite":
                 st.warning(
-                    "**Le modèle ne bat pas le score composite.** C'est le cas le "
-                    "plus fréquent sur ce marché : c'est le composite — onglet "
-                    "Classement — qui doit partir en production."
+                    "**La combinaison n'a pas d'IC positif hors échantillon.** "
+                    "C'est le score composite — onglet Classement — qui part "
+                    "en production : il n'estime rien, donc il ne peut pas "
+                    "surajuster."
                 )
             elif validation["ic"] > 0.30:
                 st.error(
                     f"**IC de {validation['ic']:.3f} — anormalement élevé.** "
                     "Un IC exploitable vaut 0,02 à 0,05. Cherchez la fuite."
                 )
+            elif not m["significatif"]:
+                st.warning(
+                    f"**L'IC est positif sans être significatif** "
+                    f"(t = {m['t']:+.1f}, il en faudrait 2). Le signe, la "
+                    f"dispersion et les {stab['periodes_positives']} périodes "
+                    f"positives sur {stab['periodes']} sont une amélioration "
+                    "réelle et mesurable ; rien de tout cela n'autorise à "
+                    "affirmer que l'IC vrai est différent de zéro."
+                )
+
+            colonnes_ic = [c for c in validation["periodes"].columns
+                           if c.startswith("ic_")]
             st.dataframe(
                 validation["periodes"].style.map(
                     lambda v: _fond_divergent(v, plafond=0.05),
-                    subset=["ic_modele", "ic_composite"]),
+                    subset=colonnes_ic),
                 width="stretch", hide_index=True,
                 column_config={
                     "periode": st.column_config.TextColumn("Période de test"),
@@ -1587,10 +1680,14 @@ if onglets[2].open:
                              "recouvrantes purgées."),
                     "lignes_test": st.column_config.NumberColumn(
                         "Testé sur", format="localized"),
+                    "ic_combinaison": st.column_config.NumberColumn(
+                        "IC combinaison", format="%+.3f"),
                     "ic_modele": st.column_config.NumberColumn(
-                        "IC du modèle", format="%+.3f"),
+                        "IC régression", format="%+.3f"),
+                    "ic_fiabilite": st.column_config.NumberColumn(
+                        "IC poids appris", format="%+.3f"),
                     "ic_composite": st.column_config.NumberColumn(
-                        "IC du composite", format="%+.3f"),
+                        "IC composite", format="%+.3f"),
                     "precision": st.column_config.NumberColumn(
                         "Précision", format="percent",
                         help="Part des paris justes. Trompeuse seule : "
@@ -1599,32 +1696,73 @@ if onglets[2].open:
             )
 
             probable = appliquer_modele(cours_filtre, referentiel_filtre,
-                                        ARCHIVE, UNIVERS)
+                                        ARCHIVE, UNIVERS, validation)
             if not probable.empty:
                 probable = probable.merge(referentiel[["ticker", "nom", "secteur"]],
                                           on="ticker", how="left")
-                tete = probable.head(15)
-                _panneau("Probabilité de surperformer le marché",
-                         "à trois mois, quinze premières").altair_chart(
+                calibree = bool(probable["calibree"].all())
+                tete = probable.head(15).copy()
+                # La barre d'erreur n'est pas un ornement : sans elle, l'œil
+                # lit un ordre là où le modèle ne distingue presque rien.
+                tete["bas"] = (tete["probabilite"]
+                               - tete["incertitude"].fillna(0)).clip(lower=0)
+                tete["haut"] = (tete["probabilite"]
+                                + tete["incertitude"].fillna(0)).clip(upper=1)
+                titre = ("Probabilité de surperformer le marché" if calibree
+                         else "Rang combiné — PAS une probabilité")
+                barres = (
                     alt.Chart(tete)
                     .mark_bar(cornerRadiusEnd=4, height=16, color=SERIE_1)
                     .encode(
                         x=alt.X("probabilite:Q",
-                                title="probabilité de surperformer",
-                                axis=alt.Axis(format=".0%")),
+                                title="probabilité de surperformer" if calibree
+                                      else "rang combiné",
+                                axis=alt.Axis(format=".0%"),
+                                scale=alt.Scale(zero=not calibree)),
                         y=alt.Y("ticker:N", sort="-x", title=None,
                                 axis=alt.Axis(labelOverlap=False)),
                         tooltip=[
                             alt.Tooltip("ticker:N", title="Symbole"),
                             alt.Tooltip("nom:N", title="Société"),
-                            alt.Tooltip("probabilite:Q", title="Probabilité",
+                            alt.Tooltip("probabilite:Q",
+                                        title="Probabilité" if calibree
+                                              else "Rang", format=".1%"),
+                            alt.Tooltip("incertitude:Q", title="± incertitude",
                                         format=".1%"),
                             alt.Tooltip("secteur:N", title="Secteur"),
                         ],
                     )
+                )
+                intervalle = (
+                    alt.Chart(tete)
+                    .mark_rule(color=ENCRE, opacity=0.55, strokeWidth=1.5)
+                    .encode(x="bas:Q", x2="haut:Q",
+                            y=alt.Y("ticker:N", sort="-x", title=None))
+                )
+                _panneau(titre, "à trois mois, quinze premières").altair_chart(
+                    (barres + intervalle)
                     .properties(height=max(220, 24 * len(tete))),
                     width="stretch",
                 )
+                if calibree:
+                    st.caption(
+                        "**L'échelle est resserrée autour de 50 %, et c'est "
+                        "la vérité.** Le calibrage apprend, sur les périodes "
+                        "de test, combien de fois une valeur ainsi classée a "
+                        "réellement battu la médiane. Un rang de 100 % ne "
+                        "vaut pas une certitude : avec un IC de cet ordre, "
+                        "la première du classement bat le marché un peu plus "
+                        "souvent qu'une pièce. Le trait horizontal donne "
+                        "l'incertitude d'estimation — de combien la "
+                        "probabilité bougerait si l'historique avait été un "
+                        "autre tirage de périodes."
+                    )
+                else:
+                    st.warning(
+                        "**Calibrage indisponible : ces nombres sont des "
+                        "rangs, pas des probabilités.** Le premier vaut 100 % "
+                        "parce qu'il est premier, pas parce qu'il est sûr."
+                    )
                 # Jumeau tabulaire : une infobulle ne doit jamais être le seul
                 # accès à une valeur.
                 st.dataframe(
@@ -1635,7 +1773,26 @@ if onglets[2].open:
                     probable.style.map(
                         lambda v: _fond_divergent(v - 0.5, plafond=0.05),
                         subset=["probabilite"]),
-                    width="stretch", hide_index=True)
+                    width="stretch", hide_index=True,
+                    column_config={
+                        "probabilite": st.column_config.NumberColumn(
+                            "Probabilité" if calibree else "Rang",
+                            format="percent"),
+                        "incertitude": st.column_config.NumberColumn(
+                            "± incertitude", format="percent",
+                            help="Deux écarts-types entre les membres du sac "
+                                 "de régressions. Incertitude d'ESTIMATION, "
+                                 "pas incertitude du marché — laquelle est "
+                                 "infiniment plus grande."),
+                        "rang_combine": st.column_config.NumberColumn(
+                            "Rang combiné", format="percent"),
+                        "rang_modele": st.column_config.NumberColumn(
+                            "Rang régression", format="percent"),
+                        "rang_fiabilite": st.column_config.NumberColumn(
+                            "Rang poids appris", format="percent"),
+                        "rang_composite": st.column_config.NumberColumn(
+                            "Rang composite", format="percent"),
+                    })
                 _telecharger(probable, "prediction.csv", "dl_prediction")
 
         st.warning("**Ce que ces chiffres ne disent pas.** "
@@ -1652,7 +1809,8 @@ if onglets[2].open:
             signal_dividende(cours_filtre, dividendes, ARCHIVE, UNIVERS,
                              cibles)), language=None)
 
-        _glossaire("ic", "score", "rendement", "frais")
+        _glossaire("ic", "ir", "calibrage", "choc_volume", "retournement",
+                   "score", "rendement", "frais")
 
 
 # --- Backtest -------------------------------------------------------------
@@ -1901,12 +2059,16 @@ if onglets[4].open:
         # Visible sans avoir à ouvrir les journaux de l'hébergeur : un onglet
         # bridé s'explique ici plutôt que de laisser croire à un bug.
         st.caption(
-            "Modèle appris : "
-            + ("**disponible** (scikit-learn installé)."
+            "Régression logistique : "
+            + ("**disponible** (scikit-learn installé). C'est une des trois "
+               "sources de la prédiction ; les deux autres — poids appris "
+               "par trait, composite de la configuration — ne dépendent "
+               "d'aucune bibliothèque d'apprentissage."
                if prediction.APPRENTISSAGE_DISPONIBLE else
                "**indisponible** — scikit-learn absent de l'environnement. "
-               "Le score composite, lui, ne dépend d'aucune bibliothèque "
-               "d'apprentissage et reste calculé.")
+               "L'onglet Prédiction continue de fonctionner avec les deux "
+               "autres sources, et le dit ; seul le calibrage des "
+               "probabilités en pourcentage est perdu.")
         )
 
         if referentiel_filtre["secteur"].notna().any():
