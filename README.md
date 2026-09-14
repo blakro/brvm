@@ -219,6 +219,52 @@ tiennent entre 45 % et 54 %, et non entre 0 et 100 %. La première valeur
 du classement bat le marché un peu plus souvent qu'une pièce. L'afficher
 autrement serait un mensonge de présentation.
 
+### 5. Les frais : le seuil, plutôt que le verdict
+
+« Ça ne survit pas aux frais » est vrai et inutilisable — le lecteur ne sait
+pas s'il en est loin de 10 % ou d'un facteur dix. `python -m brvm backtester
+--signal choc_volume --seuil-frais` rend le **niveau de frais auquel la
+stratégie cesse de battre la simple détention du même univers** :
+
+| Signal rejoué | Écart sans frais | Seuil | Frais réels |
+|---|---|---|---|
+| Composite de la configuration | **−5,4 %/an** | aucun | 1,50 % |
+| Choc de volume | **+3,4 %/an** | **0,69 %** | 1,50 % |
+
+Deux lectures, opposées :
+
+- Le **composite** — le classement que l'application affiche — perd contre
+  l'univers équipondéré **même à frais nuls**. Ce n'est pas le courtier qui
+  le condamne, c'est le signal. Aucun seuil ne le sauverait.
+- Le **choc de volume** gagne réellement avant frais. Son seuil vaut 0,69 %
+  par sens ; le marché en coûte 1,50 %. Il manque un facteur deux.
+
+La relation de Grinold — le rendement attendu d'une ligne vaut
+IC × dispersion × écart de score — donne indépendamment 0,43 % par sens. Deux
+méthodes, le même ordre de grandeur, le même verdict.
+
+**Et réduire la rotation ne comble pas l'écart.** Une zone tampon (garder une
+ligne tant qu'elle reste dans les 2N ou 3N premiers) fait bien tomber la
+rotation de 64 % à 17 %, mais l'avantage tombe avec elle :
+
+| Zone tampon | Tout l'historique | 1re moitié | 2nde moitié | Rotation |
+|---|---|---|---|---|
+| 1,0 | −3,86 % | −5,58 % | −4,60 % | 64 % |
+| 1,5 | −0,59 % | −0,43 % | −3,43 % | 48 % |
+| 2,0 | −2,98 % | −0,22 % | −1,25 % | 35 % |
+| 3,0 | **+0,46 %** | **+1,13 %** | **−4,56 %** | 17 % |
+
+Lisez la dernière ligne lentement. Sur l'historique entier, 3,0 est le seul
+réglage positif — et il est aussi le meilleur sur la première moitié, donc
+celui qu'on choisirait. Sur la seconde, jamais consultée, il est parmi les
+**pires**. Le +0,46 % n'existe pas : c'est la meilleure case d'une grille, et
+une grille a toujours une meilleure case.
+
+La raison de fond se mesure ailleurs : il faudrait **dix mois de détention**
+pour amortir un aller-retour à 3 %, et le choc de volume retombe au pur
+hasard en deux périodes. On ne peut pas détenir pour amortir un frais quand
+ce qu'on détient a cessé d'être bon.
+
 ### Ce que ça change pour vous
 
 Sur un marché où toute stratégie qui tourne plus de quelques fois par an
@@ -250,7 +296,7 @@ src/brvm/
   db.py                     schéma SQLite et accès
   features.py               calcul des indicateurs
   scoring.py                le classement
-  backtest.py               rejeu de la stratégie dans le temps
+  backtest.py               rejeu de n'importe quel signal, et seuil de frais
   prediction.py             la prédiction : échantillon, validation, rendu
   apprentissage.py          son cœur appris : poids, ensemble, combinaison
   recherche.py              balayage systématique des prédicteurs
@@ -263,7 +309,7 @@ src/brvm/
     sikafinance.py            l'historique
     dividendes.py             les calendriers de dividendes
 
-tests/                    264 tests, tous hors ligne
+tests/                    272 tests, tous hors ligne
   donnees/                  captures réelles de pages web, servant de témoins
 
 .github/workflows/
@@ -390,6 +436,8 @@ python -m brvm rechercher --valeurs   # quel prédicteur marche, et où
 python -m brvm predire       # probabilité de surperformance à 3 mois
 python -m brvm rendement     # retour à la moyenne du rendement du dividende
 python -m brvm backtester    # rejoue le classement dans le temps
+python -m brvm backtester --signal choc_volume --seuil-frais
+                             # à partir de quels frais ce signal cesse de payer
 ```
 
 ### Archiver et diagnostiquer

@@ -534,6 +534,29 @@ def calculer_backtest(_cours, _referentiel, _fondamentaux, _dividendes,
     )
 
 
+@st.cache_data(max_entries=4, show_spinner="Recherche du seuil de frais…")
+def calculer_seuil_frais(_cours, _referentiel, _fondamentaux, _dividendes,
+                         archive, univers, positions, signal):
+    """À partir de quels frais la stratégie cesse de battre l'univers.
+
+    `signal` entre dans la clé de cache et sert à choisir la matrice de
+    scores : « composite » pour le classement de la configuration, sinon un
+    trait, que `traits_glissants` calcule sans aucun apprentissage — donc
+    sans risque de fuite à chaque rééquilibrage.
+    """
+    scores = None
+    if signal != "composite":
+        matrices = features.traits_glissants(_cours, DEFAUTS)
+        signe = -1.0 if signal in ("volatilite", "retournement") else 1.0
+        scores = matrices[signal] * signe
+    reglages = {"analyse": DEFAUTS["analyse"],
+                "ponderations": DEFAUTS["ponderations"],
+                "backtest": {**DEFAUTS["backtest"], "positions": positions}}
+    return backtest.seuil_frais(_cours, _referentiel, reglages,
+                                fondamentaux=_fondamentaux,
+                                dividendes=_dividendes, scores=scores)
+
+
 @st.cache_data(max_entries=8, show_spinner="Validation du modèle appris…")
 def valider_modele(_cours, _referentiel, archive, univers):
     return prediction.valider(_cours, referentiel=_referentiel)
@@ -2039,6 +2062,109 @@ if onglets[3].open:
 
         st.warning("**Trois biais survivent et ne sont pas corrigeables ici :** "
                    + " ; ".join(resultat["avertissements"]) + ".")
+        # LE SEUIL, ET IL RÉPOND À LA QUESTION QUE LES CURSEURS POSENT SANS
+        # LE DIRE. On peut baisser les frais à la main et regarder l'écart
+        # changer de signe, mais personne ne le fait : il faut une dizaine
+        # d'essais pour trouver le point de bascule. Le calculer une fois et
+        # l'afficher transforme « ça ne survit pas aux frais » — vrai et
+        # inutilisable — en un nombre qui se compare au devis d'une SGI.
+        st.divider()
+        st.subheader("À partir de quels frais ce classement cesse-t-il de payer ?")
+        signal = st.selectbox(
+            "Signal rejoué", ["composite", *features.TOUS_TRAITS],
+            key="bt_signal", persist_state="session",
+            help="Le composite est le classement de l'onglet Classement. Les "
+                 "autres sont les traits pris un par un — le choc de volume "
+                 "est le seul dont le pouvoir prédictif tienne sur onze ans.")
+        seuil = calculer_seuil_frais(cours_filtre, referentiel_filtre,
+                                     fondamentaux, dividendes,
+                                     ARCHIVE, UNIVERS, positions, signal)
+        if seuil["niveaux"].empty:
+            st.info("Pas encore assez de séances pour un seul rééquilibrage.")
+        else:
+            reel = seuil["reel"] or 0.0
+            tuiles = st.columns(3)
+            _tuile(tuiles[0], "Écart sans frais",
+                   pedagogie.pourcentage(seuil["ecart_sans_frais"]),
+                   sens=1 if seuil["ecart_sans_frais"] > 0 else -1,
+                   note="par an, contre l'univers équipondéré")
+            if seuil["seuil"] == seuil["seuil"]:
+                _tuile(tuiles[1], "Seuil de rentabilité",
+                       f"{seuil['seuil']:.2%}",
+                       note="frais par sens au-delà desquels la détention "
+                            "simple fait mieux")
+                _tuile(tuiles[2], "Frais réels", f"{reel:.2%}",
+                       sens=-1 if reel > seuil["seuil"] else 1,
+                       note=(f"{reel / seuil['seuil']:.1f} fois le seuil"
+                             if seuil["seuil"] > 0 else "par sens"))
+            else:
+                _tuile(tuiles[1], "Seuil de rentabilité", "aucun",
+                       note="l'écart ne change pas de signe sur la plage testée")
+                _tuile(tuiles[2], "Frais réels", f"{reel:.2%}", note="par sens")
+
+            if seuil["ecart_sans_frais"] <= 0:
+                st.error(
+                    "**Ce signal perd contre l'univers équipondéré même à "
+                    "frais nuls.** Ce n'est donc pas le courtier qui le "
+                    "condamne, c'est le signal : aucun seuil de frais ne le "
+                    "sauverait."
+                )
+            elif seuil["seuil"] == seuil["seuil"] and reel > seuil["seuil"]:
+                st.warning(
+                    f"**Le signal gagne avant frais et perd après.** Il "
+                    f"faudrait payer {seuil['seuil']:.2%} par sens ; le marché "
+                    f"en coûte {reel:.2%}, soit "
+                    f"{reel / seuil['seuil']:.1f} fois plus. Il ne manque pas "
+                    "un réglage, il manque un courtier — et réduire la "
+                    "rotation ne comble pas l'écart : aucun réglage de zone "
+                    "tampon n'est positif hors échantillon."
+                )
+
+            barres = seuil["niveaux"].copy()
+            _panneau("Écart contre la référence, selon les frais",
+                     "le trait vertical marque les frais réels").altair_chart(
+                alt.layer(
+                    alt.Chart(barres).mark_bar(cornerRadiusEnd=3, height=18).encode(
+                        x=alt.X("ecart:Q", title="écart annualisé",
+                                axis=alt.Axis(format="+.1%")),
+                        y=alt.Y("frais_par_sens:O", title="frais par sens",
+                                axis=alt.Axis(format=".2%"), sort="ascending"),
+                        color=alt.condition(alt.datum.ecart > 0,
+                                            alt.value(HAUSSE), alt.value(BAISSE)),
+                        tooltip=[
+                            alt.Tooltip("frais_par_sens:Q", title="Frais par sens",
+                                        format=".2%"),
+                            alt.Tooltip("aller_retour:Q", title="Aller-retour",
+                                        format=".1%"),
+                            alt.Tooltip("ecart:Q", title="Écart", format="+.2%"),
+                            alt.Tooltip("rotation_moyenne:Q", title="Rotation",
+                                        format=".0%"),
+                        ],
+                    ),
+                    alt.Chart(pd.DataFrame({"x": [0.0]})).mark_rule(
+                        color=ENCRE, strokeWidth=1).encode(x="x:Q"),
+                ).properties(height=max(200, 26 * len(barres))),
+                width="stretch")
+            st.dataframe(
+                barres.style.map(lambda v: _fond_divergent(v, plafond=0.05),
+                                 subset=["ecart"]),
+                width="stretch", hide_index=True,
+                column_config={
+                    "frais_par_sens": st.column_config.NumberColumn(
+                        "Frais par sens", format="percent"),
+                    "aller_retour": st.column_config.NumberColumn(
+                        "Aller-retour", format="percent"),
+                    "rendement_annualise": st.column_config.NumberColumn(
+                        "Stratégie", format="percent"),
+                    "reference_annualisee": st.column_config.NumberColumn(
+                        "Référence", format="percent"),
+                    "ecart": st.column_config.NumberColumn(
+                        "Écart", format="percent"),
+                    "rotation_moyenne": st.column_config.NumberColumn(
+                        "Rotation", format="percent"),
+                })
+            _telecharger(barres, "seuil_frais.csv", "dl_seuil")
+
         _glossaire("backtest", "reference", "perte_max", "rotation", "frais",
                    "survivant")
 
