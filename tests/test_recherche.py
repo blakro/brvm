@@ -35,6 +35,7 @@ os.environ.setdefault(
 
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
+import pytest  # noqa: E402
 
 from brvm import recherche  # noqa: E402
 
@@ -64,6 +65,53 @@ def _marche_aleatoire(n_valeurs=12, n_seances=1500, graine=0):
 
 
 # --- Ne rien trouver quand il n'y a rien ----------------------------------
+
+def test_les_reglages_passes_a_balayer_sont_vraiment_employes():
+    """Un paramètre accepté et ignoré est pire qu'un paramètre absent.
+
+    `balayer` calculait sa configuration puis ne la transmettait pas à
+    `_prix`, qui relisait le fichier global : un appelant qui passait un
+    `report_max_seances` différent voyait le sien ignoré sans aucun signe.
+    Rien ne l'utilisait encore, donc rien ne s'en plaignait — c'est
+    exactement la forme de défaut qui attend un premier utilisateur.
+
+    Le report comble les séances sans échange ; à zéro il ne comble rien, et
+    les cours doivent donc différer de ceux obtenus avec un report large.
+    """
+    import numpy as np
+
+    rng = np.random.default_rng(31)
+    n = 200
+    trajectoires = {f"T{i:02d}": list(100 * np.exp(np.cumsum(
+        rng.normal(0, 0.02, n)))) for i in range(6)}
+    cours = _cours(trajectoires)
+    # Des trous, sans quoi le report n'a rien à combler et le test ne
+    # distinguerait pas les deux réglages.
+    dates = sorted(cours["date"].unique())
+    creuses = cours["date"].isin(dates[::3])
+    cours = cours[~(creuses & cours["ticker"].isin(["T01", "T04"]))]
+
+    sans = recherche._prix(cours, {"analyse": {"report_max_seances": 0}})
+    avec = recherche._prix(cours, {"analyse": {"report_max_seances": 20}})
+    assert sans["cloture"].notna().sum().sum() < avec["cloture"].notna().sum().sum(), (
+        "le réglage de report n'a eu aucun effet : il est ignoré")
+
+    # Et `balayer` doit le transmettre, pas seulement l'accepter.
+    vu = {}
+    originel = recherche._prix
+
+    def espion(cours_, reglages=None):
+        vu["reglages"] = reglages
+        return originel(cours_, reglages)
+
+    recherche._prix = espion
+    try:
+        recherche.balayer(cours, None, horizons=(20,),
+                          reglages={"analyse": {"report_max_seances": 0}})
+    finally:
+        recherche._prix = originel
+    assert vu.get("reglages") == {"analyse": {"report_max_seances": 0}}, vu
+
 
 def test_le_bruit_ne_produit_aucune_decouverte():
     """Le test qui justifie l'existence de la correction.
@@ -268,10 +316,17 @@ def test_rendement_transversal_sans_dividende_rend_un_tableau_vide():
     assert vide.empty and list(vide.columns) == ["saison", "societes", "ic"]
 
 
+@pytest.mark.filterwarnings("ignore::scipy.stats.ConstantInputWarning")
 def test_une_saison_sans_variation_ne_rend_pas_un_ic_indefini():
     """Tous les cours identiques : la corrélation n'a pas de sens. La
     saison est retirée, pas rendue à NaN — un NaN contaminerait la
-    moyenne de l'appelant au lieu d'en retirer une observation."""
+    moyenne de l'appelant au lieu d'en retirer une observation.
+
+    L'avertissement de scipy est filtré ICI et nulle part ailleurs : il est
+    l'effet de bord du cas qu'on teste exprès, et c'était le seul de toute
+    la suite. Une suite qui traîne un avertissement permanent apprend à les
+    ignorer, et le jour où un vrai apparaît il passe avec les autres.
+    """
     dates = pd.bdate_range("2020-01-01", periods=800)
     plat = pd.DataFrame([
         {"date": d.strftime("%Y-%m-%d"), "ticker": f"T{i:02d}",

@@ -326,7 +326,16 @@ def cours_reportes(prix: pd.DataFrame, limite: int) -> pd.DataFrame:
     """
     if prix.empty:
         return prix
-    return prix.ffill(limit=max(0, int(limite)))
+    seances = int(limite)
+    # ZÉRO VEUT DIRE « AUCUN REPORT », ET PANDAS REFUSE DE L'ENTENDRE :
+    # `ffill(limit=0)` lève « Limit must be greater than 0 » au lieu de ne
+    # rien combler. Le réglage est légitime — c'est le comportement strict
+    # d'avant la correction, que quelqu'un peut vouloir retrouver pour
+    # comparer — donc c'est ici qu'il faut le traduire, et non interdire la
+    # valeur. Les négatifs tombent dans le même cas : on ne reporte rien.
+    if seances <= 0:
+        return prix.copy()
+    return prix.ffill(limit=seances)
 
 
 def traits_glissants(
