@@ -60,7 +60,8 @@ MEMBRES_MINIMUM = 4
 SEUIL_FDR = 0.10
 
 
-def _prix(cours: pd.DataFrame) -> dict[str, pd.DataFrame]:
+def _prix(cours: pd.DataFrame,
+          reglages: dict | None = None) -> dict[str, pd.DataFrame]:
     """Les matrices dont tous les prédicteurs dérivent, cours reportés.
 
     LE REPORT A CHANGÉ LA RÉPONSE DE CE MODULE, ET C'EST POURQUOI IL EST
@@ -83,7 +84,13 @@ def _prix(cours: pd.DataFrame) -> dict[str, pd.DataFrame]:
     qui empêchent le report de mentir.
     """
     brut = features.serie(cours, "cloture")
-    limite = int(charger().get("analyse", {}).get(
+    # LES RÉGLAGES DE L'APPELANT, PAS CEUX DU DISQUE. `balayer` calculait sa
+    # configuration puis ne la transmettait pas : `_prix` relisait le fichier
+    # global, si bien qu'un `balayer(cours, reglages={...})` voyait son
+    # `report_max_seances` ignoré sans rien dire. Un paramètre qu'on accepte
+    # et qu'on n'emploie pas est pire qu'un paramètre absent.
+    conf = reglages or charger()
+    limite = int(conf.get("analyse", {}).get(
         "report_max_seances",
         features.DEFAUTS_FENETRES["report_max_seances"]))
     matrices = {"cloture": features.cours_reportes(brut, limite),
@@ -308,8 +315,7 @@ def balayer(cours: pd.DataFrame, referentiel: pd.DataFrame | None = None,
     qui décide : le meilleur t d'un balayage sans découverte reste du
     bruit, et il est toujours flatteur.
     """
-    conf = reglages or charger()
-    matrices = _prix(cours)
+    matrices = _prix(cours, reglages)
     cloture = matrices["cloture"]
     if cloture.empty:
         return pd.DataFrame()

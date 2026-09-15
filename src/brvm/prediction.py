@@ -146,7 +146,11 @@ import numpy as np
 import pandas as pd
 
 from . import apprentissage, exogene, features
-from .apprentissage import ApprentissageIndisponible  # noqa: F401 — API publique
+# Ré-exportée : l'exception est définie dans `apprentissage`, mais c'est
+# `valider` et `predire` qui peuvent la laisser remonter — un appelant qui
+# veut l'attraper le fait donc naturellement sur ce module-ci. Elle fait
+# partie de sa surface publique même si elle n'y est pas déclarée.
+from .apprentissage import ApprentissageIndisponible  # noqa: F401
 from .config import charger
 
 # scikit-learn est la SEULE dépendance lourde du projet, et elle ne sert

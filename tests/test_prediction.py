@@ -560,6 +560,14 @@ def test_le_report_du_cours_est_borne_et_ne_regarde_jamais_l_avenir():
     coupe = features.cours_reportes(brut.iloc[:40], limite=5)
     pd.testing.assert_frame_equal(coupe, reporte.iloc[:40])
 
+    # ZÉRO VEUT DIRE « AUCUN REPORT », et c'est un réglage légitime : celui
+    # d'avant la correction, qu'on peut vouloir retrouver pour comparer.
+    # `ffill(limit=0)` lève chez pandas, donc le cas doit être traduit ici —
+    # une exception sur une valeur de configuration valide est un bug.
+    for limite in (0, -1):
+        strict = features.cours_reportes(brut, limite=limite)
+        pd.testing.assert_frame_equal(strict, brut)
+
 
 def test_le_report_ne_fait_pas_passer_les_valeurs_dormantes_pour_calmes():
     """Un cours reporté produit un rendement nul, qui n'est pas un calme

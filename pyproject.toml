@@ -20,6 +20,11 @@ classifiers = [
 requires-python = ">=3.11"
 dependencies = [
     "pandas>=2.0",
+    # DÉCLARÉE PARCE QU'ELLE EST IMPORTÉE. Sept modules font `import numpy`
+    # directement ; elle arrivait jusqu'ici par pandas, qui en dépend. Une
+    # dépendance transitive marche jusqu'au jour où l'intermédiaire change
+    # d'avis, et on ne l'apprend qu'à l'installation suivante.
+    "numpy>=1.24",
     "requests>=2.28",
     "beautifulsoup4>=4.11",
     "scikit-learn>=1.3",
@@ -27,6 +32,13 @@ dependencies = [
 
 [project.urls]
 Source = "https://github.com/blakro/brvm"
+
+# SCIPY N'EST PAS DÉCLARÉE, ET C'EST VOULU. `conseil._quantile_normal` et
+# `recherche._valeur_p` l'emploient si elle est là et retombent sur une
+# approximation sinon — l'écart se joue à la quatrième décimale et ne change
+# aucune conclusion. Elle arrive de toute façon avec scikit-learn ; l'exiger
+# en plus ferait porter une dépendance lourde à un environnement qui
+# n'installerait que le nécessaire.
 
 [project.optional-dependencies]
 # L'interface en fait partie depuis que `tests/test_app.py` existe. Sans
