@@ -730,3 +730,149 @@ if __name__ == "__main__":
             print(f"  ÉCHEC {nom}\n        {erreur}")
     print(f"\n{'tout passe' if not echecs else f'{echecs} échec(s)'}")
     sys.exit(1 if echecs else 0)
+
+
+# --- le secteur, et ce qu'il change en bout de chaîne ----------------------
+
+def _marche_avec_volumes(n_valeurs=12, n_seances=320, graine=5):
+    """Un marché dont les VOLUMES diffèrent aussi d'une valeur à l'autre.
+
+    `_marche_aleatoire` donne le même volume à tout le monde — ce qui suffit
+    aux traits de prix, mais laisse `choc_volume`, `liquidite` et les traits
+    d'attention parfaitement ex æquo. Leurs rangs valent alors 0,5 partout
+    et leur version neutralisée exactement zéro : un test écrit dessus
+    prouverait le contraire de ce qu'il croit.
+    """
+    rng = np.random.default_rng(graine)
+    trajectoires, volumes = {}, {}
+    for i in range(n_valeurs):
+        nom = f"T{i:02d}"
+        trajectoires[nom] = 100 * np.exp(
+            np.cumsum(rng.normal(0, 0.015, n_seances)))
+        volumes[nom] = list(
+            np.abs(rng.lognormal(12 + 0.3 * i, 0.8, n_seances)))
+    return _cours(trajectoires, volumes)
+
+
+def _referentiel(tickers, par_secteur=4):
+    """Référentiel fabriqué : les tickers répartis en secteurs de taille fixe."""
+    return pd.DataFrame({
+        "ticker": list(tickers),
+        "secteur": [f"S{i // par_secteur}" for i in range(len(tickers))],
+    })
+
+
+def test_la_validation_rend_l_avantage_du_haut_de_liste():
+    """LE SECOND CHIFFRE VOYAGE AVEC LE PREMIER, OU IL NE SERT À RIEN.
+
+    Un IC sans avantage du haut de liste laisse croire qu'ordonner la cote
+    et gagner de l'argent sont la même chose. La clé doit donc être présente
+    même quand l'échantillon est trop maigre pour la remplir.
+    """
+    cours = _marche_aleatoire(n_valeurs=14, n_seances=300, graine=3)
+    refer = _referentiel(sorted(set(cours["ticker"])))
+    resultat = prediction.valider(cours, REGLAGES, referentiel=refer)
+    assert "avantage" in resultat and "motif_retenue" in resultat
+    avantage = resultat["avantage"]
+    assert {"avantage", "t", "positions", "significatif"} <= set(avantage)
+    # Chaque source porte le sien : c'est ce qui permet de voir laquelle
+    # ordonne bien la cote sans que son haut de liste paie.
+    for mesures in resultat["sources"].values():
+        assert "avantage" in mesures
+
+    # Et sur un échantillon refusé, la clé existe quand même.
+    maigre = prediction.valider(_marche_aleatoire(n_valeurs=5, n_seances=60),
+                                REGLAGES)
+    assert "avantage" in maigre and maigre["retenue"] == "composite"
+
+
+def test_le_referentiel_change_ce_que_le_modele_apprend():
+    """SI LE SECTEUR N'ARRIVAIT PAS JUSQU'AU MODÈLE, RIEN NE LE DIRAIT.
+
+    Le risque est silencieux : un référentiel oublié en chemin — comme il
+    l'était dans la commande `predire` — laisse tourner un calcul juste sur
+    la mauvaise grandeur. Deux validations, avec et sans, doivent donc
+    différer.
+    """
+    cours = _marche_avec_volumes(n_valeurs=16, n_seances=340, graine=7)
+    refer = _referentiel(sorted(set(cours["ticker"])))
+    avec = prediction.valider(cours, REGLAGES, referentiel=refer)
+    sans = prediction.valider(cours, REGLAGES)
+    assert avec["ic"] != sans["ic"], (
+        "le référentiel n'atteint pas les sources apprises")
+    # Le composite, lui, ne doit PAS bouger : il garde les rangs de marché,
+    # sans quoi l'onglet Classement et le repli changeraient aussi.
+    #
+    # `np.testing.assert_equal` et non `==` : sur un marché fabriqué le
+    # composite peut être constant, donc d'IC non défini, et `nan == nan`
+    # est faux. Ce qu'on veut dire est « le même résultat », NaN compris.
+    np.testing.assert_equal(avec["ic_composite"], sans["ic_composite"])
+
+
+def test_la_cible_sectorielle_compare_a_son_propre_secteur():
+    """L'étiquette apprise doit être « battre les siens », pas « battre tout ».
+
+    Fabriqué exprès : un secteur entier monte, l'autre baisse. La cible de
+    marché donne 1 à tout le premier secteur ; la cible sectorielle en donne
+    à la moitié de chacun.
+    """
+    n = 200
+    monte = {f"H{i}": list(100 * np.exp(np.linspace(0, 0.5 + 0.01 * i, n)))
+             for i in range(6)}
+    baisse = {f"B{i}": list(100 * np.exp(np.linspace(0, -0.5 + 0.01 * i, n)))
+              for i in range(6)}
+    cours = _cours({**monte, **baisse})
+    refer = pd.DataFrame({
+        "ticker": [*monte, *baisse],
+        "secteur": ["Haut"] * len(monte) + ["Bas"] * len(baisse)})
+    bloc = prediction.construire_echantillon(cours, REGLAGES, refer)
+    assert "cible_secteur" in bloc.columns
+
+    hauts = bloc[bloc["secteur"] == "Haut"]
+    # Presque tout le secteur qui monte bat la médiane du MARCHÉ...
+    assert hauts["cible"].mean() > 0.9
+    # ...et la moitié seulement bat la médiane de SON secteur.
+    assert 0.3 < hauts["cible_secteur"].mean() < 0.7
+
+
+def test_les_traits_neutralises_ne_touchent_pas_les_rangs_de_marche():
+    """Les deux jeux de colonnes coexistent, et ne se mélangent pas.
+
+    Le composite lit les rangs de marché, les sources apprises les
+    colonnes neutralisées. Une seule série de colonnes aurait forcé à
+    choisir, et le composite y aurait perdu son apport.
+    """
+    cours = _marche_avec_volumes(n_valeurs=12, n_seances=320, graine=11)
+    refer = _referentiel(sorted(set(cours["ticker"])), par_secteur=3)
+    bloc = prediction.construire_echantillon(cours, REGLAGES, refer)
+    # `intensite_echange` est exclue à dessein : dans ce marché fabriqué
+    # toutes les valeurs cotent toutes les séances, son rang vaut donc 0,5
+    # partout et sa version neutralisée zéro. C'est le bon comportement, et
+    # il se teste ailleurs — voir `test_secteur.py`.
+    for trait in ("momentum", "choc_volume"):
+        assert trait in bloc.columns
+        assert f"net_{trait}" in bloc.columns
+        # Les rangs de marché restent des rangs : entre 0 et 1.
+        assert bloc[trait].between(0, 1).all()
+        # Les neutralisés sont des écarts : centrés, donc négatifs aussi.
+        assert (bloc[f"net_{trait}"] < 0).any()
+        moyennes = bloc.groupby(["date", "secteur"])[f"net_{trait}"].mean()
+        assert moyennes.abs().max() < 1e-9
+
+
+def test_un_ticker_hors_referentiel_est_neutralise_contre_lui_meme():
+    """Un ticker sans secteur connu ne doit pas être versé dans un fourre-tout.
+
+    Rangés ensemble sous « inconnu », deux tickers sans rapport se
+    compareraient l'un à l'autre et fabriqueraient un signal. Chacun forme
+    donc son propre secteur, et sort à zéro : « on ne sait rien ».
+    """
+    cours = _marche_aleatoire(n_valeurs=10, n_seances=300, graine=13)
+    tickers = sorted(set(cours["ticker"]))
+    # Seuls les quatre premiers sont au référentiel.
+    refer = pd.DataFrame({"ticker": tickers[:4], "secteur": ["S0"] * 4})
+    bloc = prediction.construire_echantillon(cours, REGLAGES, refer)
+    orphelins = bloc[~bloc["ticker"].isin(tickers[:4])]
+    assert not orphelins.empty
+    assert orphelins["net_momentum"].abs().max() < 1e-12
+    assert orphelins["secteur"].nunique() == orphelins["ticker"].nunique()
