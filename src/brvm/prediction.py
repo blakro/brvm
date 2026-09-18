@@ -236,7 +236,8 @@ _MEMO: dict[tuple, pd.DataFrame] = {}
 _MEMO_MAX = 2
 
 
-def _empreinte(cours: pd.DataFrame, conf: dict) -> tuple:
+def _empreinte(cours: pd.DataFrame, conf: dict,
+               referentiel: pd.DataFrame | None = None) -> tuple:
     """Clé de mémoïsation : ce dont l'échantillon dépend, et rien d'autre.
 
     Les bornes de dates et le nombre de lignes suffisent à distinguer deux
@@ -245,17 +246,75 @@ def _empreinte(cours: pd.DataFrame, conf: dict) -> tuple:
     """
     if cours.empty:
         return ("vide",)
+    # Le secteur entre dans la clé : il fabrique les colonnes neutralisées,
+    # et deux référentiels différents ne donnent pas le même échantillon.
+    secteurs: tuple = ()
+    if referentiel is not None and "secteur" in getattr(referentiel, "columns", []):
+        secteurs = tuple(sorted(
+            map(tuple, referentiel[["ticker", "secteur"]].astype(str).values)))
     return (
         len(cours),
         str(cours["date"].iloc[0]),
         str(cours["date"].iloc[-1]),
         repr(sorted(conf.get("analyse", {}).items())),
         int(conf.get("prediction", {}).get("horizon", 60)),
+        # Le tuple lui-même, et non `hash(...)` : une collision de hachage
+        # rendrait silencieusement l'échantillon d'un AUTRE référentiel, et
+        # un tuple de chaînes est déjà une clé de dictionnaire valable.
+        secteurs,
     )
 
 
+# Les colonnes sectorielles portent un préfixe plutôt que de remplacer les
+# rangs de marché : le composite doit continuer de voir les rangs de marché,
+# c'est le score de l'onglet Classement et le repli quand tout le reste se
+# tait. Mesuré : tout neutraliser rend IC +0,0577 ; ne neutraliser que les
+# sources APPRISES rend +0,0665, parce que le composite garde son apport au
+# lieu de tomber de +0,0316 à +0,0015.
+PREFIXE_NEUTRE = "net_"
+
+
+def _colonnes_sectorielles(
+    bloc: pd.DataFrame, referentiel: pd.DataFrame | None
+) -> pd.DataFrame:
+    """Ajoute `secteur`, les traits neutralisés et la cible sectorielle.
+
+    Sans référentiel, rien n'est ajouté et tout le calcul aval retombe sur
+    les rangs de marché : le secteur est une amélioration, pas une
+    dépendance.
+    """
+    if (referentiel is None or bloc.empty
+            or "secteur" not in getattr(referentiel, "columns", [])):
+        return bloc
+    table = referentiel.dropna(subset=["ticker", "secteur"])
+    if table.empty:
+        return bloc
+    secteur = bloc["ticker"].map(table.set_index("ticker")["secteur"])
+    # Un ticker absent du référentiel forme son propre secteur : il sera
+    # neutralisé contre lui-même, donc à zéro, ce qui est exactement « on ne
+    # sait rien de son secteur » et non « il est moyen parmi les autres ».
+    bloc = bloc.copy()
+    bloc["secteur"] = secteur.fillna("(inconnu) " + bloc["ticker"])
+    for trait in TRAITS:
+        if trait in bloc.columns:
+            bloc[PREFIXE_NEUTRE + trait] = features.neutraliser_secteur(
+                bloc[trait], bloc["date"], bloc["secteur"]).to_numpy()
+    # CIBLE SECTORIELLE. Battre la médiane de SON secteur, et non celle de
+    # la séance entière. Demander au modèle de battre le marché entier, avec
+    # des traits qui ne disent rien de la rotation sectorielle, c'est lui
+    # demander de prédire ce qu'il ne peut pas voir : mesuré, les moyennes
+    # de secteur comme traits n'apportent rien (+0,0432 contre +0,0450).
+    # L'IC, lui, reste mesuré contre le rendement BRUT — sinon le chiffre
+    # ne serait plus comparable à celui d'avant.
+    mediane = bloc.groupby(["date", "secteur"])["rendement_futur"].transform(
+        "median")
+    bloc["cible_secteur"] = (bloc["rendement_futur"] > mediane).astype(int)
+    return bloc
+
+
 def construire_echantillon(
-    cours: pd.DataFrame, reglages: dict | None = None
+    cours: pd.DataFrame, reglages: dict | None = None,
+    referentiel: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Une ligne par (date, ticker) : traits connus en t, étiquette en t+H.
 
@@ -270,7 +329,7 @@ def construire_echantillon(
     fabriquer une occasion d'acheter.
     """
     conf = reglages or charger()
-    cle = _empreinte(cours, conf)
+    cle = _empreinte(cours, conf, referentiel)
     if cle in _MEMO:
         return _MEMO[cle].copy()
 
@@ -345,6 +404,7 @@ def construire_echantillon(
     bloc["date"] = table["date"]
     bloc["ticker"] = table["ticker"]
     bloc = bloc.reset_index(drop=True)
+    bloc = _colonnes_sectorielles(bloc, referentiel)
 
     if len(_MEMO) >= _MEMO_MAX:
         _MEMO.clear()
@@ -445,6 +505,47 @@ def _stabilite(ics: list[float]) -> dict:
     }
 
 
+def _bloc_neutralise(bloc: pd.DataFrame, tickers, referentiel, traits):
+    """Le bloc du jour, traits neutralisés du secteur. Une seule séance."""
+    if referentiel is None or "secteur" not in getattr(referentiel, "columns", []):
+        return bloc
+    table = referentiel.dropna(subset=["ticker", "secteur"])
+    if table.empty:
+        return bloc
+    secteur = pd.Series(tickers, index=bloc.index).map(
+        table.set_index("ticker")["secteur"])
+    secteur = secteur.fillna("(inconnu) " + pd.Series(tickers, index=bloc.index))
+    jour = pd.Series("j", index=bloc.index)
+    vue = bloc.copy()
+    for trait in traits:
+        if trait in bloc.columns:
+            vue[trait] = features.neutraliser_secteur(
+                bloc[trait], jour, secteur).to_numpy()
+    return vue
+
+
+def _vue_apprise(bloc: pd.DataFrame, traits: list[str]) -> pd.DataFrame:
+    """Le même bloc, vu par les sources APPRISES : secteur retiré.
+
+    Chaque trait est remplacé par sa version neutralisée quand elle existe,
+    et la cible par la cible sectorielle. Un trait sans version neutralisée
+    — les exogènes, qui sont déjà des écarts — passe tel quel. Sans
+    référentiel, la fonction rend le bloc inchangé.
+    """
+    remplacables = {t: PREFIXE_NEUTRE + t for t in traits
+                    if PREFIXE_NEUTRE + t in bloc.columns}
+    if not remplacables and "cible_secteur" not in bloc.columns:
+        return bloc
+    garde = [c for c in ("date", "ticker", "rendement_futur") if c in bloc.columns]
+    vue = bloc[garde].copy()
+    for trait in traits:
+        source = remplacables.get(trait, trait)
+        if source in bloc.columns:
+            vue[trait] = bloc[source].to_numpy()
+    vue["cible"] = bloc.get("cible_secteur", bloc["cible"]).to_numpy()
+    return vue
+
+
 def _scores_des_sources(
     train: pd.DataFrame,
     test: pd.DataFrame,
@@ -461,17 +562,23 @@ def _scores_des_sources(
     régression sortent du seul `train`, dont les étiquettes recouvrantes
     ont déjà été purgées par l'appelant.
     """
-    poids_fiab = apprentissage.poids_fiabilite(train, traits, horizon, exigence)
+    # Les deux sources apprises travaillent sur la vue neutralisée du
+    # secteur ; le composite, non — voir `PREFIXE_NEUTRE`. Les index sont
+    # conservés pour que les scores se réalignent sur `test`.
+    train_a = _vue_apprise(train, traits)
+    test_a = _vue_apprise(test, traits)
+
+    poids_fiab = apprentissage.poids_fiabilite(train_a, traits, horizon, exigence)
     sources = {
-        "fiabilite": apprentissage.score_fiabilite(test, poids_fiab),
+        "fiabilite": apprentissage.score_fiabilite(test_a, poids_fiab),
         "composite": apprentissage.score_composite(test, poids_config),
     }
     detail = {"poids_fiabilite": poids_fiab, "coefficients": {}}
 
     if APPRENTISSAGE_DISPONIBLE:
         ensemble = apprentissage.Ensemble(traits, horizon, membres=membres)
-        ensemble.entrainer(train)
-        sources["modele"] = ensemble.probabilites(test)
+        ensemble.entrainer(train_a)
+        sources["modele"] = ensemble.probabilites(test_a)
         detail["coefficients"] = ensemble.coefficients()
     return sources, detail
 
@@ -502,8 +609,11 @@ def valider(
     minimum = int(pred.get("lignes_minimum", 400))
     exigence = float(pred.get("exigence_preuve", 4.0))
     membres = int(pred.get("membres_sac", 8))
+    # Le haut de liste se mesure sur le nombre de lignes que l'utilisateur
+    # détiendrait vraiment, qui est celui du backtest et de l'app.
+    positions = int(conf.get("backtest", {}).get("positions", 10))
 
-    echantillon = construire_echantillon(cours, conf)
+    echantillon = construire_echantillon(cours, conf, referentiel)
     echantillon, exo = _joindre_exogenes(echantillon, exogenes, referentiel, conf)
     traits = TRAITS + exo
     vide = {
@@ -516,6 +626,10 @@ def valider(
         "sources": {},
         "stabilite": _stabilite([]),
         "retenue": "composite",
+        "motif_retenue": None,
+        "avantage": {"avantage": float("nan"), "positions": positions,
+                     "t": float("nan"), "significatif": False, "dates": 0,
+                     "blocs": 0, "erreur_type": float("nan")},
         "calibrage": apprentissage.Calibrage(),
         "avertissements": AVERTISSEMENTS,
     }
@@ -594,7 +708,9 @@ def valider(
         if not np.isfinite(stab["ic"]):
             continue
         detail_sources[nom] = {
-            **stab, "mesure": mesurer_ic(tout, f"score_{nom}", horizon)}
+            **stab, "mesure": mesurer_ic(tout, f"score_{nom}", horizon),
+            "avantage": apprentissage.mesure_avantage(
+                tout, f"score_{nom}", horizon, positions)}
 
     stabilite = detail_sources.get("combinaison", _stabilite([]))
 
@@ -604,7 +720,24 @@ def valider(
     # qui n'estime rien et ne peut donc pas surajuster. Un onglet qui
     # affiche des probabilités issues d'un score dont l'IC mesuré est
     # négatif ne présente pas une prévision, il présente un bug.
-    retenue = "combinaison" if stabilite["ic"] > 0 else "composite"
+    #
+    # DEUXIÈME CONDITION, ET ELLE A ÉTÉ AJOUTÉE PARCE QU'ELLE MANQUAIT. Un
+    # IC positif ne suffit pas : mesuré sur cette archive avant la
+    # neutralisation sectorielle, la combinaison affichait un IC de +0,045
+    # et un avantage des dix premiers de -0,67 %. L'ordre de toute la cote
+    # s'améliorait pendant que les dix valeurs effectivement recommandées
+    # perdaient contre l'univers. Le haut de liste doit donc avoir payé,
+    # lui aussi, hors échantillon — voir `apprentissage.avantage_par_date`.
+    avantage_comb = detail_sources.get("combinaison", {}).get(
+        "avantage", {"avantage": float("nan")})
+    haut_paye = avantage_comb["avantage"] > 0
+    retenue = "combinaison" if (stabilite["ic"] > 0 and haut_paye) else "composite"
+    motif_retenue = (
+        None if retenue == "combinaison" else
+        "IC hors échantillon négatif" if stabilite["ic"] <= 0 else
+        "les {} premiers de la combinaison ont perdu {:.2f} % contre "
+        "l'univers hors échantillon".format(
+            positions, 100 * abs(avantage_comb["avantage"])))
 
     # Le calibrage s'apprend sur les prédictions HORS ÉCHANTILLON de toutes
     # les périodes réunies — le seul endroit du calcul où la relation entre
@@ -633,6 +766,10 @@ def valider(
         "sources": detail_sources,
         "stabilite": stabilite,
         "retenue": retenue,
+        "motif_retenue": motif_retenue,
+        # L'avantage du haut de liste de CE QUI PART en production.
+        "avantage": apprentissage.mesure_avantage(
+            tout, f"score_{retenue}", horizon, positions),
         "calibrage": calibrage,
         "poids_fiabilite": dernier_detail["poids_fiabilite"],
         "coefficients": dernier_detail["coefficients"],
@@ -681,7 +818,7 @@ def predire(
     membres = int(pred.get("membres_sac", 8))
 
     colonnes_vides = ["ticker", "probabilite", "incertitude", "rang_combine"]
-    echantillon = construire_echantillon(cours, conf)
+    echantillon = construire_echantillon(cours, conf, referentiel)
     echantillon, exo = _joindre_exogenes(echantillon, exogenes, referentiel, conf)
     traits = TRAITS + exo
     if len(echantillon) < minimum or echantillon["cible"].nunique() < 2:
@@ -709,18 +846,27 @@ def predire(
             par_ticker = derniere.set_index("ticker")[colonne]
             bloc[colonne] = bloc.index.map(par_ticker).fillna(0.0)
 
+    # La même vue neutralisée qu'à l'entraînement, sur la seule séance du
+    # jour. Si les deux chemins divergeaient, le modèle serait entraîné sur
+    # une grandeur et interrogé sur une autre — c'est la façon la plus
+    # discrète de fabriquer une prédiction fausse.
+    # `_bloc_neutralise` copie le bloc entier, colonnes exogènes comprises :
+    # rien à recopier ensuite. Le faire écrivait dans `bloc` lui-même quand il
+    # n'y a pas de référentiel, la fonction rendant alors son argument.
+    bloc_a = _bloc_neutralise(bloc, courant.index, referentiel, TRAITS)
+
     poids_fiab = apprentissage.poids_fiabilite(
-        echantillon, traits, horizon, exigence)
+        _vue_apprise(echantillon, traits), traits, horizon, exigence)
     sources = {
-        "fiabilite": apprentissage.score_fiabilite(bloc, poids_fiab),
+        "fiabilite": apprentissage.score_fiabilite(bloc_a, poids_fiab),
         "composite": apprentissage.score_composite(bloc, poids_config),
     }
     incertitude = pd.Series(np.nan, index=bloc.index)
     if APPRENTISSAGE_DISPONIBLE:
         ensemble = apprentissage.Ensemble(traits, horizon, membres=membres)
-        ensemble.entrainer(echantillon)
-        sources["modele"] = ensemble.probabilites(bloc)
-        incertitude = ensemble.dispersion(bloc)
+        ensemble.entrainer(_vue_apprise(echantillon, traits))
+        sources["modele"] = ensemble.probabilites(bloc_a)
+        incertitude = ensemble.dispersion(bloc_a)
 
     retenue = (validation or {}).get("retenue", "combinaison")
     score = (apprentissage.combiner(sources) if retenue == "combinaison"
