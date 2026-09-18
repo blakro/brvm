@@ -535,19 +535,23 @@ def calculer_backtest(_cours, _referentiel, _fondamentaux, _dividendes,
 
 
 @st.cache_data(max_entries=4, show_spinner=False)
-def echantillon_prediction(_cours, archive, univers):
+def echantillon_prediction(_cours, _referentiel, archive, univers):
     """L'échantillon de prédiction, pour en tirer la dispersion transversale.
 
     Mémoïsé ici en plus du mémo interne de `prediction` : la dispersion sert
     à chaque mouvement de curseur de frais, et reconstruire cent mille lignes
     pour un écart-type serait payer très cher un nombre qui ne change pas.
     """
-    return prediction.construire_echantillon(_cours, DEFAUTS)
+    # Le référentiel est passé comme ailleurs : l'échantillon porte alors les
+    # colonnes sectorielles, et le mémo interne n'a plus qu'une seule entrée
+    # à tenir au lieu de deux qui se chassent l'une l'autre.
+    return prediction.construire_echantillon(_cours, DEFAUTS, _referentiel)
 
 
 @st.cache_data(max_entries=8, show_spinner="Arithmétique de l'arbitrage…")
 def calculer_conseil(_cours, _classement, _mesure, dispersion, archive, univers,
-                     detenu, frais, impact, positions, prudence):
+                     detenu, frais, impact, positions, prudence,
+                     _avantage=None):
     """Acheter, conserver, vendre — aux frais que l'utilisateur a saisis.
 
     Les frais entrent dans la clé de cache : c'est le paramètre dont toute la
@@ -560,7 +564,7 @@ def calculer_conseil(_cours, _classement, _mesure, dispersion, archive, univers,
                              "frais_pourcent": frais, "impact_pourcent": impact}}
     return conseil.conseiller(_classement, detenu=list(detenu), mesure=_mesure,
                               dispersion_=dispersion, reglages=reglages,
-                              prudence=prudence)
+                              prudence=prudence, avantage=_avantage)
 
 
 @st.cache_data(max_entries=4, show_spinner="Recherche du seuil de frais…")
@@ -1600,12 +1604,14 @@ if onglets[2].open:
                      "ne soutient pas.")
             validation_cs = valider_modele(cours_filtre, referentiel_filtre,
                                            ARCHIVE, UNIVERS)
-            echantillon_cs = echantillon_prediction(cours_filtre, ARCHIVE, UNIVERS)
+            echantillon_cs = echantillon_prediction(
+                cours_filtre, referentiel_filtre, ARCHIVE, UNIVERS)
             avis = calculer_conseil(
                 cours_filtre, classement, validation_cs.get("mesure"),
                 conseil.dispersion(echantillon_cs), ARCHIVE, UNIVERS,
                 tuple(detenu), frais_cs, impact_cs,
-                int(DEFAUTS["backtest"]["positions"]), prudence)
+                int(DEFAUTS["backtest"]["positions"]), prudence,
+                _avantage=validation_cs.get("avantage"))
 
             # LES DEUX NOMBRES QUI DÉCIDENT, DANS LA MÊME UNITÉ, EN
             # PREMIER. « Écart de score requis : 3,06 » ne veut rien dire
@@ -1629,6 +1635,28 @@ if onglets[2].open:
                    else f"{avis['arbitrages']} changement(s)",
                    sens=1 if avis["arbitrages"] else 0,
                    note="ce que dit la comparaison ci-contre")
+
+            # CE QUE LE HAUT DE LISTE A RAPPORTÉ, ET POURQUOI C'EST ICI.
+            # Les deux tuiles précédentes passent par une chaîne
+            # d'estimations ; celle-ci est un rendement constaté sur des
+            # périodes que le calcul n'avait pas vues. Quand les deux se
+            # contredisent, il faut que le lecteur le voie.
+            mesure_haut = avis.get("avantage_mesure", float("nan"))
+            if avis.get("haut_mesure") and mesure_haut == mesure_haut:
+                plancher_haut = avis.get("gain_haut", float("nan"))
+                positions_haut = avis.get("positions", 10)
+                garantie = ("son pire cas reste négatif, donc rien n'est "
+                            "garanti" if not (plancher_haut > 0)
+                            else f"et au pire {plancher_haut:+.2%}")
+                st.caption(
+                    f"**Vérification indépendante.** Suivre les "
+                    f"{positions_haut} premières lignes de ce classement a "
+                    f"rapporté **{mesure_haut:+.2%}** de plus que d'acheter "
+                    f"tout le marché en parts égales, sur des périodes que le "
+                    f"calcul n'avait jamais vues — {garantie}. À comparer aux "
+                    f"{2 * avis['cout']:.2%} que coûte un changement : c'est "
+                    f"la même question posée sans passer par aucune formule."
+                )
 
             if avis["arbitrages"] == 0:
                 st.success(
@@ -1675,11 +1703,42 @@ if onglets[2].open:
                     })
                 _telecharger(avis["lignes"], "conseil.csv", "dl_conseil")
 
+            # DANS QUOI TOMBENT LES RECOMMANDATIONS. Dix lignes dont quatre
+            # sont des banques ne font pas un portefeuille réparti, et aucune
+            # autre tuile de cet onglet ne le disait. Le repère est l'univers
+            # coté lui-même : c'est lui qu'on achèterait sans classement.
+            conc = conseil.concentration_secteur(
+                classement, referentiel_filtre, avis.get("positions", 10))
+            if conc["premier"]:
+                parts = pd.DataFrame(
+                    [{"secteur": nom, "part du haut de liste": part,
+                      "écart à l'univers": conc["ecart"].get(nom, 0.0)}
+                     for nom, part in sorted(conc["part"].items(),
+                                             key=lambda kv: -kv[1]) if part > 0])
+                titre = (f"Dans quoi tombent les {conc['positions']} "
+                         f"premières")
+                _panneau(titre, "un pari sectoriel se choisit, il ne "
+                                "s'hérite pas").dataframe(
+                    parts.style.format({"part du haut de liste": "{:.0%}",
+                                        "écart à l'univers": "{:+.0%}"}).map(
+                        lambda v: _fond_divergent(v, plafond=0.15),
+                        subset=["écart à l'univers"]),
+                    width="stretch", hide_index=True)
+                st.caption(
+                    f"La valeur la plus représentée vient du secteur "
+                    f"**{conc['premier']}**, qui pèse "
+                    f"{conc['part_premier']:.0%} des lignes conseillées. "
+                    f"L'indice de concentration vaut "
+                    f"{conc['herfindahl']:.3f} là où l'univers coté vaut "
+                    f"{conc['herfindahl_univers']:.3f} : plus il est haut, "
+                    f"plus tout dépend du sort d'un seul secteur."
+                )
+
             st.error("**Ce que ceci n'est pas.** "
                      + " ; ".join(avis["avertissements"]) + ".")
         _glossaire("arbitrage", "aller_retour", "gain_attendu", "prudence",
                    "dispersion", "univers", "significatif", "score", "rang",
-                   "frais", "ic")
+                   "frais", "ic", "avantage_haut", "concentration", "secteur")
 
 
 # --- Prédiction -----------------------------------------------------------
@@ -1736,6 +1795,44 @@ if onglets[2].open:
             _tuile(mesures[2], "Écart", f"{validation['ecart']:+.3f}",
                    sens=1 if validation["ecart"] > 0 else -1,
                    note="la combinaison moins le composite")
+
+            # L'AUTRE CHIFFRE, ET IL N'EST PAS DÉCORATIF. Les trois tuiles
+            # ci-dessus notent l'ordre de TOUTE la cote ; personne n'achète
+            # toute la cote. Mesuré sur cette archive avant la comparaison à
+            # secteur égal, l'IC de la combinaison valait +0,045 pendant que
+            # ses dix premières lignes perdaient 0,57 % contre l'univers : le
+            # tableau de bord affichait alors une amélioration là où
+            # l'utilisateur aurait perdu de l'argent.
+            av = validation.get("avantage") or {}
+            if av.get("dates"):
+                haut = st.columns(2)
+                _tuile(haut[0],
+                       f"Ce qu'ont rapporté les {av['positions']} premières",
+                       f"{av['avantage']:+.2%}",
+                       sens=1 if av["avantage"] > 0 else -1,
+                       note=f"de plus que tout le marché en parts égales, "
+                            f"par période de {validation['horizon']} séances · "
+                            f"t = {av['t']:+.1f}")
+                _tuile(haut[1], "Ce qui part en production",
+                       prediction.LIBELLES_SOURCES.get(
+                           validation["retenue"], validation["retenue"]),
+                       note=validation.get("motif_retenue")
+                       or "IC positif et haut de liste gagnant hors échantillon")
+                if validation.get("motif_retenue"):
+                    st.warning(
+                        "**Le modèle appris ne part pas en production.** "
+                        f"{validation['motif_retenue']}. C'est le score "
+                        "composite, qui n'estime rien et ne peut donc pas "
+                        "surajuster, qui sert au classement affiché."
+                    )
+                st.caption(
+                    "Ce second chiffre existe parce que le premier ne suffit "
+                    "pas. Un classement peut mieux ordonner le ventre du "
+                    "marché — ce qui lève l'IC — en ordonnant plus mal les "
+                    "quelques valeurs qui sont les seules que quiconque "
+                    "achètera. Les deux ont divergé en signe sur cette "
+                    "archive, et c'est le second qui se compare aux frais."
+                )
 
             st.caption(
                 f"L'intervalle couvre deux erreurs-types, calculées sur "
@@ -2013,7 +2110,9 @@ if onglets[2].open:
 
         _glossaire("ic", "ir", "calibrage", "surperformer", "dispersion",
                    "hors_echantillon", "disjointe", "regression", "purge",
-                   "significatif", "choc_volume", "retournement", "frais")
+                   "significatif", "choc_volume", "retournement", "frais",
+                   "avantage_haut", "neutralisation", "secteur", "choc_eclair",
+                   "ampleur_choc", "intensite_echange")
 
 
 # --- Backtest -------------------------------------------------------------

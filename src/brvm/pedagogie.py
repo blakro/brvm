@@ -194,6 +194,36 @@ GLOSSAIRE: dict[str, str] = {
         "Une formule qui pèse plusieurs indicateurs pour en tirer un seul "
         "nombre, les poids étant choisis par le calcul plutôt qu'à la main. "
         "C'est la forme d'apprentissage la plus simple, et ici la meilleure.",
+    # --- ce que la neutralisation sectorielle et le haut de liste ajoutent
+    "avantage_haut": (
+        "Ce qu'ont rapporté les dix premières valeurs du classement, par "
+        "rapport à l'ensemble du marché acheté en parts égales, sur des "
+        "périodes que le calcul n'avait jamais vues : c'est le seul chiffre "
+        "du tableau de bord qui se compare directement aux frais."),
+    "neutralisation": (
+        "Comparer chaque valeur aux autres de son propre secteur plutôt qu'à "
+        "tout le marché, pour qu'une valeur ne monte pas dans le classement "
+        "par le seul fait que son secteur monte."),
+    "concentration": (
+        "À quel point les valeurs conseillées se ressemblent : si huit des "
+        "dix sont des banques, le portefeuille ne dépend plus que du sort "
+        "des banques, et se croire réparti sur dix lignes est une illusion."),
+    "secteur": (
+        "La famille de métiers d'une société, banque ou télécoms ou énergie, "
+        "qui sert à comparer ce qui est comparable et à voir si les valeurs "
+        "conseillées sont trop semblables entre elles."),
+    "choc_eclair": (
+        "Le même réveil soudain des échanges que le choc de volume, mesuré "
+        "sur une semaine au lieu d'un mois : il se voit plus tôt, et se "
+        "trompe plus souvent."),
+    "ampleur_choc": (
+        "Combien de séances du dernier mois se sont échangées plus que "
+        "d'habitude, sans regarder de combien : vingt séances un peu "
+        "au-dessus ne racontent pas la même histoire qu'une seule énorme."),
+    "intensite_echange": (
+        "La part des séances du dernier mois où la valeur a réellement "
+        "changé de mains : une valeur qui passe de trois séances par mois à "
+        "vingt vient de se réveiller, ce qu'aucune autre mesure ne dit."),
 }
 
 
@@ -227,6 +257,12 @@ LIBELLES: dict[str, str] = {
     "ic": "IC",
     "survivant": "biais du survivant",
     "sgi": "SGI",
+    "avantage_haut": "avantage du haut de liste",
+    "neutralisation": "comparaison à secteur égal",
+    "concentration": "concentration du portefeuille",
+    "choc_eclair": "choc éclair",
+    "ampleur_choc": "ampleur du choc",
+    "intensite_echange": "intensité des échanges",
 }
 
 

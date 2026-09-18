@@ -591,15 +591,37 @@ def _conseiller(args) -> int:
     # qui fixe le gain attendu d'un arbitrage ; la coder en dur reviendrait à
     # figer une qualité de classement qui change à chaque séance versée.
     validation = prediction.valider(cours, reglages, referentiel=referentiel)
-    echantillon = prediction.construire_echantillon(cours, reglages)
+    # Le référentiel est PASSÉ ici aussi : sans lui l'échantillon n'a pas de
+    # colonnes sectorielles, et la mémoïsation le reconstruirait deux fois.
+    echantillon = prediction.construire_echantillon(cours, reglages, referentiel)
     resultat = conseil.conseiller(
         classement, detenu=args.detenu, mesure=validation.get("mesure"),
         dispersion_=conseil.dispersion(echantillon), reglages=reglages,
-        prudence=not args.ponctuel)
+        prudence=not args.ponctuel, avantage=validation.get("avantage"))
     print(f"Séance du {traits.attrs.get('date', '?')} — "
           f"{len(classement)} valeurs classées")
     print()
     print(conseil.expliquer(resultat))
+
+    # DANS QUOI TOMBENT LES RECOMMANDATIONS. Un porteur qui suit dix lignes
+    # dont quatre sont des banques n'est pas diversifié, et aucun autre
+    # chiffre de cette sortie ne le lui dit.
+    concentration = conseil.concentration_secteur(
+        classement, referentiel, resultat.get("positions", 10))
+    if concentration["premier"]:
+        print()
+        print(f"Dans quoi tombent les {concentration['positions']} premières :")
+        for secteur, part in sorted(concentration["part"].items(),
+                                    key=lambda kv: -kv[1]):
+            if part <= 0:
+                continue
+            ecart = concentration["ecart"].get(secteur, 0.0)
+            print(f"  {secteur:<32} {part:>6.0%}  ({ecart:+.0%} contre "
+                  f"l'univers coté)")
+        print(f"  concentration {concentration['herfindahl']:.3f} — "
+              f"l'univers lui-même vaut "
+              f"{concentration['herfindahl_univers']:.3f} ; plus c'est haut, "
+              f"plus tout dépend d'un seul secteur")
     return 0
 
 
@@ -609,7 +631,11 @@ def _predire(args) -> int:
         print("aucun cours en base — lancez « brvm ingerer »", file=sys.stderr)
         return 1
 
-    validation = prediction.valider(cours)
+    # LE RÉFÉRENTIEL AVANT LA VALIDATION. C'est lui qui porte le secteur,
+    # donc la neutralisation sectorielle et la cible sectorielle ; l'oublier
+    # ici ferait mesurer et prédire autre chose que ce que fait l'app.
+    referentiel = db.lire("referentiel")
+    validation = prediction.valider(cours, referentiel=referentiel)
     print(prediction.expliquer(validation))
 
     # La validation est PASSÉE à `predire`, et ce n'est pas une commodité :
@@ -617,11 +643,11 @@ def _predire(args) -> int:
     # laquelle des sources part en production. Sans elle, la fonction rend
     # le rang combiné en guise de probabilité — donc 100 % en tête de
     # classement, un nombre que l'IC mesuré n'autorise pas.
-    classement = prediction.predire(cours, validation=validation)
+    classement = prediction.predire(cours, referentiel=referentiel,
+                                    validation=validation)
     if classement.empty:
         return 1
 
-    referentiel = db.lire("referentiel")
     if not referentiel.empty:
         classement = classement.merge(referentiel, on="ticker", how="left")
 

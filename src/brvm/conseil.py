@@ -167,6 +167,92 @@ def ic_retenu(mesure: dict | None, prudence: bool = True) -> float:
     return ic - 2 * erreur
 
 
+def gain_haut(avantage: dict | None, prudence: bool = True) -> float:
+    """Ce que le HAUT DE LISTE a rapporté, en rendement, borne basse.
+
+    POURQUOI CE CHIFFRE À CÔTÉ DE L'IC. L'IC passe par la relation de
+    Grinold — `ecart_minimal` — pour devenir un gain en pourcent : trois
+    quantités estimées, une hypothèse de linéarité, et un lecteur qui doit
+    croire la chaîne. L'avantage du haut de liste, lui, EST déjà un
+    rendement : c'est ce qu'ont rapporté les `positions` premières valeurs
+    contre l'univers, mesuré hors échantillon, et il se compare aux frais
+    d'un aller-retour sans aucun intermédiaire théorique.
+
+    Les deux sont conservés parce qu'ils ne disent pas la même chose. L'IC
+    note l'ordre de toute la cote et sert à départager DEUX lignes ; celui-ci
+    ne regarde que le haut et dit si le suivre paie. Sur cette archive, ils
+    ont divergé en signe — voir `apprentissage.avantage_par_date`.
+
+    Même prudence qu'ailleurs : deux erreurs-types retirées par défaut.
+    """
+    if not avantage:
+        return 0.0
+    valeur = float(avantage.get("avantage", float("nan")))
+    if not np.isfinite(valeur):
+        return 0.0
+    if not prudence:
+        return valeur
+    erreur = float(avantage.get("erreur_type", float("nan")))
+    if not np.isfinite(erreur):
+        return 0.0
+    return valeur - 2 * erreur
+
+
+def concentration_secteur(
+    classement: pd.DataFrame,
+    referentiel: pd.DataFrame | None,
+    positions: int = 10,
+) -> dict:
+    """Dans quels secteurs tombent les `positions` premières, et à quel point.
+
+    POURQUOI L'AFFICHER. Un classement ne choisit pas de parier sur un
+    secteur, mais il le fait quand même. Mesuré sur l'archive avant la
+    comparaison à secteur égal, les dix premières lignes du classement de
+    production étaient à 43,9 % des Services Financiers contre 34,5 % dans
+    l'univers coté — neuf points et demi de pari que personne n'avait
+    décidé, ramenés à cinq depuis. Un
+    porteur qui suit dix recommandations dont quatre sont des banques n'est
+    pas diversifié, et rien dans l'écran ne le lui disait.
+
+    `part` est la part du haut de liste par secteur, `ecart` l'écart à
+    l'univers coté du jour. `herfindahl` résume : c'est la somme des carrés
+    des parts, 1 si tout le portefeuille est dans un seul secteur, environ
+    1/7 s'il est réparti sur les sept. L'univers lui-même vaut 0,202, ce qui
+    est le repère à côté duquel le lire.
+    """
+    vide = {"part": {}, "ecart": {}, "herfindahl": float("nan"),
+            "herfindahl_univers": float("nan"), "premier": None,
+            "part_premier": float("nan"), "positions": int(positions)}
+    if (classement is None or classement.empty or referentiel is None
+            or "secteur" not in getattr(referentiel, "columns", [])
+            or "ticker" not in classement.columns):
+        return vide
+    table = referentiel.dropna(subset=["ticker", "secteur"])
+    if table.empty:
+        return vide
+    secteurs = table.set_index("ticker")["secteur"]
+    ordre = (classement.sort_values("rang") if "rang" in classement.columns
+             else classement)
+    haut = ordre.head(int(positions))["ticker"].map(secteurs).dropna()
+    univers = ordre["ticker"].map(secteurs).dropna()
+    if haut.empty or univers.empty:
+        return vide
+    # Réindexés sur les MÊMES secteurs, zéro quand absent : sans quoi les
+    # écarts ne sommeraient pas à zéro et un secteur jamais retenu
+    # paraîtrait surpondéré.
+    tous = sorted(set(univers) | set(haut))
+    p_haut = haut.value_counts(normalize=True).reindex(tous, fill_value=0.0)
+    p_uni = univers.value_counts(normalize=True).reindex(tous, fill_value=0.0)
+    ecart = (p_haut - p_uni).sort_values(ascending=False)
+    premier = str(p_haut.idxmax())
+    return {"part": {str(k): float(v) for k, v in p_haut.items()},
+            "ecart": {str(k): float(v) for k, v in ecart.items()},
+            "herfindahl": float((p_haut ** 2).sum()),
+            "herfindahl_univers": float((p_uni ** 2).sum()),
+            "premier": premier, "part_premier": float(p_haut.max()),
+            "positions": int(positions)}
+
+
 def ecart_minimal(ic: float, dispersion_: float, cout: float) -> float:
     """Écart de score qu'un arbitrage doit franchir pour se payer.
 
@@ -191,6 +277,7 @@ def conseiller(
     dispersion_: float | None = None,
     reglages: dict | None = None,
     prudence: bool = True,
+    avantage: dict | None = None,
 ) -> dict:
     """Une action par ligne : acheter, conserver, vendre, ou ne rien faire.
 
@@ -228,6 +315,16 @@ def conseiller(
             # 3,08 % et coûte 3,00 % » se compare à vue d'œil, et c'est
             # exactement la même arithmétique.
             "gain_meilleur": float("nan"),
+            # CE QUE LE HAUT DE LISTE A RAPPORTÉ, mesuré et non déduit. Voir
+            # `gain_haut` : c'est le seul chiffre du module qui se compare
+            # aux frais sans passer par Grinold.
+            "gain_haut": gain_haut(avantage, prudence),
+            # Le constat NU à côté de sa borne : `expliquer` a besoin des
+            # deux, et les confondre ferait écrire qu'un gain constaté est
+            # négatif alors que c'est son plancher qui l'est.
+            "avantage_mesure": float((avantage or {}).get(
+                "avantage", float("nan"))),
+            "haut_mesure": bool(avantage),
             "positions": positions,
             "prudence": prudence, "avertissements": AVERTISSEMENTS}
     if classement is None or classement.empty or "ticker" not in classement:
@@ -242,6 +339,7 @@ def conseiller(
     ic = ic_retenu(mesure, prudence)
     disp = dispersion_ if dispersion_ is not None else float("nan")
     seuil = ecart_minimal(ic, disp, cout)
+    haut = gain_haut(avantage, prudence)
 
     tenus = [t for t in (detenu or []) if t in set(table["ticker"])]
     hors_univers = [t for t in (detenu or []) if t not in set(table["ticker"])]
@@ -331,7 +429,10 @@ def conseiller(
     return {**vide, "lignes": _finir(rendu, classement), "ic": ic,
             "dispersion": disp, "ecart_minimal": seuil,
             "arbitrages": arbitrages, "meilleur_arbitrage": meilleur,
-            "gain_meilleur": gain_meilleur}
+            "gain_meilleur": gain_meilleur, "gain_haut": haut,
+            "avantage_mesure": float((avantage or {}).get(
+                "avantage", float("nan"))),
+            "haut_mesure": bool(avantage)}
 
 
 def _finir(rendu: pd.DataFrame, classement: pd.DataFrame) -> pd.DataFrame:
@@ -364,19 +465,43 @@ def expliquer(resultat: dict) -> str:
     # nombres dans la même unité suffisent à décider : ce qu'un changement
     # rapporterait, ce qu'il coûterait. Le reste — l'écart de score, l'IC, la
     # dispersion — explique d'où ils viennent, et se lit ensuite ou jamais.
+    # LES QUATRE NOMBRES SONT ALIGNÉS PAR CONSTRUCTION. Un tableau de
+    # comparaison dont les colonnes ne tombent pas ne se compare pas d'un
+    # coup d'œil, et c'est tout ce qu'on lui demande.
+    LARGEUR = 42
+
+    def comparer(libelle, valeur, suffixe="", signe=True):
+        forme = f"{valeur:>+8.2%}" if signe else f"{valeur:>8.2%}"
+        return f"  {libelle:<{LARGEUR}}{forme}{suffixe}"
+
     lignes = [
         "La question est celle de n'importe quel achat : est-ce que ça vaut "
         "ce que ça coûte ?",
         "",
-        f"  changer une ligne pour une autre coûte      {2 * cout:>7.2%}",
+        comparer("changer une ligne pour une autre coûte", 2 * cout,
+                 signe=False),
     ]
     if np.isfinite(gain):
-        lignes.append(
-            f"  le meilleur changement possible rapporte   {gain:>+7.2%}")
+        lignes.append(comparer("le meilleur changement possible rapporte", gain))
     else:
-        lignes.append(
-            "  le meilleur changement possible rapporte   "
-            "rien de mesurable")
+        lignes.append(f"  {'le meilleur changement possible rapporte':<{LARGEUR}}"
+                      "rien de mesurable")
+    # LE MESURÉ ET SON PLANCHER, JAMAIS L'UN POUR L'AUTRE. Écrire « les dix
+    # premières ont rapporté -1,19 % » quand elles ont rapporté +1,39 % et
+    # que -1,19 % est le bas de leur marge d'erreur serait faux dans les
+    # termes : « a rapporté » désigne un constat, pas une borne. Les deux
+    # lignes sont donc séparées et nommées.
+    mesure_haut = resultat.get("avantage_mesure", float("nan"))
+    plancher = resultat.get("gain_haut", float("nan"))
+    positions = resultat.get("positions", 10)
+    if resultat.get("haut_mesure") and np.isfinite(mesure_haut):
+        lignes.append(comparer(
+            f"les {positions} premières ont rapporté", mesure_haut,
+            "   (constaté hors échantillon)"))
+        if np.isfinite(plancher):
+            lignes.append(comparer(
+                "  dont on peut garantir au moins", plancher,
+                "   (bas de sa marge d'erreur)"))
     lignes.append("")
     # DEUX SITUATIONS QU'IL NE FAUT PAS CONFONDRE, et le lecteur ne peut pas
     # les distinguer des seuls pourcents : soit le classement a un avantage
