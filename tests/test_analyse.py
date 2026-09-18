@@ -262,6 +262,12 @@ def test_les_traits_glissants_redonnent_les_traits_ponctuels():
                 prix, f["fenetre_retournement"]),
             "choc_volume": features.choc_volume(
                 tranche, f["fenetre_choc_court"], f["fenetre_choc_long"]),
+            "choc_eclair": features.choc_eclair(
+                tranche, f["fenetre_choc_eclair"], f["fenetre_choc_long"]),
+            "ampleur_choc": features.ampleur_choc(
+                tranche, f["fenetre_attention"], f["fenetre_choc_long"]),
+            "intensite_echange": features.intensite_echange(
+                tranche, f["fenetre_attention"]),
         }
         # Restreint aux valeurs ayant DÉJÀ coté au moins une fois : à la
         # première séance, une valeur absente n'a pas encore de colonne
