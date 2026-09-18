@@ -240,12 +240,64 @@ def choc_volume(cours: pd.DataFrame, court: int, long: int) -> pd.Series:
     return recent / (fond + 1.0)
 
 
+def choc_eclair(cours: pd.DataFrame, eclair: int, long: int) -> pd.Series:
+    """Le choc de volume sur une semaine au lieu d'un mois.
+
+    Même rapport que `choc_volume`, même borne au dénominateur, fenêtre
+    courte plus courte : l'attention se voit avant de se mesurer.
+    """
+    volumes = serie(cours, "volume_fcfa")
+    if volumes.empty:
+        return pd.Series(dtype=float)
+    volumes = volumes.fillna(0)
+    return volumes.iloc[-eclair:].median() / (volumes.iloc[-long:].median() + 1.0)
+
+
+def ampleur_choc(cours: pd.DataFrame, fenetre: int, long: int) -> pd.Series:
+    """Part des séances récentes dont le volume dépasse sa médiane de fond.
+
+    L'AMPLEUR PLUTÔT QUE LA TAILLE. Une séance énorme et vingt séances un
+    peu au-dessus donnent le même `choc_volume` ; elles ne racontent pas la
+    même chose. Ce trait compte les séances, pas les francs.
+
+    Chaque séance est comparée à la médiane de fond TELLE QU'ELLE ÉTAIT
+    ce jour-là, et non à celle d'aujourd'hui : comparer le passé à une
+    médiane calculée après coup ferait entrer l'avenir dans le trait.
+    """
+    volumes = serie(cours, "volume_fcfa")
+    if volumes.empty:
+        return pd.Series(dtype=float)
+    volumes = volumes.fillna(0)
+    fond = volumes.rolling(long, min_periods=1).median()
+    depasse = (volumes > fond).where(fond.notna())
+    tranche = depasse.iloc[-fenetre:]
+    assez = tranche.notna().sum() >= _minimum(fenetre, 0.5)
+    return tranche.mean().where(assez)
+
+
+def intensite_echange(cours: pd.DataFrame, fenetre: int) -> pd.Series:
+    """Part des séances récentes où la valeur a RÉELLEMENT été traitée.
+
+    Une fréquence de cotation, non un niveau de volume — `liquidite` mesure
+    déjà le second. Une valeur qui passe de trois séances par mois à vingt
+    vient de se réveiller, et cela ne se lit dans aucun autre trait.
+    """
+    brut = serie(cours)
+    if brut.empty:
+        return pd.Series(dtype=float)
+    echange = brut.notna().astype(float)
+    tranche = echange.iloc[-fenetre:]
+    assez = tranche.notna().sum() >= _minimum(fenetre, 0.5)
+    return tranche.mean().where(assez)
+
+
 DEFAUTS_FENETRES = {
     "fenetre_momentum": 250, "saut_momentum": 20,
     "fenetre_volatilite": 60, "fenetre_liquidite": 60,
     "moyenne_courte": 20, "moyenne_longue": 100,
     "fenetre_retournement": 20,
     "fenetre_choc_court": 20, "fenetre_choc_long": 250,
+    "fenetre_choc_eclair": 5, "fenetre_attention": 20,
     "report_max_seances": 20,
 }
 
@@ -282,8 +334,34 @@ TRAITS = ["momentum", "tendance", "volatilite", "liquidite"]
 # c'était l'échantillon qu'elle sélectionnait.
 TRAITS_PREDICTION = ["choc_volume", "retournement"]
 
+# TRAITS D'ATTENTION. Le choc de volume est le seul signal du projet qui
+# tienne ; ces trois-là ne sont pas de nouveaux paris, ce sont trois
+# manières de mieux décrire CELUI-LÀ. On ne cherche pas ailleurs, on
+# regarde mieux au seul endroit où il y a quelque chose.
+#
+#   choc_eclair       le choc sur une semaine plutôt qu'un mois. Le même
+#                     rapport que `choc_volume`, une fenêtre courte plus
+#                     tôt : l'attention se voit avant de se mesurer.
+#   ampleur_choc      la PART des séances du mois où le volume dépasse sa
+#                     médiane annuelle, et non de combien il la dépasse.
+#                     Une seule séance énorme et vingt séances un peu
+#                     au-dessus donnent le même `choc_volume` ; elles ne
+#                     racontent pas la même chose, et c'est ce trait qui
+#                     les sépare.
+#   intensite_echange la part des séances du mois réellement traitées. La
+#                     matrice `cotee` ne servait que de filtre ; une valeur
+#                     qui passe de trois séances par mois à vingt vient de
+#                     se réveiller, et cela ne se lit dans aucun autre
+#                     trait — `liquidite` mesure un NIVEAU de volume, pas
+#                     une fréquence de cotation.
+#
+# Mesuré sur l'archive, en ajout aux six autres : IC de la combinaison
+# +0,0450 -> +0,0500 et IR 0,51 -> 0,57. Pris seuls ils ne valent rien ;
+# c'est en présence du choc de volume qu'ils portent.
+TRAITS_ATTENTION = ["choc_eclair", "ampleur_choc", "intensite_echange"]
+
 # Ce que `calculer` et `traits_glissants` rendent, dans l'ordre.
-TOUS_TRAITS = TRAITS + TRAITS_PREDICTION
+TOUS_TRAITS = TRAITS + TRAITS_PREDICTION + TRAITS_ATTENTION
 
 
 def _fenetres(reglages: dict | None) -> dict[str, int]:
@@ -336,6 +414,48 @@ def cours_reportes(prix: pd.DataFrame, limite: int) -> pd.DataFrame:
     if seances <= 0:
         return prix.copy()
     return prix.ffill(limit=seances)
+
+
+def neutraliser_secteur(rangs: pd.Series, dates: pd.Series,
+                        secteurs: pd.Series) -> pd.Series:
+    """Rang centile moins le rang moyen de son secteur, ce jour-là.
+
+    POURQUOI. Un rang centile calculé sur toute la cote mesure en partie
+    « est-ce une banque ». Les Services Financiers pèsent 34,5 % de
+    l'univers coté et 16 des 47 lignes du référentiel ; quand le secteur
+    entier monte, ses valeurs montent dans le classement ensemble, sans
+    qu'aucune n'ait rien montré. Mesuré sur l'archive : les dix premiers
+    du classement de production sont à 43,9 % des Services Financiers
+    contre 34,5 % dans l'univers, soit **+9,5 points de pari sectoriel**
+    que l'utilisateur n'a pas choisi. Après neutralisation des sources
+    apprises, +5,3 points — et non zéro, parce que le composite garde
+    volontairement les rangs de marché (voir `prediction.PREFIXE_NEUTRE`).
+    Neutraliser les trois sources ramènerait le pari à +1,4 point, au prix
+    de l'apport du composite : c'est l'arbitrage qui a été tranché, et il
+    l'a été sur l'IC de la combinaison, +0,067 contre +0,058.
+
+    CE QUE ÇA CHANGE, et ce que ça ne change pas. Retirer la moyenne du
+    secteur ne prétend pas que le secteur ne compte pas — il compte
+    beaucoup, et sur cette place les banques versent les dividendes qui
+    FONT le rendement total. Cela dit seulement qu'un pari sectoriel doit
+    être choisi, pas hérité d'un classement.
+
+    POURQUOI RETRANCHER LA MOYENNE PLUTÔT QUE RANGER DANS LE SECTEUR. Les
+    deux mesurent pareil (IC +0,0517 contre +0,0521), et le départage est
+    mécanique : le secteur médian ne compte que 4 valeurs cotées par
+    séance, le premier quartile 2. Rangée dans son secteur, une valeur
+    SEULE reçoit le rang 1,0 — le maximum, sur tous les traits à la fois,
+    pour la seule raison qu'elle est seule. Retranchée de sa moyenne, elle
+    reçoit 0,0, c'est-à-dire « rien à dire », qui est la vérité. Le cas
+    pèse 0,2 % des lignes et ne déplace aucune mesure ; c'est la manière
+    de se tromper qui a décidé, pas le chiffre.
+    """
+    cadre = pd.DataFrame({"v": np.asarray(rangs, dtype=float),
+                          "d": np.asarray(dates),
+                          "s": np.asarray(secteurs)})
+    moyennes = cadre.groupby(["d", "s"])["v"].transform("mean")
+    return pd.Series((cadre["v"] - moyennes).to_numpy(),
+                     index=getattr(rangs, "index", None))
 
 
 def traits_glissants(
@@ -434,9 +554,29 @@ def traits_glissants(
     long_ = volumes.rolling(f["fenetre_choc_long"], min_periods=1).median()
     choc = court / (long_ + 1.0)
 
+    # Les trois traits d'attention, voir `TRAITS_ATTENTION`. Ils partagent
+    # le dénominateur de `choc_volume` — même borne à 1 FCFA, pour la même
+    # raison — et ne coûtent qu'une passe glissante de plus.
+    eclair = volumes.rolling(f["fenetre_choc_eclair"], min_periods=1).median()
+    choc_eclair = eclair / (long_ + 1.0)
+
+    # `ampleur` compte les séances au-dessus de la médiane annuelle. La
+    # comparaison se fait séance par séance contre la médiane GLISSANTE,
+    # donc sans jamais regarder devant.
+    attention = f["fenetre_attention"]
+    ampleur = (volumes > long_).where(long_.notna()).rolling(
+        attention, min_periods=_minimum(attention, 0.5)).mean()
+
+    # Fréquence de cotation, et non niveau de volume : `echange` est
+    # booléen, sa moyenne glissante est une part de séances traitées.
+    intensite = echange.astype(float).rolling(
+        attention, min_periods=_minimum(attention, 0.5)).mean()
+
     return {"cloture": prix, "cotee": echange, "momentum": mom,
             "tendance": tend, "volatilite": vol, "liquidite": liq,
-            "choc_volume": choc, "retournement": ret}
+            "choc_volume": choc, "retournement": ret,
+            "choc_eclair": choc_eclair, "ampleur_choc": ampleur,
+            "intensite_echange": intensite}
 
 
 def calculer(cours: pd.DataFrame, reglages: dict | None = None) -> pd.DataFrame:

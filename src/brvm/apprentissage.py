@@ -251,6 +251,57 @@ def mesure_ic(ics: pd.Series, horizon: int) -> dict:
     }
 
 
+def avantage_par_date(bloc: pd.DataFrame, colonne: str,
+                      positions: int = 10) -> pd.Series:
+    """Par séance : rendement moyen des `positions` premiers moins la séance.
+
+    POURQUOI CE SECOND CHIFFRE EXISTE À CÔTÉ DE L'IC. L'IC note l'ordre de
+    TOUTE la cote ; un utilisateur n'achète que le haut. Les deux peuvent
+    aller en sens contraire, et pas en théorie — mesuré sur cette archive,
+    à l'horizon de production et sans neutralisation sectorielle :
+
+        IC de la combinaison            +0,045  (positif)
+        avantage des 10 premiers        -0,67 % (négatif)
+
+    Un classement peut donc mieux ranger le ventre du marché — ce qui lève
+    l'IC — en rangeant plus mal les dix valeurs qui sont les seules que
+    quiconque achètera. Un tableau de bord qui n'affiche que l'IC présente
+    alors une amélioration là où l'utilisateur perd de l'argent.
+
+    Le repère est la moyenne de la séance et non la médiane : c'est ce que
+    rapporterait l'univers acheté à poids égaux, c'est-à-dire l'alternative
+    réelle à suivre le classement.
+    """
+    if bloc.empty or colonne not in bloc.columns:
+        return pd.Series(dtype=float)
+    n = max(1, int(positions))
+    sorties = {}
+    for date, tranche in bloc.groupby("date"):
+        scores = tranche[colonne]
+        # Il faut de quoi distinguer un haut de liste d'un univers : avec
+        # douze valeurs cotées, « les dix premières » est presque l'univers
+        # entier et l'écart ne veut plus rien dire.
+        if scores.notna().sum() < n + 2:
+            continue
+        haut = tranche.loc[scores.nlargest(n).index, "rendement_futur"]
+        sorties[date] = float(haut.mean() - tranche["rendement_futur"].mean())
+    return pd.Series(sorties, dtype=float).sort_index()
+
+
+def mesure_avantage(bloc: pd.DataFrame, colonne: str, horizon: int,
+                    positions: int = 10) -> dict:
+    """`avantage_par_date` agrégé, même estimateur prudent que `mesure_ic`.
+
+    Les clés reprennent celles de `mesure_ic` à ceci près que `ic` s'appelle
+    `avantage` et se lit en rendement, non en corrélation : c'est un écart
+    de rendement sur la durée de détention, directement comparable aux
+    frais d'un aller-retour.
+    """
+    brut = mesure_ic(avantage_par_date(bloc, colonne, positions), horizon)
+    avantage = brut.pop("ic")
+    return {**brut, "avantage": avantage, "positions": int(positions)}
+
+
 # --- sources de score -----------------------------------------------------
 
 def score_composite(bloc: pd.DataFrame, poids: dict) -> pd.Series:
