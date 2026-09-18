@@ -241,6 +241,18 @@ def test_la_section_prediction_se_rend_sans_lever(lanceur):
         "journal des périodes de test absent"
     assert rendue("ticker", "probabilite", "incertitude", "rang_combine"), \
         "classement des probabilités absent — ou privé de son incertitude"
+    # DANS QUOI TOMBENT LES RECOMMANDATIONS. Ajoutée parce qu'un porteur qui
+    # suit dix lignes dont quatre sont des banques n'est pas réparti, et que
+    # rien d'autre dans l'onglet ne le lui dit. La table n'existe que si la
+    # section est allée au bout.
+    assert rendue("secteur", "part du haut de liste", "écart à l'univers"), \
+        "table de concentration sectorielle absente"
+
+    # L'AVANTAGE DU HAUT DE LISTE, qui est le seul chiffre de l'onglet à se
+    # comparer aux frais sans passer par une formule.
+    textes = " ".join(bloc.value for bloc in at.markdown)
+    assert "premières" in textes, \
+        "l'avantage du haut de liste n'est pas affiché"
 
 
 def test_la_section_seuil_de_frais_se_rend_sans_lever(lanceur):

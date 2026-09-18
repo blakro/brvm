@@ -78,6 +78,14 @@ Deux mots de plus, qui apparaissent dans les résultats :
 - **Liquidité** — la facilité à acheter ou revendre. Une action peu
   liquide peut afficher un beau prix sans que personne ne puisse
   réellement l'acheter à ce prix.
+- **Avantage du haut de liste** — ce qu'ont rapporté les dix premières
+  valeurs du classement, comparé au fait d'acheter tout le marché en parts
+  égales. Contrairement à l'IC, c'est un **pourcentage de rendement**,
+  donc il se compare directement aux frais du courtier. C'est le chiffre à
+  regarder avant de passer un ordre.
+- **Secteur** — la famille de métiers d'une société : banque, télécoms,
+  énergie. Il sert à deux choses ici : comparer ce qui est comparable, et
+  vérifier que les valeurs conseillées ne sont pas toutes les mêmes.
 
 ---
 
@@ -165,15 +173,21 @@ purgées :
 
 | | IC | t | IR | Périodes positives | Pire période |
 |---|---|---|---|---|---|
-| Avant | −0,056 | −1,1 | −0,43 | 4 / 10 | −0,240 |
-| **Après** | **+0,045** | **+1,5** | **+0,51** | **7 / 10** | **−0,094** |
+| Au départ | −0,056 | −1,1 | −0,43 | 4 / 10 | −0,240 |
+| Univers corrigé, traits ajoutés | +0,045 | +1,5 | +0,52 | 7 / 10 | −0,095 |
+| **À secteur égal** | **+0,067** | **+2,4** | **+0,92** | **8 / 10** | **−0,073** |
+
+La troisième ligne est la seule du projet dont le `t` dépasse 2 : l'ordre
+proposé y devient distinguable du hasard, ce qu'il n'était pas avant. Les
+deux versions sont mesurées **le même jour, sur la même archive et le même
+échantillon de 101 190 lignes** — le gain ne vient pas de données en plus.
 
 L'IC mesure si l'ordre proposé ressemble à l'ordre réalisé ; l'IR le
 rapporte à ses écarts d'une période à l'autre, et c'est lui qui dit la
 **fiabilité** — deux méthodes au même IC ne se valent pas si l'une le
 réalise à chaque période et l'autre une fois sur deux.
 
-Trois changements, par ordre d'importance :
+Cinq changements, par ordre d'importance :
 
 1. **Les données.** Une valeur qui n'échange pas tous les jours n'avait
    jamais de tendance calculable, donc jamais de place dans
@@ -185,8 +199,25 @@ Trois changements, par ordre d'importance :
 3. **La combinaison.** Trois sources à poids égaux — une régression
    logistique, des poids par trait appris puis rétrécis vers zéro selon la
    force de leur preuve, et le composite de la configuration.
+4. **Comparer à secteur égal.** Un rang calculé sur toute la cote mesure
+   en partie « est-ce une banque » : les Services Financiers pèsent 34,5 %
+   de l'univers, et quand le secteur monte ses valeurs montent ensemble
+   dans le classement sans qu'aucune n'ait rien montré. Chaque trait est
+   donc désormais comparé à la moyenne de son propre secteur, et
+   l'étiquette apprise devient « battre les siens » et non « battre tout le
+   marché ». Les dix premières lignes passent de **43,9 % de financières à
+   39,8 %** pour un univers à 34,5 % : le pari non choisi tombe de +9,5 à
+   +5,3 points, et la concentration sectorielle de 0,254 à 0,234. Il ne
+   disparaît pas entièrement, et c'est voulu — le composite, lui, garde les
+   rangs de marché, faute de quoi l'onglet Classement et le repli de
+   production changeraient aussi.
+5. **Trois traits d'attention.** Le choc de volume est le seul signal du
+   projet qui tienne ; plutôt que de chercher ailleurs, trois traits
+   décrivent mieux celui-là — le choc sur une semaine, la **part** des
+   séances au-dessus de la normale plutôt que leur ampleur, et la fréquence
+   réelle de cotation. IC +0,045 → +0,050 à eux seuls.
 
-Et **quatre idées reçues, mesurées puis jetées** — elles sont documentées
+Et **huit idées reçues, mesurées puis jetées** — elles sont documentées
 dans `src/brvm/apprentissage.py`, parce qu'un échec qu'on ne consigne pas
 sera retenté :
 
@@ -216,6 +247,99 @@ sera retenté :
   15 produits croisés et les carrés donnés à la régression déplacent l'IC
   de 0,005, contre une erreur-type de 0,03. L'arbre paie une variance pour
   chercher ce qui n'est pas là.
+- **Choisir l'horizon selon les frais.** L'idée était séduisante et
+  mesurable : à frais nuls un horizon d'un mois rend +6,5 % annuels contre
+  +5,5 % à trois mois, donc un utilisateur peu taxé devrait tourner plus
+  vite. Validée par moitiés d'historique, elle s'effondre — l'horizon d'un
+  mois rend **+7,9 % sur la première moitié et −4,1 % sur la seconde**, et
+  −13,6 % dès 0,5 % de frais. Sur la seconde moitié et aux frais réels,
+  **tous** les horizons perdent. C'est le même piège que la zone tampon à
+  3,0, consigné dans `src/brvm/config.py` : le meilleur réglage de la
+  première moitié est le pire de la seconde.
+- **Une étiquette en rendement total.** C'est la bonne cible — le porteur
+  encaisse le dividende — et l'archive ne la porte pas : le calendrier ne
+  couvre que **48,7 %** des séances de détention, et la section 6 montre
+  que les exercices non couverts ont bel et bien payé. Le modèle
+  apprendrait à préférer les sociétés bien documentées.
+- **Les moyennes sectorielles comme traits.** Donner au modèle le momentum
+  moyen de chaque secteur : +0,043 contre +0,045. Ce n'est pas le momentum
+  de secteur qui aide, c'est le **retrait** du biais de secteur — l'inverse.
+- **Retirer le composite de la combinaison.** Son IC est le plus faible
+  des trois sources (+0,032) et son pire trimestre le plus mauvais ; on le
+  croirait donc dilutif. Mesuré, l'IC de la combinaison tombe de +0,045 à
+  **+0,037** sans lui. Il diversifie, et il reste.
+
+Un cinquième arbitrage mérite d'être écrit parce qu'il ne s'est pas joué
+sur un chiffre : **ranger dans le secteur** plutôt que retrancher la
+moyenne du secteur mesure la même chose (+0,052 contre +0,052). Le
+départage est mécanique — le secteur médian ne compte que **4 valeurs
+cotées** par séance et le premier quartile 2, si bien qu'une valeur seule
+dans son secteur reçoit le rang **maximum** sur tous les traits à la fois,
+pour la seule raison qu'elle est seule. Retranchée de sa moyenne, elle
+reçoit zéro, c'est-à-dire « rien à dire ». Le cas pèse 0,2 % des lignes et
+ne déplace aucune mesure ; c'est la manière de se tromper qui a décidé.
+
+#### L'IC et l'argent ne disent pas la même chose
+
+C'est le constat le plus utile de tout le travail sur la prédiction, et il
+a fallu fabriquer un second chiffre pour le voir.
+
+L'IC note l'ordre de **toute** la cote. Personne n'achète toute la cote.
+Un classement peut donc mieux ranger le ventre du marché — ce qui lève
+l'IC — en rangeant plus mal les dix valeurs qui sont les seules que
+quiconque achètera. Ce n'est pas une inquiétude théorique : c'était le cas
+ici.
+
+| Sur la même fenêtre, les mêmes lignes | IC | Avantage des 10 premières |
+|---|---|---|
+| Avant | +0,045 | **−0,67 %** |
+| Après | +0,067 | **+1,39 %** |
+
+L'ancien classement avait un IC positif et ses dix premières lignes
+**perdaient** contre l'univers acheté à parts égales. Le tableau de bord
+affichait une amélioration là où l'utilisateur aurait perdu de l'argent.
+
+Deux conséquences, toutes deux dans le code :
+
+- `apprentissage.avantage_par_date` mesure l'écart des `positions`
+  premières contre la moyenne de la séance, hors échantillon. C'est un
+  **rendement**, donc le seul chiffre du projet qui se compare aux frais
+  sans passer par la relation de Grinold, et l'onglet l'affiche à côté de
+  l'IC.
+- **La porte de production a une seconde condition.** Un IC positif ne
+  suffit plus : si le haut de liste a perdu hors échantillon, c'est le
+  composite qui part en production. La règle est vérifiée par un test, et
+  appliquée à l'ancienne configuration elle la **refuse**.
+
+#### Ce qui n'a pas été démontré, et ce qui a empiré
+
+Le tableau ci-dessus se lit dans les deux sens, et voici l'autre.
+
+**Le gain n'est pas statistiquement établi.** Comparés période par période
+sur les mêmes dates, les deux classements diffèrent de +0,013 d'IC avec un
+`t` apparié de **+0,45**, et de +2,07 points d'avantage du haut de liste
+avec un `t` apparié de **+1,43** — dans les deux cas l'intervalle contient
+zéro. Ce qui est établi, c'est que le nouveau classement est
+**distinguable du hasard** (`t` +2,4 contre +1,5) et plus régulier
+(dispersion entre périodes 0,087 → 0,073, plus stable dans 88 % des
+rééchantillonnages) ; pas que l'écart entre les deux soit réel.
+
+**Et le rendement total mesuré, lui, a baissé.** Rejoué par le backtest sur
+une fenêtre commune, dividendes compris, l'ancien classement rend +1,1 %
+annuels contre l'univers à frais nuls, le nouveau **−0,3 %**. La cause est
+identifiée et chiffrée : le portefeuille à secteur égal encaisse **38
+points de dividende en moins** sur la fenêtre (194 % contre 232 %), parce
+que sur cette place les dividendes sont concentrés dans les financières
+dont la neutralisation réduit le poids.
+
+Ce qui a été retenu malgré cela, et pourquoi : la section 6 mesure que le
+cours ne reflète que **46 %** du dividende détaché deux séances après.
+L'avantage de l'ancien classement passe donc en partie par le même
+rendement fantôme que le projet refuse déjà d'exploiter ailleurs — s'y
+adosser serait incohérent. Le pari sectoriel abandonné rapportait sur cette
+archive ; il n'avait pas été choisi, et il tenait à un défaut d'ajustement
+des cours, pas à un pouvoir prédictif. **Aucune des deux versions ne
+franchit les frais réels**, et le conseil reste « ne rien faire ».
 
 **Deux réserves, plus importantes que le tableau.** D'abord +0,045 n'est
 pas significatif : le t vaut 1,5 là où il en faudrait 2. Le signe a
@@ -339,6 +463,11 @@ gain attendu dépasse son coût.** Le gain se calcule (relation de Grinold) :
 
     gain = IC × dispersion transversale × écart de score
 
+À côté de cette chaîne d'estimations, la sortie donne maintenant un chiffre
+**constaté** : ce qu'ont rapporté les dix premières lignes hors échantillon.
+Les deux répondent à la même question, l'un par une formule et l'autre par
+un relevé, et les voir ensemble dit s'il faut croire l'arithmétique.
+
 L'IC vient de la validation, la dispersion de l'archive, les frais de **votre
 SGI** — et c'est le seul paramètre qui vous appartient. Il varie fortement
 d'un intermédiaire et d'un pays de l'UEMOA à l'autre, donc la réponse n'est
@@ -354,6 +483,11 @@ classées, l'échelle des scores va d'environ −2 à +2. Ce que ça donne :
 | 1,50 % (IC prudent) | aucun ne suffit | **0** |
 | 1,50 % (IC ponctuel) | 3,06 | 1, net +0,08 % |
 | 0,25 % | 0,51 | 4, net jusqu'à +2,58 % |
+
+La sortie se termine par **dans quoi tombent les dix premières**, secteur par
+secteur, avec l'écart à l'univers coté. Dix lignes dont quatre sont des
+banques ne font pas un portefeuille réparti, et aucun autre chiffre ne le
+disait.
 
 **Par défaut, le conseil est de ne rien faire** — et ce n'est pas une absence
 de réponse. Le classement distingue bien des valeurs, mais l'écart qu'il
@@ -455,7 +589,7 @@ src/brvm/
     sikafinance.py            l'historique
     dividendes.py             les calendriers de dividendes
 
-tests/                    293 tests, tous hors ligne
+tests/                    315 tests, tous hors ligne
   donnees/                  captures réelles de pages web, servant de témoins
 
 .github/workflows/
@@ -896,6 +1030,16 @@ balayage retient :
 
 ### Pourquoi il n'y a pas de modèle par secteur
 
+**À ne pas confondre avec la comparaison à secteur égal**, que la section 4
+décrit et que le projet fait désormais. Employer le secteur comme
+**repère** — comparer chaque valeur à la moyenne des siennes — ne coûte
+rien et enlève un biais. Employer le secteur comme **échantillon
+d'apprentissage** est une autre affaire, et c'est celle-là qui reste
+impossible : le secteur médian ne compte que **4 valeurs cotées par
+séance**, le premier quartile 2. On ne règle pas un modèle sur deux
+valeurs, et c'est exactement pourquoi la comparaison retranche une moyenne
+au lieu de ranger à l'intérieur du secteur.
+
 Les secteurs de la BRVM n'obéissent pas aux mêmes moteurs, et on pourrait
 vouloir un modèle par secteur. Le balayage systématique n'a trouvé
 **aucun modèle sectoriel dans les prix** : toutes les approches
@@ -930,7 +1074,7 @@ est son produit avec l'appartenance sectorielle.
 pytest -q                     # ou : python tests/test_brvm_org.py
 ```
 
-**293 tests, tous hors ligne.** Un test qui dépend du réseau échoue pour
+**315 tests, tous hors ligne.** Un test qui dépend du réseau échoue pour
 des raisons étrangères au code qu'il vérifie.
 
 `test_brvm_org.py` travaille sur les captures réelles de `tests/donnees/`,
