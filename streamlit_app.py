@@ -551,7 +551,7 @@ def echantillon_prediction(_cours, _referentiel, archive, univers):
 @st.cache_data(max_entries=8, show_spinner="Arithmétique de l'arbitrage…")
 def calculer_conseil(_cours, _classement, _mesure, dispersion, archive, univers,
                      detenu, frais, impact, positions, prudence,
-                     _avantage=None):
+                     _avantage=None, source=None):
     """Acheter, conserver, vendre — aux frais que l'utilisateur a saisis.
 
     Les frais entrent dans la clé de cache : c'est le paramètre dont toute la
@@ -564,7 +564,8 @@ def calculer_conseil(_cours, _classement, _mesure, dispersion, archive, univers,
                              "frais_pourcent": frais, "impact_pourcent": impact}}
     return conseil.conseiller(_classement, detenu=list(detenu), mesure=_mesure,
                               dispersion_=dispersion, reglages=reglages,
-                              prudence=prudence, avantage=_avantage)
+                              prudence=prudence, avantage=_avantage,
+                              source=source)
 
 
 @st.cache_data(max_entries=4, show_spinner="Recherche du seuil de frais…")
@@ -588,6 +589,18 @@ def calculer_seuil_frais(_cours, _referentiel, _fondamentaux, _dividendes,
     return backtest.seuil_frais(_cours, _referentiel, reglages,
                                 fondamentaux=_fondamentaux,
                                 dividendes=_dividendes, scores=scores)
+
+
+@st.cache_data(max_entries=8, show_spinner="Classement de production…")
+def classement_de_production(_cours, _referentiel, archive, univers,
+                             _validation, _composite):
+    """Le classement qui sert à DÉCIDER, avec ses propres mesures.
+
+    Le couplage vit dans `prediction` ; cette enveloppe ne fait que le
+    mémoïser, parce qu'il rejoue le modèle sur la dernière séance.
+    """
+    return prediction.classement_de_production(
+        _cours, DEFAUTS, _referentiel, _validation, composite=_composite)
 
 
 @st.cache_data(max_entries=8, show_spinner="Validation du modèle appris…")
@@ -1606,12 +1619,20 @@ if onglets[2].open:
                                            ARCHIVE, UNIVERS)
             echantillon_cs = echantillon_prediction(
                 cours_filtre, referentiel_filtre, ARCHIVE, UNIVERS)
+            # LE CLASSEMENT JUGÉ ET LES MESURES QUI LE JUGENT SORTENT
+            # ENSEMBLE. Cette section appariait le classement du composite
+            # avec l'IC du modèle appris, deux fois et demie meilleur : le
+            # gain attendu d'un arbitrage s'en trouvait surestimé d'autant.
+            production = classement_de_production(
+                cours_filtre, referentiel_filtre, ARCHIVE, UNIVERS,
+                validation_cs, classement)
+            classement_avis = production["classement"]
             avis = calculer_conseil(
-                cours_filtre, classement, validation_cs.get("mesure"),
+                cours_filtre, classement_avis, production["mesure"],
                 conseil.dispersion(echantillon_cs), ARCHIVE, UNIVERS,
                 tuple(detenu), frais_cs, impact_cs,
                 int(DEFAUTS["backtest"]["positions"]), prudence,
-                _avantage=validation_cs.get("avantage"))
+                _avantage=production["avantage"], source=production["source"])
 
             # LES DEUX NOMBRES QUI DÉCIDENT, DANS LA MÊME UNITÉ, EN
             # PREMIER. « Écart de score requis : 3,06 » ne veut rien dire
@@ -1708,7 +1729,7 @@ if onglets[2].open:
             # autre tuile de cet onglet ne le disait. Le repère est l'univers
             # coté lui-même : c'est lui qu'on achèterait sans classement.
             conc = conseil.concentration_secteur(
-                classement, referentiel_filtre, avis.get("positions", 10))
+                classement_avis, referentiel_filtre, avis.get("positions", 10))
             if conc["premier"]:
                 parts = pd.DataFrame(
                     [{"secteur": nom, "part du haut de liste": part,

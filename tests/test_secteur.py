@@ -592,3 +592,75 @@ def test_le_tableau_des_sources_reste_aligne():
     # La colonne d'IC commence au même caractère sur chaque ligne.
     colonnes = {l.index("+0.050") for l in lignes}
     assert len(colonnes) == 1, f"colonnes désalignées : {sorted(colonnes)}"
+
+
+# --- l'appariement classement / mesures ------------------------------------
+
+def test_les_mesures_appartiennent_au_classement_rendu():
+    """LE DÉFAUT QUE CETTE FONCTION EXISTE POUR RENDRE IMPOSSIBLE.
+
+    Le conseiller recevait le classement du composite et, à côté, l'IC du
+    modèle appris — deux fois et demie meilleur. Le gain attendu d'un
+    arbitrage s'en trouvait surestimé d'un facteur 2,8, et le diagnostic
+    changeait de nature : « les frais mangent l'écart » au lieu de « ce
+    classement n'a pas d'avantage démontré ».
+
+    Le test vérifie l'invariant, et non le chemin : les mesures rendues sont
+    celles de la source nommée.
+    """
+    validation = {
+        "retenue": "composite",
+        "sources": {
+            "combinaison": {"mesure": {"ic": 0.074}, "avantage": {"avantage": 0.006}},
+            "composite": {"mesure": {"ic": 0.027}, "avantage": {"avantage": -0.001}},
+        },
+        "mesure": {"ic": 0.074}, "avantage": {"avantage": 0.006},
+    }
+    composite = pd.DataFrame({"ticker": ["A", "B"], "rang": [1, 2]})
+    out = prediction.classement_de_production(
+        pd.DataFrame(), None, None, validation, composite=composite)
+    assert out["source"] == "composite"
+    # LES MESURES DU COMPOSITE, et non celles de la combinaison, même si
+    # `validation["mesure"]` porte encore ces dernières.
+    assert out["mesure"]["ic"] == 0.027
+    assert out["avantage"]["avantage"] == -0.001
+    assert out["classement"] is composite
+
+
+def test_le_repli_sur_le_composite_ne_reprend_pas_l_IC_du_modele():
+    """Quand la porte de production refuse le modèle, tout doit suivre.
+
+    Sinon on chiffrerait les arbitrages d'un classement sans preuve avec la
+    preuve d'un autre — exactement le dépareillage corrigé.
+    """
+    validation = {
+        "retenue": "composite",
+        "sources": {"composite": {"mesure": {"ic": -0.01},
+                                  "avantage": {"avantage": -0.004}}},
+        "mesure": {"ic": 0.09}, "avantage": {"avantage": 0.01},
+    }
+    out = prediction.classement_de_production(
+        pd.DataFrame(), None, None, validation,
+        composite=pd.DataFrame({"ticker": ["A"], "rang": [1]}))
+    assert out["mesure"]["ic"] < 0, "le repli doit porter l'IC du composite"
+    assert out["avantage"]["avantage"] < 0
+
+
+def test_le_conseil_nomme_le_classement_qu_il_juge():
+    """Un gain chiffré sans dire sur quel classement ne se vérifie pas."""
+    classement = pd.DataFrame({"ticker": list("ABCDE"), "rang": range(1, 6)})
+    res = conseil.conseiller(
+        classement, detenu=["A"], mesure={"ic": 0.02, "erreur_type": 0.005},
+        dispersion_=0.2, reglages={"backtest": {
+            "positions": 3, "frais_pourcent": 0.1, "impact_pourcent": 0.0}},
+        source="modèle appris")
+    assert res["source"] == "modèle appris"
+    assert "modèle appris" in conseil.expliquer(res)
+    # Sans source nommée, aucune ligne inventée.
+    muet = conseil.conseiller(classement, detenu=["A"],
+                              mesure={"ic": 0.02, "erreur_type": 0.005},
+                              dispersion_=0.2, reglages={"backtest": {
+                                  "positions": 3, "frais_pourcent": 0.1,
+                                  "impact_pourcent": 0.0}})
+    assert muet["source"] is None
+    assert "classement jugé" not in conseil.expliquer(muet)
