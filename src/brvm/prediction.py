@@ -1008,6 +1008,7 @@ def classement_de_production(
     referentiel: pd.DataFrame | None = None,
     validation: dict | None = None,
     composite: pd.DataFrame | None = None,
+    appris: pd.DataFrame | None = None,
 ) -> dict:
     """Le classement qui doit servir à DÉCIDER, et ses propres mesures.
 
@@ -1039,6 +1040,12 @@ def classement_de_production(
         mesure       l'IC de CE classement, hors échantillon
         avantage     son avantage du haut de liste, valeurs achetables
         source       « modèle appris » ou « composite », à afficher
+
+    `appris` ÉVITE DE REFAIRE CE QUI EST DÉJÀ FAIT. Appliquer le modèle
+    ré-entraîne le sac de régressions ; l'appelant qui l'a déjà fait — c'est
+    le cas du tableau de bord, qui affiche aussi les probabilités — passe le
+    résultat et la fonction s'en sert au lieu de le recalculer. Sans ce
+    paramètre, l'onglet payait `predire` DEUX FOIS par rendu.
     """
     conf = reglages or charger()
     valide = validation if validation is not None else valider(
@@ -1047,9 +1054,10 @@ def classement_de_production(
     sources = valide.get("sources", {})
 
     if retenue == "combinaison":
-        appris = predire(cours, conf, referentiel=referentiel,
-                         validation=valide)
-        if not appris.empty:
+        if appris is None:
+            appris = predire(cours, conf, referentiel=referentiel,
+                             validation=valide)
+        if appris is not None and not appris.empty:
             table = appris[["ticker"]].copy()
             table["rang"] = range(1, len(table) + 1)
             if referentiel is not None and "nom" in getattr(
