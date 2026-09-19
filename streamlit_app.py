@@ -593,7 +593,8 @@ def calculer_seuil_frais(_cours, _referentiel, _fondamentaux, _dividendes,
 
 @st.cache_data(max_entries=8, show_spinner="Classement de production…")
 def classement_de_production(_cours, _referentiel, archive, univers,
-                             _validation, _composite, ordre_composite=()):
+                             _validation, _composite, ordre_composite=(),
+                             _appris=None):
     """Le classement qui sert à DÉCIDER, avec ses propres mesures.
 
     Le couplage vit dans `prediction` ; cette enveloppe ne fait que le
@@ -609,7 +610,8 @@ def classement_de_production(_cours, _referentiel, archive, univers,
     silence.
     """
     return prediction.classement_de_production(
-        _cours, DEFAUTS, _referentiel, _validation, composite=_composite)
+        _cours, DEFAUTS, _referentiel, _validation, composite=_composite,
+        appris=_appris)
 
 
 @st.cache_data(max_entries=8, show_spinner="Validation du modèle appris…")
@@ -1632,10 +1634,18 @@ if onglets[2].open:
             # ENSEMBLE. Cette section appariait le classement du composite
             # avec l'IC du modèle appris, deux fois et demie meilleur : le
             # gain attendu d'un arbitrage s'en trouvait surestimé d'autant.
+            # LE MODÈLE EST APPLIQUÉ UNE FOIS, PAS DEUX. La section
+            # Prédiction, plus bas, affiche les mêmes probabilités ; son
+            # appel mémoïsé est fait ici pour que les deux sections
+            # partagent le calcul au lieu de ré-entraîner le sac de
+            # régressions chacune de son côté.
+            probable_cs = appliquer_modele(cours_filtre, referentiel_filtre,
+                                           ARCHIVE, UNIVERS, validation_cs)
             production = classement_de_production(
                 cours_filtre, referentiel_filtre, ARCHIVE, UNIVERS,
                 validation_cs, classement,
-                ordre_composite=tuple(classement["ticker"]))
+                ordre_composite=tuple(classement["ticker"]),
+                _appris=probable_cs)
             classement_avis = production["classement"]
             avis = calculer_conseil(
                 cours_filtre, classement_avis, production["mesure"],
