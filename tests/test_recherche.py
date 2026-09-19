@@ -382,4 +382,9 @@ def test_la_grille_compte_ce_qu_elle_annonce():
     pêche aux résultats.
     """
     assert len(recherche.PREDICTEURS) == 12
-    assert len(recherche.HORIZONS) == 3
+    assert len(recherche.HORIZONS) == 5
+    # 12 × 6 segments × 5 horizons = 360. Le compte est le dénominateur de la
+    # correction : s'il ne suit pas la grille, le seuil devient plus permissif
+    # qu'annoncé. Ce test a attrapé l'ajout de 5 et 10 séances, qui est
+    # précisément ce qu'on lui demande.
+    assert len(recherche.PREDICTEURS) * len(recherche.HORIZONS) == 60

@@ -79,7 +79,7 @@ DEFAUTS: dict[str, dict] = {
         "min_par_secteur": 5,
     },
     "prediction": {
-        # Horizon en séances — environ un mois de cotation.
+        # Horizon en séances — environ une semaine de cotation.
         #
         # PAS UN HORIZON JOURNALIER, ET C'EST STRUCTUREL. La BRVM cote par
         # fixing, avec une limite de variation de ±7,5 % et des lignes qui
@@ -88,50 +88,64 @@ DEFAUTS: dict[str, dict] = {
         # tire un R² magnifique, et produit un backtest brillant et
         # inexécutable. Le signal exploitable est à un à six mois.
         #
-        # VINGT SÉANCES, ET NON SOIXANTE. Mesuré sur le rendement de COURS
-        # seul et sur les seules valeurs négociables (médiane de volume au
-        # moins 1 M FCFA) — avantage annualisé des dix premières, avec les
-        # deux moitiés d'archive pour juge :
+        # CINQ SÉANCES. Mesuré sur le rendement de COURS seul, sur les
+        # seules valeurs négociables (médiane de volume au moins 1 M FCFA),
+        # avec le modèle livré et les deux moitiés d'archive pour juges :
         #
-        #     horizon   avantage      t   1re moitié   2nde moitié
-        #           5    +15,50 %  +5,21     +16,48 %      +14,51 %
-        #          10    +10,95 %  +3,77     +11,37 %      +10,53 %
-        #          20     +7,72 %  +2,80      +9,13 %       +6,30 %
-        #          40     +4,13 %  +1,56      +5,33 %       +2,92 %
-        #          60     +3,61 %  +1,19      +4,17 %       +3,06 %
+        #   horizon      IC      IR   périodes+   avantage/an   1re moit.  2nde
+        #         5  +0,0768  +1,84      10/10      +15,50 %     +16,5 %  +14,5 %
+        #        10  +0,0705  +1,40       8/10      +10,95 %     +11,4 %  +10,5 %
+        #        20  +0,0738  +1,51       9/10       +7,72 %      +9,1 %   +6,3 %
+        #        40  +0,0483  +0,99       8/10       +4,13 %      +5,3 %   +2,9 %
+        #        60  +0,0599  +0,88       9/10       +3,61 %      +4,2 %   +3,1 %
         #
-        # L'horizon d'un mois rend donc plus du double du trimestriel. Le
-        # classement est monotone — plus court est meilleur, sans exception,
-        # jusqu'à la semaine — et POSITIF SUR LES DEUX MOITIÉS à tous les
-        # horizons, ce qui le distingue du mirage de cadence documenté sous
-        # `pas_rebalancement`.
+        # Cinq séances gagne sur TOUTES les colonnes comparables entre
+        # horizons — l'IC par période, l'IR, le nombre de périodes positives,
+        # et l'équilibre entre les deux moitiés. Le `t` n'en fait pas partie :
+        # il croît en racine de l'inverse de l'horizon, puisque l'erreur-type
+        # se calcule sur `dates / horizon` blocs disjoints. À cinq séances il
+        # y a quatre fois plus de blocs qu'à vingt, donc quatre fois plus de
+        # puissance à effet égal.
         #
-        # POURQUOI PAS CINQ SÉANCES, QUI MESURE LE MIEUX. Deux raisons, et
-        # aucune n'est le confort. D'abord la robustesse à l'exécution : une
-        # séance de retard coûte 30 % de l'avantage à cinq séances contre
-        # 15 % à vingt, et sur une place où une ligne se traite quelques fois
-        # par mois, « exécuter demain » n'est pas acquis. Ensuite la
-        # corroboration : le balayage de 216 cases corrigé par
-        # Benjamini-Hochberg dans `recherche.py` ne retient que deux cases,
-        # le choc éclair et le choc de volume, et TOUTES DEUX À VINGT
-        # SÉANCES. Deux analyses indépendantes désignent le même horizon, ce
-        # qui est un fondement plus solide que le maximum d'une courbe.
+        # PAS JOURNALIER POUR AUTANT, et la raison est structurelle. La BRVM
+        # cote par fixing avec une limite de ±7,5 % et des lignes qui ne
+        # s'échangent parfois que quelques fois par semaine. Sur des cours
+        # ainsi figés, un modèle entraîné sur le lendemain apprend « demain ≈
+        # aujourd'hui », en tire un R² magnifique et produit un backtest
+        # brillant et inexécutable.
         #
-        # Quatre contrôles d'artefact ont précédé ce choix, tous passés :
-        # la part d'étiquettes assises sur un cours reporté ne croît pas
-        # quand l'horizon raccourcit (6,5 % à 5 séances, 6,7 % à 60) et
-        # restreindre la mesure aux cours réels AMÉLIORE le résultat
-        # (+14,36 % contre +13,77 %) ;
-        # l'avantage survit à un décalage d'entrée de trois séances ; il ne
-        # dépend pas du niveau de cours (IC +0,075 / +0,073 / +0,081 par
-        # tercile, contre +0,075 sur l'ensemble) ;
-        # et la courbe en horizon est lisse, sans pic à l'endroit où
-        # l'horizon coïncide avec les fenêtres des traits.
+        # DEUX CONTRÔLES DÉCIDENT QUE CINQ N'EST PAS CE PIÈGE-LÀ.
+        #
+        # Le délai d'exécution d'abord : on ne peut pas acheter au cours qui
+        # a servi à décider, il est connu après la clôture. Avantage annualisé
+        # selon la séance d'entrée :
+        #
+        #   horizon    t+0       t+1       t+2       t+3
+        #         5  +15,50 %  +12,05 %   +9,20 %   +7,12 %
+        #        20   +7,72 %   +6,94 %   +6,17 %   +5,20 %
+        #
+        # Cinq séances avec TROIS séances de retard égale encore vingt séances
+        # sans retard. Un effet de rebond de fourchette se serait effondré dès
+        # la première.
+        #
+        # Les cours reportés ensuite : 5,3 % des étiquettes en reposent sur
+        # un, et restreindre la mesure aux cours réellement traités en t+H ne
+        # change rien (+15,40 % contre +15,50 %). Ce n'est donc pas un
+        # artefact de cours figé.
+        #
+        # CE QUI A ÉTÉ CORRIGÉ EN CHEMIN. L'horizon a d'abord été fixé à
+        # vingt, en partie parce que le balayage de `recherche.py` désignait
+        # le choc de volume « à vingt séances » : deux analyses indépendantes,
+        # disait-on, pointaient le même horizon. Or la grille du balayage
+        # était (20, 60, 120) — vingt était le plus court horizon qu'on lui
+        # autorisait, et il ne pouvait pas en désigner un autre. L'argument
+        # était circulaire. La grille contient désormais 5 et 10, et le
+        # balayage place ses cases les plus fortes à cinq séances.
         #
         # À NE PAS CONFONDRE AVEC `pas_rebalancement`, qui dit à quelle
         # fréquence on ACHÈTE et que les frais commandent — voir plus bas.
-        # Prédire à un mois n'oblige pas à tourner tous les mois.
-        "horizon": 20,
+        # Prévoir à une semaine n'oblige pas à tourner toutes les semaines.
+        "horizon": 5,
         # Périodes de test successives de la validation glissante.
         #
         # DIX ET NON QUATRE, ET C'ÉTAIT UN DÉFAUT DE MESURE. Avec quatre
@@ -198,18 +212,22 @@ DEFAUTS: dict[str, dict] = {
         # modèle livré sur le COURS SEUL, écart annuel contre l'univers :
         #
         #     pas    frais nuls   0,25 %   1,50 %   seuil
-        #      20        +3,9 %    +0,0 %  -17,8 %   0,25 %
-        #      60        +2,8 %    +1,5 %   -4,9 %   0,54 %
+        #       5        +9,3 %    -1,3 %  -42,5 %   0,22 %
+        #      20        +3,3 %    -0,8 %  -19,0 %   0,20 %
+        #      60        +8,0 %    +6,5 %   -0,5 %   1,40 %
         #
-        # Le rééquilibrage mensuel gagne un peu plus à frais nuls et perd
-        # trois fois plus dès qu'on paie : son seuil de rentabilité est de
-        # 0,25 % par sens contre 0,54 % pour le trimestriel. C'est ce seuil
-        # qui décide, parce que c'est lui qu'on compare au devis d'une SGI.
+        # LE SIGNAL SE CONSERVE BIEN AU-DELÀ DE SON HORIZON DE MESURE, et
+        # c'est le résultat le plus utile du tableau. Prédit à cinq séances,
+        # détenu soixante, il garde l'essentiel de son avantage tout en
+        # payant la rotation douze fois moins souvent : son seuil de
+        # rentabilité est de 1,40 % par sens contre 0,22 % si l'on tourne à
+        # la semaine. C'est ce seuil qui décide, parce que c'est lui qu'on
+        # compare au devis d'une SGI — et il est passé de 0,54 % à 1,40 %
+        # avec le raccourcissement de l'horizon de prédiction, soit à portée
+        # des 1,50 % facturés.
         #
-        # (Sur soixante rééquilibrages, ces chiffres ne sont pas fins : le
-        # balayage voisin donnait `pas = 40` à -2,3 %, hors de toute
-        # progression. C'est l'ordre de grandeur qui tranche, pas la
-        # décimale.)
+        # (Sur soixante rééquilibrages, ces chiffres ne sont pas fins. C'est
+        # l'ordre de grandeur qui tranche, pas la décimale.)
         "pas_rebalancement": 60,
         # On décide sur la clôture de t et on achète à celle de t+1. Se
         # servir du même cours pour décider et pour exécuter suppose de

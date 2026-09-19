@@ -163,8 +163,8 @@ from .config import charger
 # optionnelle, et son absence fait DESCENDRE D'UN CRAN plutôt que tomber :
 # `SOURCES_COMBINEES` étant un ordre de préférence, les poids de fiabilité
 # prennent la suite de la régression et rendent encore un classement appris —
-# dégradé, et mesuré, +3,37 % annualisés d'avantage du haut de liste à vingt
-# séances contre +7,72 % avec la régression.
+# dégradé, et mesuré : +13,5 % annualisés d'avantage du haut de liste à
+# l'horizon livré, contre +15,5 % avec la régression.
 APPRENTISSAGE_DISPONIBLE = apprentissage.DISPONIBLE
 
 MOTIF_INDISPONIBLE = (
@@ -231,7 +231,7 @@ SOURCES = ("modele", "fiabilite", "composite")
 # POURQUOI L'ORDRE PLUTÔT QU'UN NOM DE SOURCE EN DUR. Les poids de
 # fiabilité ne demandent pas scikit-learn, la régression si. Garder l'ordre
 # fait qu'un environnement sans scikit-learn rend encore un classement
-# appris — dégradé, et mesuré : +3,37 % annualisés à vingt séances — au lieu
+# appris — dégradé, et mesuré : +13,5 % annualisés contre +15,5 % — au lieu
 # de retomber directement sur le composite, qui n'apprend rien.
 #
 # Le nom « combinaison » est conservé dans les clés et les libellés parce

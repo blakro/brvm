@@ -50,7 +50,19 @@ from .config import charger
 # Horizons en séances : un, trois et six mois. En deçà, les frais de
 # 2,5 à 3,5 % l'aller-retour condamnent tout signal avant qu'il ne serve ;
 # au-delà, l'historique ne fournit plus assez de périodes disjointes.
-HORIZONS = (20, 60, 120)
+# CINQ ET DIX SÉANCES ONT ÉTÉ AJOUTÉS, ET LEUR ABSENCE ÉTAIT UN BIAIS.
+#
+# La grille s'arrêtait à (20, 60, 120). Elle a donc désigné le choc de
+# volume « à vingt séances » — le plus court horizon qu'on lui autorisait.
+# Ce résultat a ensuite servi d'argument pour fixer l'horizon du modèle à
+# vingt : deux analyses indépendantes, disait-on, désignaient le même
+# horizon. L'une des deux n'avait jamais eu le droit de désigner autre
+# chose.
+#
+# Un balayage dont la grille exclut la réponse ne peut pas la corroborer.
+# Cinq et dix séances entrent donc, ce qui porte la grille de 216 à 360
+# cases et durcit le seuil de Benjamini-Hochberg pour tout le monde.
+HORIZONS = (5, 10, 20, 60, 120)
 
 # Un secteur de trois valeurs ne permet pas de mesurer un classement : un
 # rang de Spearman sur trois points ne prend que quelques valeurs, et son

@@ -216,21 +216,21 @@ def choc_volume(cours: pd.DataFrame, court: int, long: int) -> pd.Series:
     `liquidite` et qui ne prédit rien (t +0,7), mais « cette valeur
     s'échange soudain plus que d'habitude ».
 
-    L'UN DES DEUX EFFETS QUI TIENNENT. Sur les 216 cases du balayage de
-    `recherche.py`, deux seulement franchissent la correction de
-    Benjamini-Hochberg : celui-ci et le choc éclair, qui est le même effet
-    mesuré sur une semaine et qui le dépasse. Toutes deux à VINGT SÉANCES,
-    l'horizon que `prediction` emploie depuis :
+    L'UN DES EFFETS QUI TIENNENT, ET SON IC MONTE AVEC L'HORIZON. Sur les
+    360 cases du balayage de `recherche.py`, 33 franchissent la correction de
+    Benjamini-Hochberg, dont celui-ci à cinq, dix et vingt séances. Son IC par
+    période, en revanche, est MEILLEUR à horizon long :
 
-        choc éclair      IC +0,061   t +4,3
-        choc de volume   IC +0,053   t +3,8
+        horizon      5       10      20      60
+        IC       +0,034  +0,046  +0,053  +0,064
 
-    Aux trois mois qu'employait `prediction` avant, celui-ci rend IC +0,064
-    et t +2,3, et il est positif lors de onze des douze années de l'archive.
+    C'est le choc éclair — le même effet sur une semaine — qui le dépasse à
+    l'horizon que `prediction` emploie. Celui-ci reste positif lors de onze
+    des douze années de l'archive.
 
     L'effet est documenté ailleurs sous le nom de choc d'attention ; il
     n'est pas découvert ici, seulement retrouvé. Et il ne rapporte rien :
-    exploité à son horizon d'un mois, il exige 48 % de rotation douze fois
+    exploité à un horizon d'un mois, il exige 48 % de rotation douze fois
     l'an et rend +6,2 % annuels contre +14,8 % pour la simple détention du
     même univers.
     """
@@ -252,20 +252,21 @@ def choc_eclair(cours: pd.DataFrame, eclair: int, long: int) -> pd.Series:
     Même rapport que `choc_volume`, même borne au dénominateur, fenêtre
     courte plus courte : l'attention se voit avant de se mesurer.
 
-    LA PLUS FORTE CASE DU BALAYAGE, ET ELLE A PASSÉ LA CORRECTION. Ajouté
-    d'abord pour mieux décrire le choc de volume, ce trait a ensuite été
-    soumis au même test multiple que les autres — la règle est énoncée dans
-    l'en-tête de `recherche._choc_volume` et elle vaut aussi pour les
+    LA PLUS FORTE CASE DU BALAYAGE, ET ELLE A PASSÉ LA CORRECTION DEUX FOIS.
+    Ajouté d'abord pour mieux décrire le choc de volume, ce trait a ensuite
+    été soumis au même test multiple que les autres — la règle est énoncée
+    dans l'en-tête de `recherche._choc_volume` et elle vaut aussi pour les
     prédicteurs qu'on ajoute soi-même. Son entrée a porté la grille de 162 à
-    216 cases, durcissant le seuil pour tout le monde, et il est passé quand
-    même : IC +0,061 et t +4,3 à vingt séances sur tout le marché, première
-    des 216. Le choc de volume, deuxième, rend t +3,8.
+    216 cases, puis l'ajout des horizons courts à 360, durcissant le seuil à
+    chaque fois. Il est passé les deux fois, et il est aujourd'hui la case la
+    plus forte des 360 : IC +0,049 et t +7,2 à cinq séances sur tout le
+    marché.
 
-    Ses deux compagnons d'ajout ne passent pas — ampleur du choc t +2,6,
-    intensité d'échange t +2,4 sur les financières. Ils restent dans le
-    modèle parce qu'ils aident la combinaison, pas parce qu'ils se
-    distinguent seuls du hasard, et c'est écrit pour qu'on ne leur prête pas
-    une force qu'ils n'ont pas.
+    À l'horizon livré, c'est aussi le premier trait du modèle : IC +0,053 et
+    t +6,5, devant le choc de volume (+0,039) et l'ampleur du choc (+0,032),
+    les trois étant significatifs. `ampleur_choc` ne l'était PAS à vingt
+    séances et l'est à cinq — la puissance vient du nombre de blocs
+    disjoints, quatre fois plus grand.
     """
     volumes = serie(cours, "volume_fcfa")
     if volumes.empty:
@@ -335,9 +336,10 @@ TRAITS = ["momentum", "tendance", "volatilite", "liquidite"]
 #   choc_volume    IC +0,064, t +2,3, positif 11 années sur 12. C'est
 #                  aussi l'une des deux cases des 216 du balayage de
 #                  `recherche.py` à franchir la correction de
-#                  Benjamini-Hochberg — à l'horizon d'un mois, où elle
-#                  rend t +3,8 ; l'autre est le choc éclair, ci-dessous,
-#                  qui la dépasse (t +4,3). Retiré du modèle, l'IC tombe de +0,044 à
+#                  Benjamini-Hochberg — à cinq, dix et vingt séances. Son IC
+#                  par période CROÎT avec l'horizon (+0,034 à cinq, +0,064 à
+#                  soixante) ; c'est le choc éclair, ci-dessous, qui le
+#                  dépasse à l'horizon livré. Retiré du modèle, l'IC tombe de +0,044 à
 #                  +0,011 et l'IR de 0,66 à 0,13.
 #   retournement   IC -0,041, t -1,3 : pris seul, il ne se distingue pas
 #                  du hasard. Il est pourtant retenu, parce qu'il porte
