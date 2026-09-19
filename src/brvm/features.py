@@ -216,12 +216,17 @@ def choc_volume(cours: pd.DataFrame, court: int, long: int) -> pd.Series:
     `liquidite` et qui ne prédit rien (t +0,7), mais « cette valeur
     s'échange soudain plus que d'habitude ».
 
-    C'est le seul trait du projet dont le signal tienne, et le seul effet
-    de tout le balayage de `recherche.py` — 162 cases — à franchir la
-    correction de Benjamini-Hochberg : IC +0,053 et t +3,8 à l'horizon d'un
-    mois — l'horizon que `prediction` emploie depuis — IC +0,064 et t +2,3
-    aux trois mois qu'il employait avant, et
-    positif lors de onze des douze années de l'archive.
+    L'UN DES DEUX EFFETS QUI TIENNENT. Sur les 216 cases du balayage de
+    `recherche.py`, deux seulement franchissent la correction de
+    Benjamini-Hochberg : celui-ci et le choc éclair, qui est le même effet
+    mesuré sur une semaine et qui le dépasse. Toutes deux à VINGT SÉANCES,
+    l'horizon que `prediction` emploie depuis :
+
+        choc éclair      IC +0,061   t +4,3
+        choc de volume   IC +0,053   t +3,8
+
+    Aux trois mois qu'employait `prediction` avant, celui-ci rend IC +0,064
+    et t +2,3, et il est positif lors de onze des douze années de l'archive.
 
     L'effet est documenté ailleurs sous le nom de choc d'attention ; il
     n'est pas découvert ici, seulement retrouvé. Et il ne rapporte rien :
@@ -246,6 +251,21 @@ def choc_eclair(cours: pd.DataFrame, eclair: int, long: int) -> pd.Series:
 
     Même rapport que `choc_volume`, même borne au dénominateur, fenêtre
     courte plus courte : l'attention se voit avant de se mesurer.
+
+    LA PLUS FORTE CASE DU BALAYAGE, ET ELLE A PASSÉ LA CORRECTION. Ajouté
+    d'abord pour mieux décrire le choc de volume, ce trait a ensuite été
+    soumis au même test multiple que les autres — la règle est énoncée dans
+    l'en-tête de `recherche._choc_volume` et elle vaut aussi pour les
+    prédicteurs qu'on ajoute soi-même. Son entrée a porté la grille de 162 à
+    216 cases, durcissant le seuil pour tout le monde, et il est passé quand
+    même : IC +0,061 et t +4,3 à vingt séances sur tout le marché, première
+    des 216. Le choc de volume, deuxième, rend t +3,8.
+
+    Ses deux compagnons d'ajout ne passent pas — ampleur du choc t +2,6,
+    intensité d'échange t +2,4 sur les financières. Ils restent dans le
+    modèle parce qu'ils aident la combinaison, pas parce qu'ils se
+    distinguent seuls du hasard, et c'est écrit pour qu'on ne leur prête pas
+    une force qu'ils n'ont pas.
     """
     volumes = serie(cours, "volume_fcfa")
     if volumes.empty:
@@ -313,10 +333,11 @@ TRAITS = ["momentum", "tendance", "volatilite", "liquidite"]
 # d'archive avant d'être retenu, et douze candidats ont été écartés.
 #
 #   choc_volume    IC +0,064, t +2,3, positif 11 années sur 12. C'est
-#                  aussi la SEULE case des 162 du balayage de
+#                  aussi l'une des deux cases des 216 du balayage de
 #                  `recherche.py` à franchir la correction de
 #                  Benjamini-Hochberg — à l'horizon d'un mois, où elle
-#                  rend t +3,8. Retiré du modèle, l'IC tombe de +0,044 à
+#                  rend t +3,8 ; l'autre est le choc éclair, ci-dessous,
+#                  qui la dépasse (t +4,3). Retiré du modèle, l'IC tombe de +0,044 à
 #                  +0,011 et l'IR de 0,66 à 0,13.
 #   retournement   IC -0,041, t -1,3 : pris seul, il ne se distingue pas
 #                  du hasard. Il est pourtant retenu, parce qu'il porte
@@ -542,8 +563,9 @@ def traits_glissants(
     # C'EST LE SEUL TRAIT DU PROJET DONT LE SIGNAL TIENNE. IC +0,064, t
     # +2,3, positif lors de onze des douze années de l'archive — là où le
     # momentum et la tendance changent de signe d'une année à l'autre — et
-    # seule case des 162 du balayage de `recherche.py` à franchir la
-    # correction de Benjamini-Hochberg. L'effet est documenté ailleurs sous
+    # l'une des deux cases des 216 du balayage de `recherche.py` à franchir
+    # la correction de Benjamini-Hochberg — l'autre étant le choc éclair,
+    # qui est le même effet mesuré sur une semaine et qui la dépasse. L'effet est documenté ailleurs sous
     # le nom de choc d'attention ; il n'est pas découvert ici, seulement
     # retrouvé.
     #

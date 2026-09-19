@@ -37,7 +37,7 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 import pytest  # noqa: E402
 
-from brvm import recherche  # noqa: E402
+from brvm import features, recherche  # noqa: E402
 
 HORIZONS = (20,)
 
@@ -338,3 +338,48 @@ def test_une_saison_sans_variation_ne_rend_pas_un_ic_indefini():
          "montant": 5.0 + i, "exercice": jours[0][:4]} for i in range(10)])
     t = recherche.rendement_transversal(plat, div)
     assert t.empty or t["ic"].notna().all()
+
+
+def test_tout_trait_de_prediction_passe_par_le_balayage():
+    """LA RÈGLE DU MODULE, RENDUE MÉCANIQUE.
+
+    L'en-tête de `_choc_volume` l'énonce depuis son ajout : « un prédicteur
+    qu'on introduit sans le soumettre au même test multiple que les autres
+    est exactement la meilleure case d'une loterie qu'on aurait choisi de ne
+    pas compter. » Elle était écrite, et rien ne la vérifiait — trois traits
+    d'attention ont vécu un temps dans `features` sans passer ici, dont celui
+    qui est devenu la première case de la grille.
+
+    Le test associe chaque trait de prédiction à un prédicteur du balayage
+    par son nom. L'appariement passe par une table explicite plutôt que par
+    une astuce de chaîne : un trait renommé doit casser ce test, pas le
+    contourner.
+    """
+    CORRESPONDANCE = {
+        "choc_volume": "choc de volume",
+        "retournement": "retournement 1 mois",
+        "choc_eclair": "choc éclair",
+        "ampleur_choc": "ampleur du choc",
+        "intensite_echange": "intensité d'échange",
+    }
+    a_balayer = list(features.TRAITS_PREDICTION) + list(features.TRAITS_ATTENTION)
+    manquants = [t for t in a_balayer if t not in CORRESPONDANCE]
+    assert not manquants, (
+        "traits de prédiction absents de la table de correspondance — "
+        f"passent-ils le test multiple ? {manquants}")
+    absents = [CORRESPONDANCE[t] for t in a_balayer
+               if CORRESPONDANCE[t] not in recherche.PREDICTEURS]
+    assert not absents, (
+        "traits employés par la prédiction et jamais soumis à la correction "
+        f"de Benjamini-Hochberg : {absents}")
+
+
+def test_la_grille_compte_ce_qu_elle_annonce():
+    """Le nombre de cases sert de dénominateur à la correction.
+
+    Si la grille grossit sans que le compte suive, la correction devient plus
+    permissive qu'annoncée — et c'est le seul garde-fou du module contre la
+    pêche aux résultats.
+    """
+    assert len(recherche.PREDICTEURS) == 12
+    assert len(recherche.HORIZONS) == 3

@@ -111,11 +111,11 @@ DEFAUTS: dict[str, dict] = {
         # séance de retard coûte 30 % de l'avantage à cinq séances contre
         # 15 % à vingt, et sur une place où une ligne se traite quelques fois
         # par mois, « exécuter demain » n'est pas acquis. Ensuite la
-        # corroboration : le balayage de 162 cases corrigé par
-        # Benjamini-Hochberg dans `recherche.py` avait déjà désigné le choc
-        # de volume À VINGT SÉANCES comme seul survivant. Deux analyses
-        # indépendantes désignent le même horizon, ce qui est un fondement
-        # plus solide que le maximum d'une courbe.
+        # corroboration : le balayage de 216 cases corrigé par
+        # Benjamini-Hochberg dans `recherche.py` ne retient que deux cases,
+        # le choc éclair et le choc de volume, et TOUTES DEUX À VINGT
+        # SÉANCES. Deux analyses indépendantes désignent le même horizon, ce
+        # qui est un fondement plus solide que le maximum d'une courbe.
         #
         # Quatre contrôles d'artefact ont précédé ce choix, tous passés :
         # la part d'étiquettes assises sur un cours reporté ne croît pas
