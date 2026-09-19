@@ -374,3 +374,221 @@ def test_gain_haut_se_tait_sans_mesure():
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+# --- le prix seul : ce qui est achetable, et ce qui se combine -------------
+
+def test_l_avantage_ecarte_les_valeurs_qu_on_ne_peut_pas_acheter():
+    """UN GAIN COMPTÉ SUR DES LIGNES INACHETABLES N'EST TOUCHÉ PAR PERSONNE.
+
+    Mesuré sur l'archive, 40 % des lignes de l'échantillon n'atteignent pas
+    le seuil de volume qu'exige `scoring`, et l'avantage du haut de liste y
+    vaut près du double de ce qu'il vaut sur les lignes négociables. Le
+    classement ET le repère doivent donc se calculer sur les seules lignes
+    retenues, comme le fait le backtest.
+    """
+    n = 24
+    # Les douze valeurs LIQUIDES montent avec le score ; les douze ILLIQUIDES
+    # montent BEAUCOUP plus. Sans restriction, elles occupent tout le haut de
+    # liste et gonflent l'avantage.
+    bloc = pd.DataFrame({
+        "date": ["j"] * n,
+        "score": list(range(12)) + list(range(100, 112)),
+        "rendement_futur": [0.001 * i for i in range(12)]
+                           + [0.10 + 0.001 * i for i in range(12)],
+        "liquidite_fcfa": [5e6] * 12 + [1e3] * 12,
+    })
+    tout = apprentissage.avantage_par_date(bloc, "score", positions=5)
+    negociable = apprentissage.avantage_par_date(
+        bloc, "score", positions=5, liquidite_min=1e6)
+    assert tout.iloc[0] > negociable.iloc[0], (
+        "la restriction doit RÉDUIRE l'avantage sur ce cas fabriqué")
+    # Restreint, le repère est la moyenne des seules liquides : le haut de
+    # liste y est le meilleur des liquides, pas le meilleur de tous.
+    liquides = bloc[bloc["liquidite_fcfa"] >= 1e6]
+    attendu = (liquides.nlargest(5, "score")["rendement_futur"].mean()
+               - liquides["rendement_futur"].mean())
+    assert abs(float(negociable.iloc[0]) - attendu) < 1e-12
+
+
+def test_la_mesure_dit_sur_quel_seuil_elle_porte():
+    """Un chiffre restreint qui ne dit pas sa restriction est trompeur."""
+    bloc = pd.DataFrame({
+        "date": ["j"] * 14, "score": range(14),
+        "rendement_futur": [0.01 * i for i in range(14)],
+        "liquidite_fcfa": [5e6] * 14,
+    })
+    libre = apprentissage.mesure_avantage(bloc, "score", 20, 10)
+    borne = apprentissage.mesure_avantage(bloc, "score", 20, 10, 1e6)
+    assert libre["liquidite_min"] is None
+    assert borne["liquidite_min"] == 1e6
+
+
+def test_sans_colonne_de_liquidite_la_restriction_ne_ment_pas():
+    """Pas de colonne, pas de filtre — et surtout pas un filtre silencieux.
+
+    Un échantillon ancien, ou fabriqué par un test, n'a pas la colonne. Le
+    calcul doit alors porter sur tout, et non rendre un tableau vide qui
+    passerait pour « aucun avantage ».
+    """
+    bloc = pd.DataFrame({"date": ["j"] * 14, "score": range(14),
+                         "rendement_futur": [0.01 * i for i in range(14)]})
+    avec = apprentissage.avantage_par_date(bloc, "score", 10, liquidite_min=1e9)
+    sans = apprentissage.avantage_par_date(bloc, "score", 10)
+    assert not avec.empty and avec.equals(sans)
+
+
+def test_le_composite_est_mesure_mais_ne_se_combine_plus():
+    """LE CHANGEMENT LE PLUS FACILE À DÉFAIRE PAR ACCIDENT.
+
+    Le composite reste mesuré et affiché — c'est le score de l'onglet
+    Classement — et il reste le repli quand la porte de production refuse la
+    combinaison. Il ne doit plus entrer dans le score combiné : mesuré sur le
+    rendement de cours et les valeurs négociables, l'y laisser coûtait à
+    tous les horizons testés.
+    """
+    assert "composite" in prediction.SOURCES
+    assert "composite" not in prediction.SOURCES_COMBINEES
+
+    # Et concrètement : un composite délibérément absurde ne doit pas
+    # déplacer le score retenu d'un iota.
+    sources = {
+        "modele": pd.Series([0.1, 0.2, 0.3, 0.4]),
+        "fiabilite": pd.Series([0.4, 0.3, 0.2, 0.1]),
+        "composite": pd.Series([9.0, -9.0, 9.0, -9.0]),
+    }
+    sans = {k: v for k, v in sources.items() if k != "composite"}
+    assert prediction._score_retenu(sources).equals(
+        prediction._score_retenu(sans))
+
+
+def test_le_score_retenu_est_un_ORDRE_et_non_une_moyenne():
+    """MOYENNER LES DEUX SOURCES APPRISES PERDAIT, ET C'EST MESURÉ.
+
+    Aux trois horizons testés et sur les deux moitiés de l'archive, la
+    régression seule bat sa moyenne avec les poids de fiabilité. La constante
+    est donc un ordre de préférence : on prend la PREMIÈRE source disponible.
+
+    Le test le vérifie sur des séries opposées — une moyenne les annulerait,
+    un ordre rend la première telle quelle.
+    """
+    modele = pd.Series([0.1, 0.2, 0.3, 0.4])
+    contraire = pd.Series([0.4, 0.3, 0.2, 0.1])
+    retenu = prediction._score_retenu(
+        {"modele": modele, "fiabilite": contraire})
+    # Rangs de la seule régression : croissants, et non plats comme le
+    # serait la moyenne de deux séries opposées.
+    assert list(retenu) == sorted(retenu)
+    assert retenu.nunique() == 4
+
+
+def test_sans_la_regression_le_score_retenu_bascule_sur_les_poids():
+    """LA RAISON POUR LAQUELLE C'EST UN ORDRE ET NON UN NOM EN DUR.
+
+    Les poids de fiabilité ne demandent pas scikit-learn, la régression si.
+    Un environnement sans scikit-learn doit rendre un classement appris —
+    dégradé, mesuré à +3,37 % annualisés — au lieu de retomber d'un coup sur
+    le composite, qui n'apprend rien.
+    """
+    fiab = pd.Series([0.1, 0.9, 0.5, 0.3])
+    # La régression absente…
+    assert prediction._score_retenu({"fiabilite": fiab}).notna().all()
+    # …ou présente mais muette, ce qui arrive quand elle n'a pas convergé.
+    muette = pd.Series([np.nan] * 4)
+    retenu = prediction._score_retenu({"modele": muette, "fiabilite": fiab})
+    assert retenu.notna().all()
+    assert retenu.equals(prediction._score_retenu({"fiabilite": fiab}))
+    # Aucune source du tout : un score vide, et non un zéro qui passerait
+    # pour un classement.
+    assert prediction._score_retenu({}).empty
+
+
+def test_l_echantillon_porte_la_liquidite_en_francs():
+    """Le rang de liquidité ne dit pas si une ligne est achetable.
+
+    Le seuil d'éligibilité est un MONTANT ; sans le montant, l'avantage se
+    mesurerait sur des valeurs que personne ne peut acheter.
+    """
+    cours = _marche_aleatoire_local()
+    bloc = prediction.construire_echantillon(cours, REGLAGES_LOCAL)
+    assert "liquidite_fcfa" in bloc.columns
+    assert bloc["liquidite_fcfa"].notna().all()
+    # Le rang reste un rang, le montant reste un montant.
+    assert bloc["liquidite"].between(0, 1).all()
+    assert bloc["liquidite_fcfa"].max() > 1.0
+
+
+REGLAGES_LOCAL = {
+    "analyse": {
+        "volume_median_min_fcfa": 0,
+        "fenetre_momentum": 30, "saut_momentum": 3,
+        "fenetre_volatilite": 15, "fenetre_liquidite": 15,
+        "moyenne_courte": 5, "moyenne_longue": 15, "min_par_secteur": 99,
+    },
+    "prediction": {"horizon": 10, "decoupes": 3, "lignes_minimum": 200},
+}
+
+
+def _marche_aleatoire_local(n=12, seances=260, graine=4):
+    rng = np.random.default_rng(graine)
+    lignes = []
+    for i in range(n):
+        prix = 100 * np.exp(np.cumsum(rng.normal(0, 0.015, seances)))
+        for rang, valeur in enumerate(prix):
+            lignes.append({
+                "date": f"{2020 + rang // 336:04d}-{1 + (rang % 336) // 28:02d}"
+                        f"-{1 + rang % 28:02d}",
+                "ticker": f"T{i:02d}", "cloture": float(valeur),
+                "volume_titres": 100.0,
+                "volume_fcfa": float(1e5 * (i + 1)),
+            })
+    return pd.DataFrame(lignes).sort_values(["date", "ticker"])
+
+
+def test_le_tableau_des_sources_reste_aligne():
+    """UN LIBELLÉ PLUS LONG QUE SA COLONNE DÉSALIGNE TOUT LE TABLEAU.
+
+    La largeur était écrite 26 en dur ; « composite de la configuration » en
+    fait 29 et repoussait déjà sa ligne vers la droite. Le défaut est
+    cosmétique et il rend un tableau de comparaison illisible, ce qui est
+    exactement ce qu'un tableau de comparaison ne doit pas être.
+
+    Le test ne relit pas la largeur : il vérifie que les colonnes de chiffres
+    tombent au même endroit sur toutes les lignes.
+    """
+    validation = {
+        "periodes": pd.DataFrame([{"periode": "a", "ic_combinaison": 0.1}]),
+        "horizon": 20, "lignes": 5000, "lignes_minimum": 400,
+        "ic": 0.07, "ic_composite": 0.02, "ecart": 0.05, "precision": 0.52,
+        "mesure": {"ic": 0.07, "erreur_type": 0.016, "t": 4.5, "dates": 2500,
+                   "blocs": 125, "significatif": True,
+                   "dates_independantes": 125},
+        "mesure_composite": {"ic": 0.02, "erreur_type": 0.017, "t": 1.5,
+                             "dates": 2500, "blocs": 125,
+                             "significatif": False,
+                             "dates_independantes": 125},
+        "sources": {
+            nom: {"ic": 0.05, "ir": 1.0, "periodes_positives": 9,
+                  "periodes": 10, "pire": -0.01, "part_positives": 0.9}
+            for nom in prediction.LIBELLES_SOURCES
+        },
+        "stabilite": {"ic": 0.07, "ir": 1.5, "periodes_positives": 9,
+                      "periodes": 10, "pire": -0.01, "part_positives": 0.9},
+        "traits": [], "traits_mesures": {}, "poids_fiabilite": {},
+        "coefficients": {}, "retenue": "combinaison", "motif_retenue": None,
+        "motif": None, "avertissements": (), "calibrage": None,
+        "avantage": {"avantage": 0.006, "t": 2.8, "positions": 10,
+                     "significatif": True, "dates": 2500, "blocs": 125,
+                     "erreur_type": 0.002, "liquidite_min": 1e6},
+        "avantage_tout": {"avantage": 0.011, "t": 3.2, "positions": 10,
+                          "significatif": True, "dates": 2500, "blocs": 125,
+                          "erreur_type": 0.003, "liquidite_min": None},
+    }
+    texte = prediction.expliquer(validation)
+    lignes = [l for l in texte.splitlines()
+              if any(l.strip().startswith(v)
+                     for v in prediction.LIBELLES_SOURCES.values())]
+    assert len(lignes) == len(prediction.LIBELLES_SOURCES)
+    # La colonne d'IC commence au même caractère sur chaque ligne.
+    colonnes = {l.index("+0.050") for l in lignes}
+    assert len(colonnes) == 1, f"colonnes désalignées : {sorted(colonnes)}"
