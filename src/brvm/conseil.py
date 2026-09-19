@@ -587,7 +587,7 @@ def expliquer(resultat: dict) -> str:
         + (", hypothèse prudente : la borne basse de sa marge d'erreur"
            if resultat["prudence"] else ", estimation moyenne")
         + f") et de l'écart habituel entre les valeurs de ce marché "
-        f"({disp:.1%} sur trois mois).",
+        f"({disp:.1%} sur l'horizon du modèle).",
     ]
     if np.isfinite(seuil) and seuil != float("inf"):
         lignes.append(
