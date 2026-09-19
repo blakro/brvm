@@ -114,17 +114,40 @@ Sur les quatre exercices connus, le dividende rapporte 7 à 10 % par an,
 Conséquence : une analyse qui ne regarde que les cours ignore la partie
 la plus régulière du rendement, et ne garde que la plus bruyante.
 
-### 2. Un seul effet sur 162 résiste, et il ne paie pas
+### 2. Deux effets sur 216 résistent, et ils ne paient pas
 
-On a testé **162 combinaisons** — neuf méthodes × six segments de marché
-× trois horizons de temps. Une seule survit une fois corrigé le fait
-qu'en testant 162 choses, on en trouve forcément quelques-unes « qui
-marchent » par pur hasard.
+On a testé **216 combinaisons** — douze méthodes × six segments de marché
+× trois horizons de temps. Deux survivent une fois corrigé le fait qu'en
+testant 216 choses, on en trouve forcément quelques-unes « qui marchent »
+par pur hasard.
 
-Cette unique survivante est le **choc de volume** : une action qui
-s'échange soudain beaucoup plus que d'habitude tend à surperformer le
-mois suivant. Ce n'est pas « une action très échangée » — ce niveau-là,
-la liquidité, ne prédit rien — c'est le changement de régime.
+| Survivante | Segment | Horizon | IC | t |
+|---|---|---|---|---|
+| **choc éclair** | tout le marché | 20 séances | +0,061 | **+4,3** |
+| **choc de volume** | tout le marché | 20 séances | +0,053 | +3,8 |
+
+Les deux disent la même chose à deux vitesses : une action qui s'échange
+soudain beaucoup plus que d'habitude tend à surperformer le mois suivant.
+Ce n'est pas « une action très échangée » — ce niveau-là, la liquidité, ne
+prédit rien — c'est le changement de régime. Le **choc éclair** le mesure
+sur une semaine au lieu d'un mois, et c'est la case la plus forte des 216.
+
+Trois remarques, parce qu'elles comptent plus que le classement :
+
+- **La grille est passée de 162 à 216 cases exprès.** Les trois traits
+  d'attention ajoutés pour la prédiction — dont le choc éclair — auraient
+  pu rester dans `features` sans jamais subir la correction que les autres
+  subissent. C'eût été garder la meilleure case d'une loterie en refusant
+  de compter les tickets. Les y soumettre a durci le seuil pour tout le
+  monde, et le choc éclair est passé quand même.
+- **Les deux autres traits d'attention ne passent pas.** L'ampleur du choc
+  (t +2,6) et l'intensité d'échange (t +2,4 sur les financières) restent
+  dans le modèle parce qu'ils aident la combinaison, pas parce qu'ils se
+  distinguent seuls du hasard. C'est écrit ici pour qu'on ne leur prête pas
+  une force qu'ils n'ont pas.
+- **Les deux survivantes sont à vingt séances.** C'est la troisième fois
+  qu'un chemin indépendant désigne cet horizon, et c'est ce qui a fixé
+  celui du modèle.
 
 Et elle ne paie pas. Simulée avec dix lignes et un rééquilibrage mensuel :
 
@@ -233,7 +256,7 @@ Six changements, par ordre d'importance :
    sur les valeurs achetables — et la section « Le modèle de prix » ci-dessous
    donne la preuve de chacun.
 
-Et **huit idées reçues, mesurées puis jetées** — elles sont documentées
+Et **neuf idées reçues, mesurées puis jetées** — elles sont documentées
 dans `src/brvm/apprentissage.py`, parce qu'un échec qu'on ne consigne pas
 sera retenté :
 
@@ -290,7 +313,17 @@ sera retenté :
 - **Retirer le composite de la combinaison.** Son IC est le plus faible
   des trois sources (+0,032) et son pire trimestre le plus mauvais ; on le
   croirait donc dilutif. Mesuré, l'IC de la combinaison tombe de +0,045 à
-  **+0,037** sans lui. Il diversifie, et il reste.
+  **+0,037** sans lui. Il diversifie, et il reste. *(Jugé plus tard sur le
+  haut de liste et non plus sur l'IC, ce verdict s'est inversé — voir « Le
+  modèle de prix ». Les deux mesures sont justes ; elles ne répondent pas à
+  la même question.)*
+- **N'apprendre que sur les valeurs achetables.** Deux lignes sur cinq de
+  l'archive ne peuvent pas s'acheter : pourquoi apprendre d'un marché qu'on
+  ne peut pas jouer ? Parce que c'est **pire** aux trois horizons essayés —
+  l'avantage sur les achetables tombe de +7,72 % à +6,03 % annualisés à
+  vingt séances. Ces lignes portent la même relation entre traits et
+  rendement ; les jeter jette deux observations sur cinq pour rien. Le seuil
+  d'achetabilité sert donc à MESURER et à trader, jamais à apprendre.
 
 Un cinquième arbitrage mérite d'être écrit parce qu'il ne s'est pas joué
 sur un chiffre : **ranger dans le secteur** plutôt que retrancher la
@@ -363,8 +396,8 @@ aucune n'est le confort. D'abord la **robustesse à l'exécution** : une séance
 de retard coûte 30 % de l'avantage à 5 séances contre 15 % à 20, et sur une
 place où une ligne se traite quelques fois par mois, « exécuter demain »
 n'est pas acquis. Ensuite la **corroboration indépendante** : le balayage de
-162 cases corrigé par Benjamini-Hochberg avait déjà désigné le choc de volume
-**à 20 séances** comme seul survivant. Deux analyses indépendantes, le même
+216 cases corrigé par Benjamini-Hochberg désigne le choc éclair et le choc de
+volume **à 20 séances**, et eux seuls. Deux analyses indépendantes, le même
 horizon — c'est plus solide que le maximum d'une courbe. Cinq séances reste
 une ligne de configuration pour qui veut l'essayer.
 
@@ -718,7 +751,7 @@ src/brvm/
     sikafinance.py            l'historique
     dividendes.py             les calendriers de dividendes
 
-tests/                    323 tests, tous hors ligne
+tests/                    328 tests, tous hors ligne
   donnees/                  captures réelles de pages web, servant de témoins
 
 .github/workflows/
@@ -752,7 +785,7 @@ s'applique où :
 | **Backtest** | Ce qu'aurait donné le classement s'il avait été suivi. |
 | **Données** | La couverture de l'archive et le journal de collecte. |
 
-Le résultat le mieux établi du projet — un seul effet sur 162 résiste, et
+Le résultat le mieux établi du projet — deux effets sur 216 résistent, et
 il coûte plus de frais qu'il ne rapporte — s'affiche **avant** les
 onglets, pas au fond de l'un d'eux : la hiérarchie visuelle doit dire la
 force de la preuve.
@@ -1203,7 +1236,7 @@ est son produit avec l'appartenance sectorielle.
 pytest -q                     # ou : python tests/test_brvm_org.py
 ```
 
-**323 tests, tous hors ligne.** Un test qui dépend du réseau échoue pour
+**328 tests, tous hors ligne.** Un test qui dépend du réseau échoue pour
 des raisons étrangères au code qu'il vérifie.
 
 `test_brvm_org.py` travaille sur les captures réelles de `tests/donnees/`,

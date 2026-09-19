@@ -79,7 +79,8 @@ def _prix(cours: pd.DataFrame,
     passe (t +3,8) et le retournement n'y arrive plus (t +2,5).
 
     Une correction de données qui retourne la conclusion d'un balayage de
-    162 cases n'est pas un détail d'implémentation. Voir l'en-tête de
+    cette taille — 162 cases alors, 216 depuis — n'est pas un détail
+    d'implémentation. Voir l'en-tête de
     `features.py` pour le mécanisme, et `cours_reportes` pour les bornes
     qui empêchent le report de mentir.
     """
@@ -188,6 +189,47 @@ def _choc_volume(m, court=20, long=250):
     return recent / (fond + 1.0)
 
 
+def _choc_eclair(m, eclair=5, long=250):
+    """Le choc de volume sur une semaine au lieu d'un mois."""
+    volumes = m["volume_fcfa"].fillna(0)
+    return (volumes.rolling(eclair, min_periods=1).median()
+            / (volumes.rolling(long, min_periods=1).median() + 1.0))
+
+
+def _ampleur_choc(m, fenetre=20, long=250):
+    """Part des séances du mois dont le volume dépasse sa médiane de fond.
+
+    L'ampleur et non la taille : une séance énorme et vingt séances un peu
+    au-dessus donnent le même choc de volume.
+    """
+    volumes = m["volume_fcfa"].fillna(0)
+    fond = volumes.rolling(long, min_periods=1).median()
+    return (volumes > fond).where(fond.notna()).rolling(
+        fenetre, min_periods=_min(fenetre, 0.5)).mean()
+
+
+def _intensite_echange(m, fenetre=20):
+    """Part des séances du mois où la valeur a RÉELLEMENT été traitée.
+
+    Une fréquence de cotation, non un niveau de volume — `_liquidite` mesure
+    déjà le second.
+    """
+    return m["cotee"].astype(float).rolling(
+        fenetre, min_periods=_min(fenetre, 0.5)).mean()
+
+
+# LES TROIS TRAITS D'ATTENTION ENTRENT DANS LA GRILLE, ET C'ÉTAIT UNE DETTE.
+#
+# Ils ont été ajoutés à `features` parce qu'ils décrivent mieux le choc de
+# volume, et le choc éclair est devenu le PREMIER trait du modèle (IC +0,059,
+# t +3,5 à vingt séances). Or l'en-tête de `_choc_volume` énonce la règle qui
+# les condamnait à passer ici : « un prédicteur qu'on introduit sans le
+# soumettre au même test multiple que les autres est exactement la meilleure
+# case d'une loterie qu'on aurait choisi de ne pas compter. » Elle vaut aussi
+# pour les prédicteurs qu'on a ajoutés soi-même.
+#
+# Leur entrée durcit le seuil pour tout le monde, en portant la grille de
+# 162 cases à 216. C'est le prix, et c'est le but.
 PREDICTEURS = {
     "momentum 12-1": lambda m: _momentum(m, 250, 20),
     "momentum 6-1": lambda m: _momentum(m, 125, 20),
@@ -196,6 +238,9 @@ PREDICTEURS = {
     "volatilité": _volatilite,
     "liquidité": _liquidite,
     "choc de volume": _choc_volume,
+    "choc éclair": _choc_eclair,
+    "ampleur du choc": _ampleur_choc,
+    "intensité d'échange": _intensite_echange,
     "amplitude": _amplitude,
     "écart à la moyenne": _ecart_moyenne,
 }
