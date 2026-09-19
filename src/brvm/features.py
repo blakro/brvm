@@ -446,15 +446,12 @@ def neutraliser_secteur(rangs: pd.Series, dates: pd.Series,
     « est-ce une banque ». Les Services Financiers pèsent 34,5 % de
     l'univers coté et 16 des 47 lignes du référentiel ; quand le secteur
     entier monte, ses valeurs montent dans le classement ensemble, sans
-    qu'aucune n'ait rien montré. Mesuré sur l'archive : les dix premiers
-    du classement de production sont à 43,9 % des Services Financiers
-    contre 34,5 % dans l'univers, soit **+9,5 points de pari sectoriel**
-    que l'utilisateur n'a pas choisi. Après neutralisation des sources
-    apprises, +5,3 points — et non zéro, parce que le composite garde
-    volontairement les rangs de marché (voir `prediction.PREFIXE_NEUTRE`).
-    Neutraliser les trois sources ramènerait le pari à +1,4 point, au prix
-    de l'apport du composite : c'est l'arbitrage qui a été tranché, et il
-    l'a été sur l'IC de la combinaison, +0,067 contre +0,058.
+    qu'aucune n'ait rien montré. Mesuré hors échantillon sur l'archive : sans
+    neutralisation, les dix premiers du classement sont à 41,2 % des Services
+    Financiers contre 34,5 % dans l'univers, soit **+6,7 points de pari
+    sectoriel** que l'utilisateur n'a pas choisi. Avec, 35,4 % — un résidu de
+    +0,9 point, et une concentration sectorielle de 0,215 contre 0,202 pour
+    l'univers lui-même. Le pari hérité a pratiquement disparu.
 
     CE QUE ÇA CHANGE, et ce que ça ne change pas. Retirer la moyenne du
     secteur ne prétend pas que le secteur ne compte pas — il compte

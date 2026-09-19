@@ -69,12 +69,37 @@ ACTIONS = ("acheter", "conserver", "vendre", "vendre et remplacer")
 COLONNES = ["ticker", "nom", "detenu", "rang", "action", "paire",
             "gain_attendu", "cout", "net", "motif"]
 
+# Les réserves qui ne dépendent d'aucune mesure. Celle sur la signification
+# de l'IC N'EST PLUS ICI : elle était écrite en dur, elle affirmait « l'IC
+# mesuré n'est pas significativement différent de zéro », et elle est devenue
+# FAUSSE le jour où l'IC du modèle a franchi le seuil usuel — sans que rien
+# ne le signale, puisqu'une constante ne se recalcule pas. Elle est désormais
+# produite par `_reserve_signification` à partir de la mesure reçue.
 AVERTISSEMENTS = (
     "arithmétique de l'arbitrage, pas un conseil d'investissement",
-    "l'IC mesuré n'est pas significativement différent de zéro",
     "ni fiscalité, ni horizon, ni tolérance au risque ne sont connus",
     "univers restreint aux sociétés cotées aujourd'hui (biais du survivant)",
 )
+
+
+def _reserve_signification(mesure: dict | None) -> tuple[str, ...]:
+    """La réserve sur l'IC, dite d'après la mesure et non d'après une constante.
+
+    Trois cas, et ils ne disent pas la même chose à un porteur :
+
+    - aucune mesure : on ne sait pas, et il faut le dire ;
+    - IC non significatif : la réserve d'origine, qui reste la plus fréquente
+      sur ce marché ;
+    - IC significatif : la réserve serait fausse, et une fausse réserve coûte
+      la confiance dans toutes les autres. On la remplace par celle qui
+      subsiste — un ordre bien classé n'est pas un gain net.
+    """
+    if not mesure:
+        return ("la qualité du classement n'a pas été mesurée ici",)
+    if not mesure.get("significatif"):
+        return ("l'IC mesuré n'est pas significativement différent de zéro",)
+    return ("IC significatif ne veut pas dire rentable : c'est le gain NET, "
+            "après frais, qui décide",)
 
 
 def _quantile_normal(p: float) -> float:
@@ -206,11 +231,11 @@ def concentration_secteur(
     """Dans quels secteurs tombent les `positions` premières, et à quel point.
 
     POURQUOI L'AFFICHER. Un classement ne choisit pas de parier sur un
-    secteur, mais il le fait quand même. Mesuré sur l'archive avant la
-    comparaison à secteur égal, les dix premières lignes du classement de
-    production étaient à 43,9 % des Services Financiers contre 34,5 % dans
-    l'univers coté — neuf points et demi de pari que personne n'avait
-    décidé, ramenés à cinq depuis. Un
+    secteur, mais il le fait quand même. Mesuré hors échantillon sur
+    l'archive, avant la comparaison à secteur égal les dix premières lignes
+    étaient à 41,2 % des Services Financiers contre 34,5 % dans l'univers
+    coté — près de sept points de pari que personne n'avait décidé, ramenés
+    à moins d'un point depuis. Un
     porteur qui suit dix recommandations dont quatre sont des banques n'est
     pas diversifié, et rien dans l'écran ne le lui disait.
 
@@ -332,7 +357,9 @@ def conseiller(
             # les afficher ensemble est le seul moyen de rendre visible un
             # dépareillage — voir `prediction.classement_de_production`.
             "source": source,
-            "prudence": prudence, "avertissements": AVERTISSEMENTS}
+            "prudence": prudence,
+            # Les réserves fixes, plus celle que la mesure dicte.
+            "avertissements": AVERTISSEMENTS + _reserve_signification(mesure)}
     if classement is None or classement.empty or "ticker" not in classement:
         return vide
 
