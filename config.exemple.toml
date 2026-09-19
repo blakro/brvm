@@ -84,9 +84,17 @@ eur_usd          = "Consommation de Base"
 taux_bceao       = "Services Financiers"
 
 [prediction]
-# Horizon en séances (~3 mois). Pas journalier : la BRVM cote par fixing
+# Horizon en séances (~1 mois). Pas journalier : la BRVM cote par fixing
 # avec une limite de ±7,5 %, et un modèle entraîné sur le lendemain apprend
-# « demain ≈ aujourd'hui ».
-horizon = 60
-decoupes = 4
+# « demain ≈ aujourd'hui ». Vingt séances et non soixante : mesuré sur le
+# rendement de cours et les valeurs négociables, l'horizon d'un mois rend
+# plus du double du trimestriel, et le balayage corrigé de `recherche.py`
+# désigne le même. Voir `src/brvm/config.py` pour les chiffres.
+horizon = 20
+# DIX DÉCOUPES, PAS QUATRE. Avec quatre, l'IC d'une période à l'autre va de
+# +0,29 à -0,28 sur l'archive : on conclut sur quatre tirages d'une variable
+# dont l'écart-type dépasse la moyenne. Cet exemple portait 4 alors que le
+# code documentait déjà que c'était un défaut de mesure — un exemple qui
+# contredit son propre projet est pire qu'un exemple absent.
+decoupes = 10
 lignes_minimum = 400
