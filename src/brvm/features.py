@@ -219,7 +219,8 @@ def choc_volume(cours: pd.DataFrame, court: int, long: int) -> pd.Series:
     C'est le seul trait du projet dont le signal tienne, et le seul effet
     de tout le balayage de `recherche.py` — 162 cases — à franchir la
     correction de Benjamini-Hochberg : IC +0,053 et t +3,8 à l'horizon d'un
-    mois, IC +0,064 et t +2,3 aux trois mois qu'emploie `prediction`, et
+    mois — l'horizon que `prediction` emploie depuis — IC +0,064 et t +2,3
+    aux trois mois qu'il employait avant, et
     positif lors de onze des douze années de l'archive.
 
     L'effet est documenté ailleurs sous le nom de choc d'attention ; il

@@ -543,9 +543,24 @@ def _backtester(args) -> int:
         return 1
 
     scores = _scores_du_signal(cours, args.signal)
-    commun = dict(fondamentaux=db.lire("fondamentaux"),
-                  dividendes=db.lire("dividendes"), scores=scores)
+    # HORS DIVIDENDE : ce que le modèle prédit, et rien d'autre. Le modèle
+    # apprend sur le rendement de COURS ; y ajouter le dividende dans le
+    # rejeu mesure une autre grandeur que celle qu'il estime, et sur cette
+    # place le dividende est si gros qu'il décide du classement des
+    # stratégies à lui seul — il vaut mieux pouvoir le retirer.
+    # LES DEUX SOURCES, ET NON LA SEULE ÉVIDENTE. `fondamentaux` porte aussi
+    # des lignes « dividende » : ne neutraliser que `dividendes` laissait le
+    # rejeu en compter quand même, et le premier essai de cette option
+    # annonçait « le dividende n'est pas compté » juste au-dessus d'une ligne
+    # qui le comptait.
+    if args.hors_dividende:
+        commun = dict(fondamentaux=None, dividendes=None, scores=scores)
+    else:
+        commun = dict(fondamentaux=db.lire("fondamentaux"),
+                      dividendes=db.lire("dividendes"), scores=scores)
     referentiel = db.lire("referentiel")
+    if args.hors_dividende:
+        print("Rendement de COURS seul : le dividende n'est pas compté.\n")
 
     if args.seuil_frais:
         # LA QUESTION QUI COMPTE, ET ELLE N'ÉTAIT PAS POSABLE. « Ça ne
@@ -1125,6 +1140,10 @@ def construire_analyseur() -> argparse.ArgumentParser:
     backtester.add_argument(
         "--seuil-frais", action="store_true", dest="seuil_frais",
         help="à partir de quels frais la stratégie cesse de battre l'univers")
+    backtester.add_argument(
+        "--hors-dividende", action="store_true", dest="hors_dividende",
+        help="ne compter que le cours : ce que prédit le modèle, et rien "
+             "d'autre")
     backtester.set_defaults(fonction=_backtester)
 
     conseiller = commandes.add_parser(

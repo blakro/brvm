@@ -83,6 +83,10 @@ Deux mots de plus, qui apparaissent dans les résultats :
   égales. Contrairement à l'IC, c'est un **pourcentage de rendement**,
   donc il se compare directement aux frais du courtier. C'est le chiffre à
   regarder avant de passer un ordre.
+- **Achetable** — une valeur dont il s'échange assez chaque séance pour
+  qu'un ordre passe vraiment. Deux lignes sur cinq de l'archive ne le sont
+  pas, et les compter double presque les résultats affichés — c'est pourquoi
+  les chiffres du haut de liste les écartent.
 - **Secteur** — la famille de métiers d'une société : banque, télécoms,
   énergie. Il sert à deux choses ici : comparer ce qui est comparable, et
   vérifier que les valeurs conseillées ne sont pas toutes les mêmes.
@@ -175,19 +179,25 @@ purgées :
 |---|---|---|---|---|---|
 | Au départ | −0,056 | −1,1 | −0,43 | 4 / 10 | −0,240 |
 | Univers corrigé, traits ajoutés | +0,045 | +1,5 | +0,52 | 7 / 10 | −0,095 |
-| **À secteur égal** | **+0,067** | **+2,4** | **+0,92** | **8 / 10** | **−0,073** |
+| À secteur égal | +0,067 | +2,4 | +0,92 | 8 / 10 | −0,073 |
+| **Prix seul, horizon d'un mois** | **+0,074** | **+4,5** | **+1,51** | **9 / 10** | **−0,014** |
 
-La troisième ligne est la seule du projet dont le `t` dépasse 2 : l'ordre
-proposé y devient distinguable du hasard, ce qu'il n'était pas avant. Les
-deux versions sont mesurées **le même jour, sur la même archive et le même
-échantillon de 101 190 lignes** — le gain ne vient pas de données en plus.
+**Attention au `t` de la dernière ligne.** L'erreur-type se calcule sur le
+nombre de périodes disjointes, soit `dates / horizon` : en passant de 60 à 20
+séances, ce nombre triple (42 → 126) et le `t` grossit d'un facteur racine de
+trois sans qu'aucune information soit apparue. **L'IR est la seule colonne
+comparable d'une ligne à l'autre** — il vaut 0,92 puis 1,51, et ce gain-là
+est réel.
+
+Les lignes deux à quatre sont mesurées le même jour, sur la même archive —
+le gain ne vient pas de données en plus.
 
 L'IC mesure si l'ordre proposé ressemble à l'ordre réalisé ; l'IR le
 rapporte à ses écarts d'une période à l'autre, et c'est lui qui dit la
 **fiabilité** — deux méthodes au même IC ne se valent pas si l'une le
 réalise à chaque période et l'autre une fois sur deux.
 
-Cinq changements, par ordre d'importance :
+Six changements, par ordre d'importance :
 
 1. **Les données.** Une valeur qui n'échange pas tous les jours n'avait
    jamais de tendance calculable, donc jamais de place dans
@@ -215,7 +225,13 @@ Cinq changements, par ordre d'importance :
    projet qui tienne ; plutôt que de chercher ailleurs, trois traits
    décrivent mieux celui-là — le choc sur une semaine, la **part** des
    séances au-dessus de la normale plutôt que leur ampleur, et la fréquence
-   réelle de cotation. IC +0,045 → +0,050 à eux seuls.
+   réelle de cotation. IC +0,045 → +0,050 à eux seuls. À vingt séances, le
+   **choc éclair est devenu le premier trait du projet** (IC +0,059,
+   t +3,5), devant le choc de volume lui-même (+0,052).
+6. **Un mois plutôt qu'un trimestre, et une seule source apprise.** Les deux
+   changements viennent de la même mesure — le rendement de **cours** seul,
+   sur les valeurs achetables — et la section « Le modèle de prix » ci-dessous
+   donne la preuve de chacun.
 
 Et **huit idées reçues, mesurées puis jetées** — elles sont documentées
 dans `src/brvm/apprentissage.py`, parce qu'un échec qu'on ne consigne pas
@@ -247,15 +263,22 @@ sera retenté :
   15 produits croisés et les carrés donnés à la régression déplacent l'IC
   de 0,005, contre une erreur-type de 0,03. L'arbre paie une variance pour
   chercher ce qui n'est pas là.
-- **Choisir l'horizon selon les frais.** L'idée était séduisante et
-  mesurable : à frais nuls un horizon d'un mois rend +6,5 % annuels contre
-  +5,5 % à trois mois, donc un utilisateur peu taxé devrait tourner plus
-  vite. Validée par moitiés d'historique, elle s'effondre — l'horizon d'un
-  mois rend **+7,9 % sur la première moitié et −4,1 % sur la seconde**, et
-  −13,6 % dès 0,5 % de frais. Sur la seconde moitié et aux frais réels,
-  **tous** les horizons perdent. C'est le même piège que la zone tampon à
-  3,0, consigné dans `src/brvm/config.py` : le meilleur réglage de la
-  première moitié est le pire de la seconde.
+- **Adapter la CADENCE D'ACHAT aux frais de l'utilisateur.** L'idée était
+  séduisante et mesurable : à frais nuls, rééquilibrer tous les mois rend
+  +6,5 % annuels contre +5,5 % tous les trimestres, donc un utilisateur peu
+  taxé devrait tourner plus vite. Validée par moitiés sur le rendement
+  **total**, elle s'effondre — la cadence mensuelle rend **+7,9 % sur la
+  première moitié et −4,1 % sur la seconde**, et −13,6 % dès 0,5 % de frais.
+  C'est le même piège que la zone tampon à 3,0, consigné dans
+  `src/brvm/config.py` : le meilleur réglage de la première moitié est le
+  pire de la seconde. La cadence reste donc trimestrielle pour tout le monde.
+
+  **À ne pas confondre avec l'horizon de PRÉDICTION**, qui est passé à un
+  mois et dont la section « Le modèle de prix » plus bas montre qu'il tient,
+  lui, sur les deux moitiés. Les deux paramètres portent des noms voisins et
+  répondent à des questions différentes : à quelle échéance on PRÉVOIT, et à
+  quelle fréquence on ACHÈTE. Prévoir à un mois et n'acheter qu'au trimestre
+  est la configuration retenue, et c'est celle qui mesure le mieux.
 - **Une étiquette en rendement total.** C'est la bonne cible — le porteur
   encaisse le dividende — et l'archive ne la porte pas : le calendrier ne
   couvre que **48,7 %** des séances de détention, et la section 6 montre
@@ -278,6 +301,112 @@ dans son secteur reçoit le rang **maximum** sur tous les traits à la fois,
 pour la seule raison qu'elle est seule. Retranchée de sa moyenne, elle
 reçoit zéro, c'est-à-dire « rien à dire ». Le cas pèse 0,2 % des lignes et
 ne déplace aucune mesure ; c'est la manière de se tromper qui a décidé.
+
+#### Le modèle de prix : ce qui a été retenu, et sur quelle preuve
+
+Le dividende est écarté d'un bout à l'autre de cette section — ni dans la
+cible, ni dans le rejeu. On ne juge que ce que le modèle prétend prévoir :
+le **cours**.
+
+Trois choix, chacun tranché par le protocole que le projet s'impose depuis
+la zone tampon : **on classe les variantes sur la première moitié de
+l'archive, on les juge sur la seconde.**
+
+| Choix | Retenu | Preuve |
+|---|---|---|
+| Sources combinées | la **régression seule** | bat la moyenne des deux sources apprises aux 3 horizons testés, sur les deux moitiés |
+| Composite | **retiré** de la combinaison | « avec » perd contre « sans » aux **5 horizons sur 5** |
+| Horizon | **20 séances** | voir ci-dessous |
+
+Le composite mérite un mot : son avantage du haut de liste est **négatif**
+(−0,10 % par période). Il ordonne honorablement le ventre du marché — son IC
+reste positif — et il dégrade les dix valeurs qu'on achète. C'est la même
+divergence que plus haut, à l'intérieur d'un seul score.
+
+**L'horizon est le levier principal, et il est monotone.** Avantage annualisé
+des dix premières, sur les seules valeurs **achetables** et avec l'entrée
+décalée d'une séance comme le ferait un ordre réel :
+
+| Horizon | avantage annualisé | t | 1re moitié | 2nde moitié |
+|---|---|---|---|---|
+| 5 séances | +15,50 % | +5,21 | +16,48 % | +14,51 % |
+| 10 séances | +10,95 % | +3,77 | +11,37 % | +10,53 % |
+| **20 séances** | **+7,72 %** | **+2,80** | **+9,13 %** | **+6,30 %** |
+| 40 séances | +4,13 % | +1,56 | +5,33 % | +2,92 % |
+| 60 séances | +3,61 % | +1,19 | +4,17 % | +3,06 % |
+
+Plus court est meilleur, sans exception — et **positif sur les deux moitiés à
+tous les horizons**, ce qui distingue ce résultat du mirage de cadence
+consigné plus haut. C'est aussi la signature classique
+d'un effet de microstructure, d'où **quatre contrôles d'artefact, tous
+passés** :
+
+1. **Cours reportés.** 6,5 % des étiquettes reposent sur un cours reporté à
+   5 séances, et cette part **ne croît pas** quand l'horizon raccourcit
+   (6,5 / 6,6 / 6,7 / 6,8 % à 5, 40, 60, 90). Mieux : restreindre la mesure
+   aux cours réellement traités en t+H **améliore** le résultat (+14,2 %
+   contre +13,3 % à 20 séances). Un artefact de cours figé se serait effondré.
+2. **Entrée décalée.** On ne peut pas acheter au cours qui a servi à
+   décider : il est connu après la clôture. L'avantage survit à un décalage
+   d'une, deux et trois séances (mesuré sur la variante à deux sources :
+   +15,0 % → +10,7 % → +7,9 % → +5,6 % à cinq séances). Ce n'est donc pas du
+   rebond de fourchette. Mais il décroît de ~30 % par séance de retard à cinq
+   séances contre ~15 % à vingt, et cette différence décide du choix
+   d'horizon ci-dessous.
+3. **Niveau de cours.** +8,6 / +6,2 / +6,2 % par tercile de cours : l'effet
+   n'est pas un artefact de pas de cotation sur les petites valeurs.
+4. **Forme de la courbe.** Lisse et monotone de 5 à 60 séances, sans pic à
+   l'endroit où l'horizon coïncide avec les fenêtres des traits (20).
+
+**Pourquoi 20 séances et non 5, qui mesure le mieux.** Deux raisons, et
+aucune n'est le confort. D'abord la **robustesse à l'exécution** : une séance
+de retard coûte 30 % de l'avantage à 5 séances contre 15 % à 20, et sur une
+place où une ligne se traite quelques fois par mois, « exécuter demain »
+n'est pas acquis. Ensuite la **corroboration indépendante** : le balayage de
+162 cases corrigé par Benjamini-Hochberg avait déjà désigné le choc de volume
+**à 20 séances** comme seul survivant. Deux analyses indépendantes, le même
+horizon — c'est plus solide que le maximum d'une courbe. Cinq séances reste
+une ligne de configuration pour qui veut l'essayer.
+
+**Prédire à un mois n'oblige pas à tourner tous les mois**, et c'est mesuré :
+le signal du mois se conserve, les frais du mois non. Le rééquilibrage
+trimestriel rend +1,5 % à 0,25 % de frais là où le mensuel rend 0,0 %, parce
+qu'il paie la rotation quatre fois moins souvent. Son seuil de rentabilité
+est de **0,54 % par sens contre 0,25 %**. `pas_rebalancement` reste donc à 60
+pendant que `horizon` passe à 20 : ce n'est pas une incohérence, c'est le
+résultat.
+
+#### Deux chiffres pour le haut de liste, et le plus flatteur n'est pas le bon
+
+L'avantage du haut de liste se mesure désormais sur les valeurs
+**achetables** — celles dont le volume médian atteint le seuil qu'exige déjà
+le classement, 1 million de FCFA par séance. La raison est brutale :
+
+| | avantage des 10 premières |
+|---|---|
+| tout l'échantillon | +13,8 % / an |
+| valeurs achetables seulement | **+7,7 % / an** |
+
+**Deux lignes sur cinq de l'archive n'atteignent pas le seuil**, et l'avantage
+y paraît plus du double de ce qu'il est réellement. Un tableau de bord qui
+compte des valeurs qu'aucun ordre ne peut atteindre annonce un gain que
+personne ne touchera. L'onglet affiche les deux, côte à côte, et la porte de
+production se ferme sur le chiffre **achetable**.
+
+C'est aussi ce qui réconcilie la mesure avec le backtest, qui donnait moins
+de la moitié : 40 % de l'avantage vivait dans des valeurs non négociables,
+l'entrée à la séance suivante en retirait encore 30 %, et le reste est la
+composition du rejeu. La composition n'y était pour rien — la version
+géométrique est plus haute, pas plus basse.
+
+#### Et les frais, qui n'ont pas bougé
+
+Rejeu du modèle livré sur le cours seul, à la cadence trimestrielle qu'il
+emploie : **+2,8 % annuels contre l'univers à frais nuls, seuil de
+rentabilité 0,54 % par sens**, et **−4,9 % aux 1,50 % réels**. À la cadence
+mensuelle, le seuil tombe à 0,25 % et la perte aux frais réels à −17,8 %.
+Aucun horizon, aucune cadence ne franchit les frais réels de cette place. Le modèle prévoit sensiblement mieux ; il ne devient pas négociable
+pour autant, et `brvm backtester --hors-dividende` permet de le vérifier.
 
 #### L'IC et l'argent ne disent pas la même chose
 
@@ -589,7 +718,7 @@ src/brvm/
     sikafinance.py            l'historique
     dividendes.py             les calendriers de dividendes
 
-tests/                    315 tests, tous hors ligne
+tests/                    323 tests, tous hors ligne
   donnees/                  captures réelles de pages web, servant de témoins
 
 .github/workflows/
@@ -1074,7 +1203,7 @@ est son produit avec l'appartenance sectorielle.
 pytest -q                     # ou : python tests/test_brvm_org.py
 ```
 
-**315 tests, tous hors ligne.** Un test qui dépend du réseau échoue pour
+**323 tests, tous hors ligne.** Un test qui dépend du réseau échoue pour
 des raisons étrangères au code qu'il vérifie.
 
 `test_brvm_org.py` travaille sur les captures réelles de `tests/donnees/`,

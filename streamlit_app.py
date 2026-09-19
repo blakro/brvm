@@ -1748,10 +1748,15 @@ if onglets[2].open:
     with onglets[2]:
         st.divider()
         st.subheader("Et si on apprenait le classement ?")
+        # L'HORIZON VIENT DES RÉGLAGES. Il était écrit « trois mois » en
+        # dur ; le jour où il est passé à vingt séances, la phrase est devenue
+        # fausse sans que rien ne le signale.
+        _seances_h = int(DEFAUTS["prediction"]["horizon"])
         st.caption(
-            "Probabilité de **surperformer le marché sur trois mois** — pas de "
-            "prévoir un cours. La BRVM cote par fixing, avec une limite de "
-            "±7,5 % : un modèle entraîné sur le lendemain apprendrait "
+            f"Probabilité de **surperformer le marché sur {_seances_h} séances"
+            f"** (environ {max(1, round(_seances_h / 21))} mois de cotation) — "
+            "pas de prévoir un cours. La BRVM cote par fixing, avec une limite "
+            "de ±7,5 % : un modèle entraîné sur le lendemain apprendrait "
             "« demain ≈ aujourd'hui » et produirait un backtest inexécutable."
         )
         validation = valider_modele(cours_filtre, referentiel_filtre,
@@ -1767,7 +1772,8 @@ if onglets[2].open:
                 "Prédiction",
                 validation["lignes"], validation["lignes_minimum"],
                 "Une observation, c'est une valeur à une date, avec son sort "
-                "connu trois mois plus tard. Chaque séance en apporte une "
+                f"connu {int(DEFAUTS['prediction']['horizon'])} séances plus "
+                "tard. Chaque séance en apporte une "
                 "quarantaine — mais il faut d'abord un an de cotation avant que "
                 "la première soit calculable.",
                 unite="observation",
@@ -1804,16 +1810,27 @@ if onglets[2].open:
             # tableau de bord affichait alors une amélioration là où
             # l'utilisateur aurait perdu de l'argent.
             av = validation.get("avantage") or {}
+            av_tout = validation.get("avantage_tout") or {}
             if av.get("dates"):
-                haut = st.columns(2)
+                haut = st.columns(3)
                 _tuile(haut[0],
                        f"Ce qu'ont rapporté les {av['positions']} premières",
                        f"{av['avantage']:+.2%}",
                        sens=1 if av["avantage"] > 0 else -1,
-                       note=f"de plus que tout le marché en parts égales, "
-                            f"par période de {validation['horizon']} séances · "
+                       note=f"parmi les valeurs ACHETABLES, de plus que le "
+                            f"marché en parts égales, par période de "
+                            f"{validation['horizon']} séances · "
                             f"t = {av['t']:+.1f}")
-                _tuile(haut[1], "Ce qui part en production",
+                # LE CHIFFRE FLATTEUR, MONTRÉ À CÔTÉ PLUTÔT QUE TU. Compter
+                # les valeurs trop peu échangées double presque l'avantage ;
+                # le cacher donnerait une tuile plus belle et fausse.
+                if av_tout.get("dates"):
+                    _tuile(haut[1], "Si l'on comptait les illiquides",
+                           f"{av_tout['avantage']:+.2%}",
+                           note="valeurs qu'un ordre ne peut pas atteindre "
+                                "comprises — pourquoi le chiffre de gauche "
+                                f"est plus bas · t = {av_tout['t']:+.1f}")
+                _tuile(haut[2], "Ce qui part en production",
                        prediction.LIBELLES_SOURCES.get(
                            validation["retenue"], validation["retenue"]),
                        note=validation.get("motif_retenue")
@@ -1825,13 +1842,20 @@ if onglets[2].open:
                         "composite, qui n'estime rien et ne peut donc pas "
                         "surajuster, qui sert au classement affiché."
                     )
+                seuil_ach = av.get("liquidite_min")
                 st.caption(
-                    "Ce second chiffre existe parce que le premier ne suffit "
-                    "pas. Un classement peut mieux ordonner le ventre du "
-                    "marché — ce qui lève l'IC — en ordonnant plus mal les "
-                    "quelques valeurs qui sont les seules que quiconque "
-                    "achètera. Les deux ont divergé en signe sur cette "
-                    "archive, et c'est le second qui se compare aux frais."
+                    "Ces chiffres existent parce que l'IC ne suffit pas. Un "
+                    "classement peut mieux ordonner le ventre du marché — ce "
+                    "qui lève l'IC — en ordonnant plus mal les quelques "
+                    "valeurs qui sont les seules que quiconque achètera ; les "
+                    "deux ont divergé en signe sur cette archive. "
+                    + (f"« Achetables » veut dire : au moins "
+                       f"{seuil_ach:,.0f} FCFA échangés par séance en médiane, "
+                       "le seuil qu'emploie déjà le classement. Environ deux "
+                       "lignes sur cinq de l'archive ne l'atteignent pas, et "
+                       "l'avantage y paraît deux fois plus grand qu'il ne l'est "
+                       "réellement.".replace(",", " ")
+                       if seuil_ach else "")
                 )
 
             st.caption(
@@ -2038,7 +2062,8 @@ if onglets[2].open:
                     .encode(x="bas:Q", x2="haut:Q",
                             y=alt.Y("ticker:N", sort="-x", title=None))
                 )
-                _panneau(titre, "à trois mois, quinze premières").altair_chart(
+                _panneau(titre, f"à {int(DEFAUTS['prediction']['horizon'])} "
+                                "séances, quinze premières").altair_chart(
                     (barres + intervalle)
                     .properties(height=max(220, 24 * len(tete))),
                     width="stretch",
