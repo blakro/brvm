@@ -83,3 +83,40 @@ def test_l_exemple_livre_ne_declare_rien_d_inconnu():
         for cle in valeurs:
             assert cle in config.DEFAUTS[section], \
                 f"réglage inconnu : {section}.{cle}"
+
+
+def test_l_exemple_ne_contredit_pas_les_defauts():
+    """UN EXEMPLE QUI DIVERGE DU CODE EST UN PIÈGE, PAS UNE DOCUMENTATION.
+
+    `config.exemple.toml` se copie en `config.toml` : chaque valeur qu'il
+    porte ÉCRASE le défaut. Il portait `horizon = 60` après que le code soit
+    passé à 20, et `decoupes = 4` alors que le même dépôt documente
+    longuement que quatre découpes sont un défaut de mesure. Qui suivait
+    l'exemple héritait silencieusement des deux.
+
+    Le test n'exige pas que l'exemple soit complet — il n'a pas à lister tout
+    — mais que ce qu'il liste soit d'accord avec le code.
+    """
+    import tomllib
+
+    chemin = Path(__file__).resolve().parents[1] / "config.exemple.toml"
+    exemple = tomllib.loads(chemin.read_text(encoding="utf-8"))
+    defauts = config.DEFAUTS
+
+    divergences = []
+    for section, valeurs in exemple.items():
+        if not isinstance(valeurs, dict):
+            continue
+        attendus = defauts.get(section)
+        if not isinstance(attendus, dict):
+            continue
+        for cle, valeur in valeurs.items():
+            if cle not in attendus:
+                continue
+            if attendus[cle] != valeur:
+                divergences.append(
+                    f"[{section}] {cle} : exemple {valeur!r}, "
+                    f"défaut {attendus[cle]!r}")
+    assert not divergences, (
+        "l'exemple de configuration contredit les défauts du code :\n  "
+        + "\n  ".join(divergences))

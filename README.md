@@ -762,7 +762,7 @@ src/brvm/
     sikafinance.py            l'historique
     dividendes.py             les calendriers de dividendes
 
-tests/                    328 tests, tous hors ligne
+tests/                    329 tests, tous hors ligne
   donnees/                  captures réelles de pages web, servant de témoins
 
 .github/workflows/
@@ -1247,7 +1247,7 @@ est son produit avec l'appartenance sectorielle.
 pytest -q                     # ou : python tests/test_brvm_org.py
 ```
 
-**328 tests, tous hors ligne.** Un test qui dépend du réseau échoue pour
+**329 tests, tous hors ligne.** Un test qui dépend du réseau échoue pour
 des raisons étrangères au code qu'il vérifie.
 
 `test_brvm_org.py` travaille sur les captures réelles de `tests/donnees/`,
