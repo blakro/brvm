@@ -160,16 +160,19 @@ from .config import charger
 # L'importer au niveau du module la rendait obligatoire pour tout le monde :
 # une absence dans l'environnement d'hébergement faisait tomber les six
 # onglets du tableau de bord, dont cinq n'en ont aucun besoin. Elle est donc
-# optionnelle, et son absence ne coûte qu'une des trois sources — les deux
-# autres, et donc un classement, restent calculables.
+# optionnelle, et son absence fait DESCENDRE D'UN CRAN plutôt que tomber :
+# `SOURCES_COMBINEES` étant un ordre de préférence, les poids de fiabilité
+# prennent la suite de la régression et rendent encore un classement appris —
+# dégradé, et mesuré, +3,37 % annualisés d'avantage du haut de liste à vingt
+# séances contre +7,72 % avec la régression.
 APPRENTISSAGE_DISPONIBLE = apprentissage.DISPONIBLE
 
 MOTIF_INDISPONIBLE = (
     "scikit-learn n'est pas installé dans cet environnement : la régression "
-    "logistique est indisponible. Les deux autres sources — le score "
-    "composite et les poids de fiabilité appris par trait — se calculent "
-    "sans elle, et la combinaison continue de fonctionner avec ce qui "
-    "reste. Pour rétablir la troisième : `pip install scikit-learn`."
+    "logistique est indisponible. Ce sont alors les poids de fiabilité "
+    "appris par trait qui ordonnent le classement — ils se calculent sans "
+    "elle, et rendent environ la moitié de l'avantage mesuré de la "
+    "régression. Pour retrouver l'autre moitié : `pip install scikit-learn`."
 )
 
 # Traits utilisés par la prédiction : les quatre de la notation, plus les
@@ -536,12 +539,12 @@ def mesurer_ic(bloc: pd.DataFrame, colonne: str, horizon: int) -> dict:
 
     POURQUOI CETTE FONCTION EXISTE. Un IC moyenné sur toutes les dates
     d'un historique quotidien paraît reposer sur des milliers
-    d'observations. Il n'en est rien : avec un horizon de 60 séances,
-    l'étiquette du lundi recouvre celle du mardi à 59/60. Deux dates
-    voisines racontent la même histoire.
+    d'observations. Il n'en est rien : à l'horizon de vingt séances que le
+    projet emploie, l'étiquette du lundi recouvre celle du mardi à 19/20.
+    Deux dates voisines racontent la même histoire.
 
     Compter ces dates comme indépendantes multiplie le t par racine de
-    l'horizon — environ huit ici. C'est exactement l'erreur qui a fait
+    l'horizon — environ quatre et demi à vingt séances, huit à soixante. C'est exactement l'erreur qui a fait
     passer la volatilité pour un signal exploitable (t = -10,2) alors
     qu'elle ne se distingue pas du hasard (t = -1,4).
 

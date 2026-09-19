@@ -120,9 +120,11 @@ DEFAUTS: dict[str, dict] = {
         # Quatre contrôles d'artefact ont précédé ce choix, tous passés :
         # la part d'étiquettes assises sur un cours reporté ne croît pas
         # quand l'horizon raccourcit (6,5 % à 5 séances, 6,7 % à 60) et
-        # restreindre la mesure aux cours réels AMÉLIORE le résultat ;
+        # restreindre la mesure aux cours réels AMÉLIORE le résultat
+        # (+14,36 % contre +13,77 %) ;
         # l'avantage survit à un décalage d'entrée de trois séances ; il ne
-        # dépend pas du niveau de cours (+8,6 / +6,2 / +6,2 % par tercile) ;
+        # dépend pas du niveau de cours (IC +0,075 / +0,073 / +0,081 par
+        # tercile, contre +0,075 sur l'ensemble) ;
         # et la courbe en horizon est lisse, sans pic à l'endroit où
         # l'horizon coïncide avec les fenêtres des traits.
         #

@@ -229,21 +229,23 @@ Six changements, par ordre d'importance :
 2. **Les traits.** Le choc de volume et le retournement à un mois entrent ;
    ce sont eux qui portent tout. Ôtez le premier, l'IC retombe de +0,044
    à +0,011.
-3. **La combinaison.** Trois sources à poids égaux — une régression
+3. **Les sources.** Trois sont mesurées et affichées — une régression
    logistique, des poids par trait appris puis rétrécis vers zéro selon la
-   force de leur preuve, et le composite de la configuration.
+   force de leur preuve, et le composite de la configuration — mais **une
+   seule ordonne** le classement retenu. Elles ont d'abord été moyennées à
+   poids égaux ; le point 6 dit pourquoi ce n'est plus le cas, et le
+   composite reste le repli quand la porte de production refuse le modèle.
 4. **Comparer à secteur égal.** Un rang calculé sur toute la cote mesure
    en partie « est-ce une banque » : les Services Financiers pèsent 34,5 %
    de l'univers, et quand le secteur monte ses valeurs montent ensemble
    dans le classement sans qu'aucune n'ait rien montré. Chaque trait est
    donc désormais comparé à la moyenne de son propre secteur, et
    l'étiquette apprise devient « battre les siens » et non « battre tout le
-   marché ». Les dix premières lignes passent de **43,9 % de financières à
-   39,8 %** pour un univers à 34,5 % : le pari non choisi tombe de +9,5 à
-   +5,3 points, et la concentration sectorielle de 0,254 à 0,234. Il ne
-   disparaît pas entièrement, et c'est voulu — le composite, lui, garde les
-   rangs de marché, faute de quoi l'onglet Classement et le repli de
-   production changeraient aussi.
+   marché ». Les dix premières lignes passent de **41,2 % de financières à
+   35,4 %** pour un univers à 34,5 % : le pari non choisi tombe de +6,7 à
+   **+0,9 point**, et la concentration sectorielle de 0,237 à 0,215, à
+   deux centièmes de celle de l'univers lui-même (0,202). Le pari hérité a
+   pratiquement disparu.
 5. **Trois traits d'attention.** Le choc de volume est le seul signal du
    projet qui tienne ; plutôt que de chercher ailleurs, trois traits
    décrivent mieux celui-là — le choc sur une semaine, la **part** des
@@ -374,11 +376,12 @@ consigné plus haut. C'est aussi la signature classique
 d'un effet de microstructure, d'où **quatre contrôles d'artefact, tous
 passés** :
 
-1. **Cours reportés.** 6,5 % des étiquettes reposent sur un cours reporté à
-   5 séances, et cette part **ne croît pas** quand l'horizon raccourcit
-   (6,5 / 6,6 / 6,7 / 6,8 % à 5, 40, 60, 90). Mieux : restreindre la mesure
-   aux cours réellement traités en t+H **améliore** le résultat (+14,2 %
-   contre +13,3 % à 20 séances). Un artefact de cours figé se serait effondré.
+1. **Cours reportés.** 5,5 % des étiquettes de la configuration livrée
+   reposent sur un cours reporté, et cette part **ne croît pas** quand
+   l'horizon raccourcit (6,5 / 6,6 / 6,7 / 6,8 % à 5, 40, 60, 90 séances).
+   Mieux : restreindre la mesure aux cours réellement traités en t+H
+   **améliore** le résultat, +14,36 % contre +13,77 % (t +3,78 contre
+   +3,53). Un artefact de cours figé se serait effondré.
 2. **Entrée décalée.** On ne peut pas acheter au cours qui a servi à
    décider : il est connu après la clôture. L'avantage survit à un décalage
    d'une, deux et trois séances (mesuré sur la variante à deux sources :
@@ -386,8 +389,16 @@ passés** :
    rebond de fourchette. Mais il décroît de ~30 % par séance de retard à cinq
    séances contre ~15 % à vingt, et cette différence décide du choix
    d'horizon ci-dessous.
-3. **Niveau de cours.** +8,6 / +6,2 / +6,2 % par tercile de cours : l'effet
-   n'est pas un artefact de pas de cotation sur les petites valeurs.
+3. **Niveau de cours.** IC de **+0,075 / +0,073 / +0,081** par tercile de
+   cours, contre +0,075 sur l'ensemble des achetables : l'effet est uniforme,
+   donc ce n'est pas un artefact de pas de cotation sur les petites valeurs,
+   où un seul tick fait un gros pourcentage.
+
+   *C'est l'IC qui est mesuré ici, et non l'avantage des dix premières,
+   parce que découper l'univers en terciles ne laisse que sept valeurs
+   négociables par tranche : « les dix premières » y désignerait presque
+   toute la tranche et l'écart s'annulerait par construction. L'IC, lui, se
+   calcule sur un petit groupe sans rien couper.*
 4. **Forme de la courbe.** Lisse et monotone de 5 à 60 séances, sans pic à
    l'endroit où l'horizon coïncide avec les fenêtres des traits (20).
 

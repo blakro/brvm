@@ -593,11 +593,20 @@ def calculer_seuil_frais(_cours, _referentiel, _fondamentaux, _dividendes,
 
 @st.cache_data(max_entries=8, show_spinner="Classement de production…")
 def classement_de_production(_cours, _referentiel, archive, univers,
-                             _validation, _composite):
+                             _validation, _composite, ordre_composite=()):
     """Le classement qui sert à DÉCIDER, avec ses propres mesures.
 
     Le couplage vit dans `prediction` ; cette enveloppe ne fait que le
     mémoïser, parce qu'il rejoue le modèle sur la dernière séance.
+
+    `ordre_composite` N'EST PAS DÉCORATIF : c'est la clé de cache du
+    classement de repli. Les curseurs de pondération de l'onglet changent le
+    composite, et lui seul — les autres arguments qui en dépendent sont
+    préfixés d'un tiret, donc exclus du hachage. Sans cette clé, un
+    utilisateur qui déplace un curseur recevrait, le jour où la porte de
+    production refuse le modèle appris, le conseil calculé sur le classement
+    d'avant. Le cas ne se produit pas aujourd'hui ; il se produirait en
+    silence.
     """
     return prediction.classement_de_production(
         _cours, DEFAUTS, _referentiel, _validation, composite=_composite)
@@ -1625,7 +1634,8 @@ if onglets[2].open:
             # gain attendu d'un arbitrage s'en trouvait surestimé d'autant.
             production = classement_de_production(
                 cours_filtre, referentiel_filtre, ARCHIVE, UNIVERS,
-                validation_cs, classement)
+                validation_cs, classement,
+                ordre_composite=tuple(classement["ticker"]))
             classement_avis = production["classement"]
             avis = calculer_conseil(
                 cours_filtre, classement_avis, production["mesure"],
@@ -1925,12 +1935,15 @@ if onglets[2].open:
                     },
                 )
                 st.caption(
-                    "La combinaison est la moyenne des **rangs** des trois "
-                    "sources, à poids égaux. Des poids appris par validation "
-                    "imbriquée ont été essayés : ils font moins bien "
-                    "(IC +0,036 contre +0,045). Onze ans à trois mois "
-                    "d'horizon ne font que quarante-deux périodes vraiment "
-                    "indépendantes — trop peu pour apprendre trois poids."
+                    "Le score retenu est celui d'**une seule** source : la "
+                    "régression, ou les poids de fiabilité si scikit-learn "
+                    "manque. Les moyenner a été essayé et mesuré, et fait "
+                    "moins bien sur ce qui décide — l'avantage des dix "
+                    "premières valeurs achetables tombe de +7,7 % à +5,8 % "
+                    "annualisés. Des poids appris par validation imbriquée "
+                    "font moins bien encore : onze ans à un mois d'horizon ne "
+                    "donnent qu'une centaine de périodes vraiment "
+                    "indépendantes, trop peu pour apprendre des poids."
                 )
 
             # Le constat le plus important de l'onglet, et il ne tient pas

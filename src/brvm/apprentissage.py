@@ -9,18 +9,20 @@ pourquoi.
 
 CE QUI A ÉTÉ MESURÉ, ET CE QUI A ÉTÉ JETÉ
 -----------------------------------------
-Tous les chiffres de ce module viennent du MÊME protocole, celui que le
-projet livre : validation glissante à dix découpes sur l'archive complète
-(2015-2026, 47 valeurs, 100 961 observations), étiquettes recouvrantes
-purgées, erreur-type conservatrice de `mesure_ic`. Citer deux protocoles
-reviendrait à choisir le plus flatteur sans le dire.
+Tous les chiffres du tableau ci-dessous viennent du MÊME protocole :
+validation glissante à dix découpes sur l'archive complète (2015-2026,
+47 valeurs, environ 101 000 observations), étiquettes recouvrantes purgées,
+erreur-type conservatrice de `mesure_ic`, **à l'horizon de soixante séances
+qui était alors celui du projet**. Citer deux protocoles reviendrait à
+choisir le plus flatteur sans le dire — d'où la mention de l'horizon, qui
+vaut aujourd'hui vingt séances et déplace tous ces chiffres.
 
 L'IR est l'IC moyen divisé par son écart-type d'une période à l'autre :
 c'est LUI qui mesure la fiabilité, là où l'IC seul mesure l'ampleur.
 
-    RETENU   trois sources équipondérées        IC +0,045  IR 0,51  7/10
+    alors    trois sources équipondérées        IC +0,045  IR 0,51  7/10
+    RETENU   régression logistique seule        IC +0,044  IR 0,66  7/10
     ---
-    rejeté   régression logistique seule        IC +0,044  IR 0,66  7/10
     rejeté   moyenne des 8 membres du sac       IC +0,037  IR 0,59  7/10
     rejeté   sac sur profondeurs d'historique   IC +0,036  IR 0,42  7/10
     rejeté   empilement à poids appris          IC +0,036  IR 0,51  6/10
@@ -28,16 +30,38 @@ c'est LUI qui mesure la fiabilité, là où l'IC seul mesure l'ampleur.
     rejeté   poids de fiabilité seuls           IC +0,028  IR 0,32  6/10
     rejeté   composite de la configuration      IC +0,032  IR 0,30  5/10
 
-LA COMBINAISON ET LA RÉGRESSION SEULE NE SE DÉPARTAGENT PAS. +0,045 contre
-+0,044, et l'IR penche dans l'autre sens ; sur dix périodes, l'écart entre
-un IR de 0,51 et un de 0,66 n'est pas mesurable. C'est la combinaison qui
-est livrée, pour trois raisons qui ne dépendent pas de ces décimales : elle
-a le meilleur IC, elle n'est jamais la pire des trois sources quand l'une
-d'elles se trompe (période 2022-09 : régression -0,009, fiabilité -0,054,
-composite +0,238, combinaison +0,085), et elle rend encore un classement
-quand scikit-learn manque. Choisir la régression parce qu'elle a le
-meilleur IR sur dix périodes serait exactement l'erreur que ce module
-documente.
+SUR L'IC, ELLES NE SE DÉPARTAGENT PAS — ET CE N'ÉTAIT PAS LA BONNE MESURE.
++0,045 contre +0,044, l'IR penchant dans l'autre sens : sur dix périodes,
+l'écart entre un IR de 0,51 et un de 0,66 n'est pas mesurable. La
+combinaison a donc été livrée d'abord, pour trois raisons indépendantes de
+ces décimales : meilleur IC, jamais la pire des trois sources quand l'une se
+trompe (période 2022-09 : régression -0,009, fiabilité -0,054, composite
++0,238, combinaison +0,085), et un classement rendu même sans scikit-learn.
+
+CE QUI A RENVERSÉ LE VERDICT : LA MESURE, PAS LES DÉCIMALES. L'IC note
+l'ordre de toute la cote ; un porteur n'achète que le haut, et seulement ce
+qui est assez échangé pour qu'un ordre passe. Jugées sur l'avantage des dix
+premières valeurs ACHETABLES — voir `avantage_par_date` — les deux ne sont
+plus du tout à égalité, et la régression seule gagne aux trois horizons
+essayés, sur la première moitié de l'archive comme sur la seconde :
+
+    horizon   régression seule   moyennée avec les poids de fiabilité
+         10           +10,95 %                             +9,93 %
+         20            +7,72 %                             +5,79 %
+         40            +4,13 %                             +2,09 %
+
+Le composite, lui, a un avantage du haut de liste NÉGATIF (-0,10 % par
+période) pour un IC positif : il ordonne honorablement le ventre du marché
+et dégrade les dix lignes qu'on achète.
+
+Les deux vertus qui avaient fait pencher pour la combinaison sont
+conservées autrement. `prediction.SOURCES_COMBINEES` est devenue un ORDRE de
+préférence et non une moyenne : sans scikit-learn, les poids de fiabilité
+prennent la suite et rendent encore un classement appris (+3,37 % annualisés
+à vingt séances). Et la protection contre la période où une source se
+trompe est désormais assurée par la porte de production de `valider`, qui
+refuse le modèle si son haut de liste a perdu hors échantillon — une
+garantie mesurée plutôt qu'un effet de moyenne.
 
 1. L'EMPILEMENT À POIDS APPRIS ÉCHOUE, ET L'ÉCHEC EST INSTRUCTIF. Estimer
    par validation imbriquée le poids à donner à chaque source — la méthode
@@ -205,9 +229,9 @@ def mesure_ic(ics: pd.Series, horizon: int) -> dict:
     """IC moyen, erreur-type conservatrice, t, verdict.
 
     L'erreur-type ne se calcule pas sur le nombre de dates mais sur le
-    nombre de périodes RÉELLEMENT disjointes, `dates / horizon` : avec un
-    horizon de 60 séances, l'étiquette du lundi recouvre celle du mardi à
-    59/60. C'est le piège qui avait fait passer un IC de -0,07 pour un t de
+    nombre de périodes RÉELLEMENT disjointes, `dates / horizon` : à
+    l'horizon de vingt séances que le projet emploie, l'étiquette du lundi
+    recouvre celle du mardi à 19/20. C'est le piège qui avait fait passer un IC de -0,07 pour un t de
     -10,2 alors qu'il vaut -1,4.
 
     DEUX ESTIMATEURS SONT POSSIBLES, ET LE PLUS PRUDENT EST RETENU. On peut
