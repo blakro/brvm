@@ -314,17 +314,31 @@ def avantage_par_date(bloc: pd.DataFrame, colonne: str,
         if bloc.empty:
             return pd.Series(dtype=float)
     n = max(1, int(positions))
-    sorties = {}
-    for date, tranche in bloc.groupby("date"):
-        scores = tranche[colonne]
-        # Il faut de quoi distinguer un haut de liste d'un univers : avec
-        # douze valeurs cotées, « les dix premières » est presque l'univers
-        # entier et l'écart ne veut plus rien dire.
-        if scores.notna().sum() < n + 2:
-            continue
-        haut = tranche.loc[scores.nlargest(n).index, "rendement_futur"]
-        sorties[date] = float(haut.mean() - tranche["rendement_futur"].mean())
-    return pd.Series(sorties, dtype=float).sort_index()
+
+    # VECTORISÉ, ET CE N'EST PAS DE LA COQUETTERIE. La version en boucle
+    # `for date, tranche in bloc.groupby("date")` coûtait 4 secondes par
+    # appel sur onze ans d'archive, et `valider` en fait dix — quatre
+    # sources fois deux seuils, plus la source retenue. Elle portait donc à
+    # elle seule 41 des 46 secondes de la validation, que l'app paie à
+    # chaque calcul. C'est exactement le coût que l'en-tête de
+    # `features.traits_glissants` raconte avoir déjà payé une fois.
+    #
+    # Le classement décroissant en `method="first"` reproduit `nlargest`,
+    # qui départage les ex æquo par l'ordre d'apparition ; les scores
+    # manquants reçoivent un rang manquant et tombent donc hors du haut de
+    # liste, comme `nlargest` les écartait.
+    scores = bloc[colonne]
+    rangs = scores.groupby(bloc["date"]).rank(ascending=False, method="first")
+    rendement = bloc["rendement_futur"]
+    par_date = rendement.groupby(bloc["date"])
+    haut = rendement.where(rangs <= n).groupby(bloc["date"]).mean()
+
+    # Il faut de quoi distinguer un haut de liste d'un univers : avec douze
+    # valeurs cotées, « les dix premières » est presque l'univers entier et
+    # l'écart ne veut plus rien dire.
+    assez = scores.notna().groupby(bloc["date"]).sum() >= n + 2
+    ecart = (haut - par_date.mean())[assez]
+    return ecart.dropna().astype(float).sort_index()
 
 
 def mesure_avantage(bloc: pd.DataFrame, colonne: str, horizon: int,

@@ -664,3 +664,59 @@ def test_le_conseil_nomme_le_classement_qu_il_juge():
                                   "impact_pourcent": 0.0}})
     assert muet["source"] is None
     assert "classement jugé" not in conseil.expliquer(muet)
+
+
+def test_l_avantage_vectorise_egale_la_boucle_naive():
+    """LA VERSION LENTE SERT DE DÉFINITION, ET C'EST ELLE QU'ON TESTE.
+
+    `avantage_par_date` s'écrivait « pour chaque date, prendre `nlargest` » —
+    lisible, et 4 secondes par appel sur onze ans d'archive. `valider` en
+    faisait dix appels : 41 des 46 secondes de la validation, que l'app paie
+    à chaque calcul. La version vectorisée les ramène à 0,03 seconde.
+
+    Deux détails se perdent facilement dans une telle réécriture, et ce test
+    les épingle : les EX ÆQUO, que `nlargest` départage par l'ordre
+    d'apparition et que seul `method="first"` reproduit, et les scores
+    MANQUANTS, que `nlargest` écarte du haut de liste sans écarter la date.
+    """
+    rng = np.random.default_rng(7)
+    lignes = []
+    for jour in range(40):
+        for i in range(18):
+            lignes.append({
+                "date": f"j{jour:03d}", "ticker": f"T{i:02d}",
+                # Beaucoup d'ex æquo VOULUS : des scores tirés dans un petit
+                # ensemble d'entiers, pour que le départage compte.
+                "score": float(rng.integers(0, 5)),
+                "rendement_futur": float(rng.normal(0, 0.05)),
+                "liquidite_fcfa": float(rng.choice([1e3, 5e6])),
+            })
+    bloc = pd.DataFrame(lignes)
+    # Quelques scores manquants, répartis au hasard.
+    manquants = rng.choice(len(bloc), size=30, replace=False)
+    bloc.loc[manquants, "score"] = np.nan
+
+    def naive(table, colonne, positions, liquidite_min=None):
+        if liquidite_min is not None and "liquidite_fcfa" in table.columns:
+            table = table[table["liquidite_fcfa"] >= float(liquidite_min)]
+        n = max(1, int(positions))
+        sorties = {}
+        for date, tranche in table.groupby("date"):
+            scores = tranche[colonne]
+            if scores.notna().sum() < n + 2:
+                continue
+            haut = tranche.loc[scores.nlargest(n).index, "rendement_futur"]
+            sorties[date] = float(haut.mean() - tranche["rendement_futur"].mean())
+        return pd.Series(sorties, dtype=float).sort_index()
+
+    for positions in (3, 10):
+        for seuil in (None, 1e6):
+            attendu = naive(bloc, "score", positions, seuil)
+            obtenu = apprentissage.avantage_par_date(
+                bloc, "score", positions, seuil)
+            assert obtenu.index.equals(attendu.index), (
+                f"dates retenues différentes (positions={positions}, "
+                f"seuil={seuil})")
+            assert np.allclose(obtenu.to_numpy(), attendu.to_numpy(),
+                               atol=1e-12), (
+                f"valeurs différentes (positions={positions}, seuil={seuil})")
