@@ -278,6 +278,7 @@ def conseiller(
     reglages: dict | None = None,
     prudence: bool = True,
     avantage: dict | None = None,
+    source: str | None = None,
 ) -> dict:
     """Une action par ligne : acheter, conserver, vendre, ou ne rien faire.
 
@@ -326,6 +327,11 @@ def conseiller(
                 "avantage", float("nan"))),
             "haut_mesure": bool(avantage),
             "positions": positions,
+            # QUEL classement a été jugé. Les mesures qui chiffrent un gain
+            # doivent être celles du classement qu'on ordonne réellement ;
+            # les afficher ensemble est le seul moyen de rendre visible un
+            # dépareillage — voir `prediction.classement_de_production`.
+            "source": source,
             "prudence": prudence, "avertissements": AVERTISSEMENTS}
     if classement is None or classement.empty or "ticker" not in classement:
         return vide
@@ -478,6 +484,10 @@ def expliquer(resultat: dict) -> str:
         "La question est celle de n'importe quel achat : est-ce que ça vaut "
         "ce que ça coûte ?",
         "",
+    ]
+    if resultat.get("source"):
+        lignes += [f"  (classement jugé : {resultat['source']})", ""]
+    lignes += [
         comparer("changer une ligne pour une autre coûte", 2 * cout,
                  signe=False),
     ]

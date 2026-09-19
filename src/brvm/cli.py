@@ -609,10 +609,17 @@ def _conseiller(args) -> int:
     # Le référentiel est PASSÉ ici aussi : sans lui l'échantillon n'a pas de
     # colonnes sectorielles, et la mémoïsation le reconstruirait deux fois.
     echantillon = prediction.construire_echantillon(cours, reglages, referentiel)
+    # LE CLASSEMENT ET SES MESURES SORTENT ENSEMBLE. Ce module appariait le
+    # classement du composite avec l'IC du modèle appris, deux fois meilleur :
+    # le gain attendu s'en trouvait surestimé d'un facteur 2,8.
+    production = prediction.classement_de_production(
+        cours, reglages, referentiel, validation, composite=classement)
+    classement = production["classement"]
     resultat = conseil.conseiller(
-        classement, detenu=args.detenu, mesure=validation.get("mesure"),
+        classement, detenu=args.detenu, mesure=production["mesure"],
         dispersion_=conseil.dispersion(echantillon), reglages=reglages,
-        prudence=not args.ponctuel, avantage=validation.get("avantage"))
+        prudence=not args.ponctuel, avantage=production["avantage"],
+        source=production["source"])
     print(f"Séance du {traits.attrs.get('date', '?')} — "
           f"{len(classement)} valeurs classées")
     print()

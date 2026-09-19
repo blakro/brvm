@@ -441,6 +441,15 @@ def construire_echantillon(
     # d'éligibilité de `scoring` est un montant, et sans ce montant l'avantage
     # du haut de liste se mesure aussi sur des valeurs que personne ne peut
     # acheter — 40 % des lignes de l'échantillon, mesuré.
+    #
+    # ELLE SERT À MESURER, PAS À FILTRER L'ENTRAÎNEMENT, et c'est mesuré
+    # aussi. N'apprendre que sur les lignes achetables paraît plus propre —
+    # pourquoi apprendre d'un marché qu'on ne peut pas jouer ? — et c'est
+    # PIRE aux trois horizons essayés, l'avantage sur les achetables tombant
+    # de +10,95 à +10,53 % à dix séances, de +7,72 à +6,03 % à vingt, de
+    # +4,13 à +3,23 % à quarante. Les 42 % de lignes illiquides portent la
+    # même relation entre traits et rendement ; les jeter revient à jeter
+    # deux observations sur cinq pour rien.
     colonnes["liquidite_fcfa"] = matrices["liquidite"].reindex(
         fenetre).stack(future_stack=True)
     colonnes["rendement_futur"] = futur.reindex(fenetre).stack(
@@ -988,6 +997,77 @@ def predire(
         calibrage is not None and getattr(calibrage, "disponible", False))
     return resultat.sort_values(
         "probabilite", ascending=False).reset_index(drop=True)
+
+
+def classement_de_production(
+    cours: pd.DataFrame,
+    reglages: dict | None = None,
+    referentiel: pd.DataFrame | None = None,
+    validation: dict | None = None,
+    composite: pd.DataFrame | None = None,
+) -> dict:
+    """Le classement qui doit servir à DÉCIDER, et ses propres mesures.
+
+    POURQUOI CETTE FONCTION EXISTE, ET CE QU'ELLE RÉPARE. Le conseiller
+    recevait le classement du composite — celui de `scoring.noter` — et, à
+    côté, les mesures de qualité du MODÈLE APPRIS. Les deux ne parlaient pas
+    du même classement :
+
+        classement réellement ordonné par le composite   IC +0,027
+        IC employé pour chiffrer le gain d'un arbitrage   IC +0,074
+
+    Le gain attendu était donc surestimé d'un facteur 2,8, et le diagnostic
+    rendu à l'utilisateur était faux dans sa nature : le module dit « le
+    classement distingue les valeurs mais les frais mangent l'écart » là où
+    la vérité, pour le composite, est « ce classement n'a pas d'avantage
+    démontré » — deux situations que `conseil.expliquer` prend soin de
+    distinguer, l'une se corrigeant en changeant de courtier et l'autre non.
+    Avec les mesures du bon classement, la borne basse de l'IC passe de
+    +0,041 à -0,008 et aucun arbitrage ne peut plus se payer, ce qui est le
+    résultat honnête.
+
+    LE COUPLAGE VIT DONC ICI, EN UN SEUL ENDROIT. Le classement et les
+    mesures qui le jugent sortent ensemble ou pas du tout ; deux appelants ne
+    peuvent plus les apparier chacun à sa façon.
+
+    Ce qui est rendu :
+
+        classement   `ticker`, `rang`, `nom` — prêt pour `conseil.conseiller`
+        mesure       l'IC de CE classement, hors échantillon
+        avantage     son avantage du haut de liste, valeurs achetables
+        source       « modèle appris » ou « composite », à afficher
+    """
+    conf = reglages or charger()
+    valide = validation if validation is not None else valider(
+        cours, conf, referentiel=referentiel)
+    retenue = valide.get("retenue", "composite")
+    sources = valide.get("sources", {})
+
+    if retenue == "combinaison":
+        appris = predire(cours, conf, referentiel=referentiel,
+                         validation=valide)
+        if not appris.empty:
+            table = appris[["ticker"]].copy()
+            table["rang"] = range(1, len(table) + 1)
+            if referentiel is not None and "nom" in getattr(
+                    referentiel, "columns", []):
+                noms = referentiel.dropna(subset=["ticker"]).set_index(
+                    "ticker")["nom"]
+                table["nom"] = table["ticker"].map(noms)
+            detail = sources.get("combinaison", {})
+            return {"classement": table,
+                    "mesure": detail.get("mesure", valide.get("mesure")),
+                    "avantage": detail.get("avantage", valide.get("avantage")),
+                    "source": "modèle appris"}
+
+    # Repli : le composite, jugé par SES propres mesures et non par celles
+    # d'un modèle qui n'ordonne pas ce classement-là.
+    detail = sources.get("composite", {})
+    return {"classement": (composite if composite is not None
+                           else pd.DataFrame(columns=["ticker", "rang"])),
+            "mesure": detail.get("mesure"),
+            "avantage": detail.get("avantage"),
+            "source": "composite"}
 
 
 def _avec_incertitude(mesure: dict) -> str:
