@@ -114,40 +114,64 @@ Sur les quatre exercices connus, le dividende rapporte 7 à 10 % par an,
 Conséquence : une analyse qui ne regarde que les cours ignore la partie
 la plus régulière du rendement, et ne garde que la plus bruyante.
 
-### 2. Deux effets sur 216 résistent, et ils ne paient pas
+### 2. Trente-trois effets sur 360 résistent, et ils vivent à court terme
 
-On a testé **216 combinaisons** — douze méthodes × six segments de marché
-× trois horizons de temps. Deux survivent une fois corrigé le fait qu'en
-testant 216 choses, on en trouve forcément quelques-unes « qui marchent »
-par pur hasard.
+On a testé **360 combinaisons** — douze méthodes × six segments de marché
+× cinq horizons de temps. Trente-trois survivent une fois corrigé le fait
+qu'en testant 360 choses, on en trouve forcément quelques-unes « qui
+marchent » par pur hasard. Elles se concentrent au bout court :
+
+| Horizon | Cases retenues |
+|---|---|
+| 5 séances | **18** |
+| 10 séances | 12 |
+| 20 séances | 3 |
+| 60 et 120 séances | 0 |
+
+Les cinq plus fortes :
 
 | Survivante | Segment | Horizon | IC | t |
 |---|---|---|---|---|
-| **choc éclair** | tout le marché | 20 séances | +0,061 | **+4,3** |
-| **choc de volume** | tout le marché | 20 séances | +0,053 | +3,8 |
+| **choc éclair** | tout le marché | 5 | +0,049 | **+7,2** |
+| retournement 1 mois | tout le marché | 5 | +0,051 | +6,5 |
+| choc éclair | tout le marché | 10 | +0,059 | +5,9 |
+| choc de volume | tout le marché | 5 | +0,034 | +5,1 |
+| retournement 1 mois | Energie | 5 | +0,117 | +4,9 |
 
-Les deux disent la même chose à deux vitesses : une action qui s'échange
-soudain beaucoup plus que d'habitude tend à surperformer le mois suivant.
-Ce n'est pas « une action très échangée » — ce niveau-là, la liquidité, ne
-prédit rien — c'est le changement de régime. Le **choc éclair** le mesure
-sur une semaine au lieu d'un mois, et c'est la case la plus forte des 216.
+**Attention à la lecture du `t`, et c'est l'essentiel de cette section.**
+L'erreur-type se calcule sur `dates / horizon` périodes disjointes : à cinq
+séances il y a quatre fois plus de blocs qu'à vingt, donc quatre fois plus
+de puissance **à effet égal**. Le passage de 2 survivantes à 33 vient
+largement de là, pas d'un marché soudain plus prévisible. L'IC par période
+le montre — pour la famille volume, il est plus FAIBLE à court terme :
 
-Trois remarques, parce qu'elles comptent plus que le classement :
+| | 5 | 10 | 20 | 60 |
+|---|---|---|---|---|
+| choc de volume | 0,034 | 0,046 | 0,053 | **0,064** |
+| choc éclair | 0,049 | 0,059 | **0,061** | 0,055 |
+| retournement 1 mois | **0,051** | 0,048 | 0,041 | 0,025 |
 
-- **La grille est passée de 162 à 216 cases exprès.** Les trois traits
-  d'attention ajoutés pour la prédiction — dont le choc éclair — auraient
-  pu rester dans `features` sans jamais subir la correction que les autres
-  subissent. C'eût été garder la meilleure case d'une loterie en refusant
-  de compter les tickets. Les y soumettre a durci le seuil pour tout le
-  monde, et le choc éclair est passé quand même.
-- **Les deux autres traits d'attention ne passent pas.** L'ampleur du choc
-  (t +2,6) et l'intensité d'échange (t +2,4 sur les financières) restent
-  dans le modèle parce qu'ils aident la combinaison, pas parce qu'ils se
-  distinguent seuls du hasard. C'est écrit ici pour qu'on ne leur prête pas
-  une force qu'ils n'ont pas.
-- **Les deux survivantes sont à vingt séances.** C'est la troisième fois
-  qu'un chemin indépendant désigne cet horizon, et c'est ce qui a fixé
-  celui du modèle.
+Par pari, l'horizon long prédit mieux le choc de volume ; par an, l'horizon
+court accumule dix fois plus de paris. Le retournement fait l'inverse et
+s'éteint après un mois.
+
+Deux remarques, parce qu'elles comptent plus que le classement :
+
+- **La grille a grossi deux fois exprès, et chaque fois contre moi.** Les
+  trois traits d'attention ajoutés pour la prédiction auraient pu rester
+  dans `features` sans subir la correction que les autres subissent :
+  c'eût été garder la meilleure case d'une loterie en refusant de compter
+  les tickets. Puis la grille s'arrêtait à vingt séances, et ce vingt avait
+  servi d'argument pour fixer l'horizon du modèle — un balayage dont la
+  grille exclut la réponse ne peut pas la corroborer. De 162 à 216 puis à
+  360 cases, le seuil s'est durci à chaque fois, et les effets sont passés
+  quand même.
+- **Ce que le marché dit vraiment.** Une action qui s'échange soudain
+  beaucoup plus que d'habitude tend à surperformer ; ce n'est pas « une
+  action très échangée » — ce niveau-là, la liquidité, ne prédit presque
+  rien — c'est le changement de régime. Et une action qui vient de bondir
+  tend à rendre une part de son mouvement, mais seulement à quelques
+  séances.
 
 Et elle ne paie pas. Simulée avec dix lignes et un rééquilibrage mensuel :
 
@@ -203,14 +227,15 @@ purgées :
 | Au départ | −0,056 | −1,1 | −0,43 | 4 / 10 | −0,240 |
 | Univers corrigé, traits ajoutés | +0,045 | +1,5 | +0,52 | 7 / 10 | −0,095 |
 | À secteur égal | +0,067 | +2,4 | +0,92 | 8 / 10 | −0,073 |
-| **Prix seul, horizon d'un mois** | **+0,074** | **+4,5** | **+1,51** | **9 / 10** | **−0,014** |
+| **Prix seul, horizon d'une semaine** | **+0,077** | **+9,4** | **+1,84** | **10 / 10** | **+0,019** |
 
 **Attention au `t` de la dernière ligne.** L'erreur-type se calcule sur le
-nombre de périodes disjointes, soit `dates / horizon` : en passant de 60 à 20
-séances, ce nombre triple (42 → 126) et le `t` grossit d'un facteur racine de
-trois sans qu'aucune information soit apparue. **L'IR est la seule colonne
-comparable d'une ligne à l'autre** — il vaut 0,92 puis 1,51, et ce gain-là
-est réel.
+nombre de périodes disjointes, soit `dates / horizon` : en passant de 60 à 5
+séances, ce nombre est multiplié par douze (42 → 505) et le `t` grossit d'un
+facteur racine de douze sans qu'aucune information soit apparue. **L'IR est
+la seule colonne comparable d'une ligne à l'autre** — il vaut 0,92 puis 1,84,
+et ce gain-là est réel. La dernière ligne a par ailleurs sa **pire période
+positive** : les dix périodes de test le sont.
 
 Les lignes deux à quatre sont mesurées le même jour, sur la même archive —
 le gain ne vient pas de données en plus.
@@ -358,17 +383,23 @@ Le composite mérite un mot : son avantage du haut de liste est **négatif**
 reste positif — et il dégrade les dix valeurs qu'on achète. C'est la même
 divergence que plus haut, à l'intérieur d'un seul score.
 
-**L'horizon est le levier principal, et il est monotone.** Avantage annualisé
-des dix premières, sur les seules valeurs **achetables** et avec l'entrée
-décalée d'une séance comme le ferait un ordre réel :
+**L'horizon est le levier principal, et il est monotone.** Le modèle livré,
+horizon par horizon, sur les seules valeurs **achetables** (l'avantage
+annualisé est mesuré à l'entrée du jour ; le tableau des délais d'exécution
+vient plus bas) :
 
-| Horizon | avantage annualisé | t | 1re moitié | 2nde moitié |
-|---|---|---|---|---|
-| 5 séances | +15,50 % | +5,21 | +16,48 % | +14,51 % |
-| 10 séances | +10,95 % | +3,77 | +11,37 % | +10,53 % |
-| **20 séances** | **+7,72 %** | **+2,80** | **+9,13 %** | **+6,30 %** |
-| 40 séances | +4,13 % | +1,56 | +5,33 % | +2,92 % |
-| 60 séances | +3,61 % | +1,19 | +4,17 % | +3,06 % |
+| Horizon | IC | IR | Périodes + | avantage annualisé | 1re moitié | 2nde moitié |
+|---|---|---|---|---|---|---|
+| **5 séances** | **+0,0768** | **+1,84** | **10 / 10** | **+15,50 %** | **+16,5 %** | **+14,5 %** |
+| 10 séances | +0,0705 | +1,40 | 8 / 10 | +10,95 % | +11,4 % | +10,5 % |
+| 20 séances | +0,0738 | +1,51 | 9 / 10 | +7,72 % | +9,1 % | +6,3 % |
+| 40 séances | +0,0483 | +0,99 | 8 / 10 | +4,13 % | +5,3 % | +2,9 % |
+| 60 séances | +0,0599 | +0,88 | 9 / 10 | +3,61 % | +4,2 % | +3,1 % |
+
+Cinq séances gagne sur **toutes les colonnes comparables entre horizons** —
+l'IC par période, l'IR, le nombre de périodes positives et l'équilibre entre
+les deux moitiés. Le `t` n'en fait pas partie, pour la raison donnée à la
+section 2.
 
 Plus court est meilleur, sans exception — et **positif sur les deux moitiés à
 tous les horizons**, ce qui distingue ce résultat du mirage de cadence
@@ -376,19 +407,17 @@ consigné plus haut. C'est aussi la signature classique
 d'un effet de microstructure, d'où **quatre contrôles d'artefact, tous
 passés** :
 
-1. **Cours reportés.** 5,5 % des étiquettes de la configuration livrée
+1. **Cours reportés.** 5,3 % des étiquettes de la configuration livrée
    reposent sur un cours reporté, et cette part **ne croît pas** quand
    l'horizon raccourcit (6,5 / 6,6 / 6,7 / 6,8 % à 5, 40, 60, 90 séances).
-   Mieux : restreindre la mesure aux cours réellement traités en t+H
-   **améliore** le résultat, +14,36 % contre +13,77 % (t +3,78 contre
-   +3,53). Un artefact de cours figé se serait effondré.
+   Restreindre la mesure aux cours réellement traités en t+H ne change
+   pratiquement rien : +15,40 % contre +15,50 %, t +5,13 contre +5,21. Un
+   artefact de cours figé se serait effondré.
 2. **Entrée décalée.** On ne peut pas acheter au cours qui a servi à
    décider : il est connu après la clôture. L'avantage survit à un décalage
-   d'une, deux et trois séances (mesuré sur la variante à deux sources :
-   +15,0 % → +10,7 % → +7,9 % → +5,6 % à cinq séances). Ce n'est donc pas du
-   rebond de fourchette. Mais il décroît de ~30 % par séance de retard à cinq
-   séances contre ~15 % à vingt, et cette différence décide du choix
-   d'horizon ci-dessous.
+   d'une, deux et trois séances, et cinq séances retardées de trois égalent
+   encore vingt séances sans retard — le tableau est plus bas. Ce n'est donc
+   pas du rebond de fourchette.
 3. **Niveau de cours.** IC de **+0,075 / +0,073 / +0,081** par tercile de
    cours, contre +0,075 sur l'ensemble des achetables : l'effet est uniforme,
    donc ce n'est pas un artefact de pas de cotation sur les petites valeurs,
@@ -402,23 +431,34 @@ passés** :
 4. **Forme de la courbe.** Lisse et monotone de 5 à 60 séances, sans pic à
    l'endroit où l'horizon coïncide avec les fenêtres des traits (20).
 
-**Pourquoi 20 séances et non 5, qui mesure le mieux.** Deux raisons, et
-aucune n'est le confort. D'abord la **robustesse à l'exécution** : une séance
-de retard coûte 30 % de l'avantage à 5 séances contre 15 % à 20, et sur une
-place où une ligne se traite quelques fois par mois, « exécuter demain »
-n'est pas acquis. Ensuite la **corroboration indépendante** : le balayage de
-216 cases corrigé par Benjamini-Hochberg désigne le choc éclair et le choc de
-volume **à 20 séances**, et eux seuls. Deux analyses indépendantes, le même
-horizon — c'est plus solide que le maximum d'une courbe. Cinq séances reste
-une ligne de configuration pour qui veut l'essayer.
+**Cinq séances, et l'argument qui disait vingt était circulaire.** L'horizon
+a d'abord été fixé à vingt, en partie parce que le balayage de `recherche.py`
+désignait le choc de volume « à vingt séances » : deux analyses
+indépendantes, disait-on, pointaient le même horizon. Or la grille du
+balayage était (20, 60, 120) — **vingt était le plus court horizon qu'on lui
+autorisait**, et il ne pouvait pas en désigner un autre. La grille contient
+désormais 5 et 10, et elle place 18 de ses 33 survivantes à cinq séances,
+aucune au-delà de vingt.
 
-**Prédire à un mois n'oblige pas à tourner tous les mois**, et c'est mesuré :
-le signal du mois se conserve, les frais du mois non. Le rééquilibrage
-trimestriel rend +1,5 % à 0,25 % de frais là où le mensuel rend 0,0 %, parce
-qu'il paie la rotation quatre fois moins souvent. Son seuil de rentabilité
-est de **0,54 % par sens contre 0,25 %**. `pas_rebalancement` reste donc à 60
-pendant que `horizon` passe à 20 : ce n'est pas une incohérence, c'est le
-résultat.
+L'autre raison avancée alors — la robustesse à l'exécution — ne tient pas
+non plus, et le chiffre que j'avais donné (30 % d'avantage perdu par séance
+de retard à cinq séances) venait d'une variante à deux sources. Sur la
+configuration livrée :
+
+| Horizon | entrée t+0 | t+1 | t+2 | t+3 |
+|---|---|---|---|---|
+| **5 séances** | **+15,50 %** | **+12,05 %** | **+9,20 %** | **+7,12 %** |
+| 20 séances | +7,72 % | +6,94 % | +6,17 % | +5,20 % |
+
+Cinq séances avec **trois séances de retard** égale encore vingt séances sans
+retard. Un effet de rebond de fourchette se serait effondré dès la première.
+
+**Prédire à une semaine n'oblige pas à tourner toutes les semaines**, et les
+deux réglages répondent à des questions différentes : `horizon` dit à quelle
+échéance on PRÉVOIT, `pas_rebalancement` à quelle fréquence on ACHÈTE. Le
+premier est une question de prévision et vaut cinq séances ; le second est
+une question de frais et reste trimestriel. Ce n'est pas une incohérence,
+c'est la séparation des deux.
 
 #### Deux chiffres pour le haut de liste, et le plus flatteur n'est pas le bon
 
@@ -428,8 +468,8 @@ le classement, 1 million de FCFA par séance. La raison est brutale :
 
 | | avantage des 10 premières |
 |---|---|
-| tout l'échantillon | +13,8 % / an |
-| valeurs achetables seulement | **+7,7 % / an** |
+| tout l'échantillon | +23,1 % / an |
+| valeurs achetables seulement | **+15,5 % / an** |
 
 **Deux lignes sur cinq de l'archive n'atteignent pas le seuil**, et l'avantage
 y paraît plus du double de ce qu'il est réellement. Un tableau de bord qui
@@ -443,14 +483,31 @@ l'entrée à la séance suivante en retirait encore 30 %, et le reste est la
 composition du rejeu. La composition n'y était pour rien — la version
 géométrique est plus haute, pas plus basse.
 
-#### Et les frais, qui n'ont pas bougé
+#### Et les frais, qui se sont beaucoup rapprochés
 
-Rejeu du modèle livré sur le cours seul, à la cadence trimestrielle qu'il
-emploie : **+2,8 % annuels contre l'univers à frais nuls, seuil de
-rentabilité 0,54 % par sens**, et **−4,9 % aux 1,50 % réels**. À la cadence
-mensuelle, le seuil tombe à 0,25 % et la perte aux frais réels à −17,8 %.
-Aucun horizon, aucune cadence ne franchit les frais réels de cette place. Le modèle prévoit sensiblement mieux ; il ne devient pas négociable
-pour autant, et `brvm backtester --hors-dividende` permet de le vérifier.
+Cette section est là par honnêteté, pas parce qu'elle a décidé de l'horizon :
+le choix ci-dessus s'est fait sur la prévision seule.
+
+Rejeu du signal à cinq séances sur le **cours seul**, écart annuel contre
+l'univers, selon la cadence d'achat :
+
+| Cadence | frais nuls | 0,25 % | 1,50 % | seuil de rentabilité |
+|---|---|---|---|---|
+| 5 séances | +9,3 % | −1,3 % | −42,5 % | 0,22 % |
+| 20 séances | +3,3 % | −0,8 % | −19,0 % | 0,20 % |
+| **60 séances** | **+8,0 %** | **+6,5 %** | **−0,5 %** | **1,40 %** |
+
+Le seuil passe de **0,54 % à 1,40 % par sens** contre les 1,50 % facturés : on
+était à un facteur trois, on est à la limite. La raison est que le signal
+court **se conserve bien au-delà de son horizon de mesure** — détenu au
+trimestre, il paie la rotation quatre fois moins souvent tout en gardant
+l'essentiel de son avantage.
+
+Ce n'est pas encore une stratégie rentable, et le conseiller continue de dire
+« ne rien faire » : à 1,50 % l'écart est de −0,5 %, c'est-à-dire zéro à la
+précision de la mesure. Mais la marge à combler n'est plus un ordre de
+grandeur, elle est de quelques dixièmes de pourcent — le niveau d'un
+intermédiaire moins cher.
 
 #### L'IC et l'argent ne disent pas la même chose
 
@@ -796,7 +853,7 @@ s'applique où :
 | **Backtest** | Ce qu'aurait donné le classement s'il avait été suivi. |
 | **Données** | La couverture de l'archive et le journal de collecte. |
 
-Le résultat le mieux établi du projet — deux effets sur 216 résistent, et
+Le résultat le mieux établi du projet — trente-trois effets sur 360 résistent, et
 il coûte plus de frais qu'il ne rapporte — s'affiche **avant** les
 onglets, pas au fond de l'un d'eux : la hiérarchie visuelle doit dire la
 force de la preuve.

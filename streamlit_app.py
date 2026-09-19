@@ -1951,9 +1951,10 @@ if onglets[2].open:
                     "moins bien sur ce qui décide — l'avantage des dix "
                     "premières valeurs achetables tombe de +7,7 % à +5,8 % "
                     "annualisés. Des poids appris par validation imbriquée "
-                    "font moins bien encore : onze ans à un mois d'horizon ne "
-                    "donnent qu'une centaine de périodes vraiment "
-                    "indépendantes, trop peu pour apprendre des poids."
+                    "font moins bien encore : même à cinq séances d'horizon, "
+                    "onze ans ne donnent que cinq cents périodes vraiment "
+                    "indépendantes, trop peu pour apprendre des poids sur "
+                    "une grandeur aussi bruyante."
                 )
 
             # Le constat le plus important de l'onglet, et il ne tient pas

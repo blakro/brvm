@@ -57,8 +57,8 @@ et dégrade les dix lignes qu'on achète.
 Les deux vertus qui avaient fait pencher pour la combinaison sont
 conservées autrement. `prediction.SOURCES_COMBINEES` est devenue un ORDRE de
 préférence et non une moyenne : sans scikit-learn, les poids de fiabilité
-prennent la suite et rendent encore un classement appris (+3,37 % annualisés
-à vingt séances). Et la protection contre la période où une source se
+prennent la suite et rendent encore un classement appris (+13,5 % annualisés
+contre +15,5 % pour la régression, à l'horizon livré). Et la protection contre la période où une source se
 trompe est désormais assurée par la porte de production de `valider`, qui
 refuse le modèle si son haut de liste a perdu hors échantillon — une
 garantie mesurée plutôt qu'un effet de moyenne.
