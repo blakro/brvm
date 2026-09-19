@@ -179,13 +179,81 @@ MOTIF_INDISPONIBLE = (
 # a été retenu et rejeté est dans `features.TRAITS_PREDICTION`.
 TRAITS = list(features.TOUS_TRAITS)
 
-# Les trois sources combinées, dans l'ordre où elles sont rendues.
+# Les trois sources mesurées, dans l'ordre où elles sont rendues. Toutes
+# les trois sont MESURÉES et affichées ; seules `SOURCES_COMBINEES` entrent
+# dans le score qui part en production.
 SOURCES = ("modele", "fiabilite", "composite")
+
+# LE COMPOSITE NE SE COMBINE PLUS, ET IL RESTE LE REPLI.
+#
+# Il pesait un tiers du score. Mesuré sur le rendement de COURS seul et sur
+# les valeurs réellement négociables, le retirer de la combinaison gagne à
+# TOUS LES HORIZONS testés, et sur la seule première moitié de l'archive —
+# donc sans regarder la seconde, qui sert de juge :
+#
+#     horizon    avec composite    sans    (avantage annualisé du haut
+#         5           +12,54 %   +17,30 %   de liste, 1re moitié)
+#        10            +6,46 %   +10,27 %
+#        20            +3,80 %    +6,94 %
+#        40            +2,24 %    +3,55 %
+#        60            +2,11 %    +3,37 %
+#
+# Cinq horizons sur cinq. La seconde moitié confirme (+12,77 % à H=5).
+#
+# CE RÉSULTAT CONTREDIT CELUI QUI L'A PRÉCÉDÉ, et c'est instructif : jugé à
+# l'IC, retirer le composite FAISAIT PERDRE (+0,045 -> +0,037), parce qu'il
+# ordonne honorablement le ventre du marché. Jugé au haut de liste — les dix
+# valeurs qu'on achète — il coûte. Les deux mesures sont justes ; c'est la
+# seconde qui décide d'un achat.
+#
+# Il demeure la source de repli quand la porte de production refuse la
+# combinaison : il n'estime rien, donc il ne peut pas surajuster.
+#
+# ET FINALEMENT UNE SEULE SOURCE, PAR ORDRE DE PRÉFÉRENCE.
+#
+# `SOURCES_COMBINEES` n'est pas une liste à moyenner mais un ORDRE : on
+# retient la première source disponible. La moyenne des deux sources
+# apprises perdait contre la régression seule, aux trois horizons testés et
+# sur les deux moitiés de l'archive — donc en choisissant sur la première,
+# qui sert seule à décider :
+#
+#     horizon   régression seule   moyennée avec les poids de fiabilité
+#         10    +11,37 %  (1re)    +10,27 %
+#         20     +9,13 %            +6,94 %
+#         40     +5,33 %            +3,55 %
+#
+# La seconde moitié confirme aux trois horizons (+10,53 / +6,30 / +2,92 %
+# contre +9,59 / +4,64 / +0,63 %).
+#
+# POURQUOI L'ORDRE PLUTÔT QU'UN NOM DE SOURCE EN DUR. Les poids de
+# fiabilité ne demandent pas scikit-learn, la régression si. Garder l'ordre
+# fait qu'un environnement sans scikit-learn rend encore un classement
+# appris — dégradé, et mesuré : +3,37 % annualisés à vingt séances — au lieu
+# de retomber directement sur le composite, qui n'apprend rien.
+#
+# Le nom « combinaison » est conservé dans les clés et les libellés parce
+# que l'app, la ligne de commande et les tests le lisent ; ce qu'il désigne
+# est désormais « le score retenu », et c'est ce que dit son libellé.
+SOURCES_COMBINEES = ("modele", "fiabilite")
+
+
+def _score_retenu(sources: dict) -> "pd.Series":
+    """La première source disponible de `SOURCES_COMBINEES`.
+
+    « Disponible » veut dire présente ET non entièrement vide : une source
+    qui se tait — les poids de fiabilité quand aucun trait n'a fait sa
+    preuve — laisse la place à la suivante.
+    """
+    for nom in SOURCES_COMBINEES:
+        serie = sources.get(nom)
+        if serie is not None and pd.Series(serie).notna().any():
+            return apprentissage.combiner({nom: serie})
+    return apprentissage.combiner({})
 
 AVERTISSEMENTS = (
     "cible : surperformer le marché, pas monter",
     "validation glissante avec purge des étiquettes recouvrantes",
-    "trois sources équipondérées : poids appris rejetés, faute de périodes",
+    "une seule source apprise retenue ; moyenner les sources perdait",
     "IC exploitable : 0,02 à 0,05 ; au-delà de 0,30, cherchez la fuite",
     "l'écart mesuré ne survit pas aux 3 % de frais l'aller-retour",
 )
@@ -368,6 +436,13 @@ def construire_echantillon(
 
     colonnes = {nom: matrices[nom].reindex(fenetre).stack(future_stack=True)
                 for nom in TRAITS}
+    # LA LIQUIDITÉ EN FRANCS, ET PAS SEULEMENT SON RANG. Le rang suffit au
+    # modèle ; il ne suffit pas à dire si une ligne est ACHETABLE. Le seuil
+    # d'éligibilité de `scoring` est un montant, et sans ce montant l'avantage
+    # du haut de liste se mesure aussi sur des valeurs que personne ne peut
+    # acheter — 40 % des lignes de l'échantillon, mesuré.
+    colonnes["liquidite_fcfa"] = matrices["liquidite"].reindex(
+        fenetre).stack(future_stack=True)
     colonnes["rendement_futur"] = futur.reindex(fenetre).stack(
         future_stack=True)
     colonnes["cotee"] = matrices["cotee"].reindex(fenetre).stack(
@@ -401,6 +476,9 @@ def construire_echantillon(
     # Le rendement réalisé est conservé tel quel : c'est lui qui sert à
     # l'IC, qui mesure l'ordre prédit et non une frontière binaire.
     bloc["rendement_futur"] = table["rendement_futur"]
+    # Après le filtre de séance, donc aligné sur `table` comme les autres :
+    # la colonne prélevée plus haut aurait gardé les lignes écartées.
+    bloc["liquidite_fcfa"] = table["liquidite_fcfa"]
     bloc["date"] = table["date"]
     bloc["ticker"] = table["ticker"]
     bloc = bloc.reset_index(drop=True)
@@ -612,6 +690,10 @@ def valider(
     # Le haut de liste se mesure sur le nombre de lignes que l'utilisateur
     # détiendrait vraiment, qui est celui du backtest et de l'app.
     positions = int(conf.get("backtest", {}).get("positions", 10))
+    # Le seuil d'achetabilité est celui de `scoring`, et pas un autre : c'est
+    # lui qui décide qui entre au classement, donc ce qu'on peut acheter.
+    seuil_liquidite = float(conf.get("analyse", {}).get(
+        "volume_median_min_fcfa", 0)) or None
 
     echantillon = construire_echantillon(cours, conf, referentiel)
     echantillon, exo = _joindre_exogenes(echantillon, exogenes, referentiel, conf)
@@ -629,7 +711,12 @@ def valider(
         "motif_retenue": None,
         "avantage": {"avantage": float("nan"), "positions": positions,
                      "t": float("nan"), "significatif": False, "dates": 0,
-                     "blocs": 0, "erreur_type": float("nan")},
+                     "blocs": 0, "erreur_type": float("nan"),
+                     "liquidite_min": seuil_liquidite},
+        "avantage_tout": {"avantage": float("nan"), "positions": positions,
+                          "t": float("nan"), "significatif": False,
+                          "dates": 0, "blocs": 0,
+                          "erreur_type": float("nan"), "liquidite_min": None},
         "calibrage": apprentissage.Calibrage(),
         "avertissements": AVERTISSEMENTS,
     }
@@ -669,7 +756,7 @@ def valider(
             train, test, traits, poids_config, horizon, exigence, membres)
         for nom, serie in sources.items():
             test[f"score_{nom}"] = serie
-        test["score_combinaison"] = apprentissage.combiner(sources)
+        test["score_combinaison"] = _score_retenu(sources)
 
         ligne = {
             "periode": f"{min(frontieres[rang])} → {max(frontieres[rang])}",
@@ -710,6 +797,8 @@ def valider(
         detail_sources[nom] = {
             **stab, "mesure": mesurer_ic(tout, f"score_{nom}", horizon),
             "avantage": apprentissage.mesure_avantage(
+                tout, f"score_{nom}", horizon, positions, seuil_liquidite),
+            "avantage_tout": apprentissage.mesure_avantage(
                 tout, f"score_{nom}", horizon, positions)}
 
     stabilite = detail_sources.get("combinaison", _stabilite([]))
@@ -767,8 +856,13 @@ def valider(
         "stabilite": stabilite,
         "retenue": retenue,
         "motif_retenue": motif_retenue,
-        # L'avantage du haut de liste de CE QUI PART en production.
+        # L'avantage du haut de liste de CE QUI PART en production, mesuré
+        # sur les seules valeurs ACHETABLES — voir `mesure_avantage`.
         "avantage": apprentissage.mesure_avantage(
+            tout, f"score_{retenue}", horizon, positions, seuil_liquidite),
+        # Le même, sur tout l'échantillon : il est plus flatteur d'un facteur
+        # deux, et il est rendu pour que l'écart soit visible plutôt que subi.
+        "avantage_tout": apprentissage.mesure_avantage(
             tout, f"score_{retenue}", horizon, positions),
         "calibrage": calibrage,
         "poids_fiabilite": dernier_detail["poids_fiabilite"],
@@ -869,7 +963,7 @@ def predire(
         incertitude = ensemble.dispersion(bloc_a)
 
     retenue = (validation or {}).get("retenue", "combinaison")
-    score = (apprentissage.combiner(sources) if retenue == "combinaison"
+    score = (_score_retenu(sources) if retenue == "combinaison"
              else sources["composite"])
     if score.empty:
         return pd.DataFrame(columns=colonnes_vides)
@@ -914,7 +1008,11 @@ def _avec_incertitude(mesure: dict) -> str:
 
 
 LIBELLES_SOURCES = {
-    "combinaison": "combinaison (retenue)",
+    # « Combinaison » est un nom d'histoire : le score retenu est celui de la
+    # première source disponible, mesurée meilleure que toute moyenne. Le
+    # libellé reste COURT parce qu'il sert de première colonne à un tableau
+    # aligné — la version longue cassait la mise en page de `expliquer`.
+    "combinaison": "score retenu",
     "modele": "régression logistique",
     "fiabilite": "poids de fiabilité appris",
     "composite": "composite de la configuration",
@@ -954,15 +1052,21 @@ def expliquer(validation: dict) -> str:
     # LA DISPERSION, QUI EST LE VRAI SUJET. Un IC moyen sans elle laissait
     # croire à une mesure stable là où les périodes allaient de +0,29 à
     # -0,28.
+    _largeur = max(len(v) for v in LIBELLES_SOURCES.values())
     lignes += [
         "Ce que la moyenne cache — dispersion d'une période à l'autre :",
         "",
-        f"  {'source':<26} {'IC':>7} {'IR':>6} {'périodes >0':>12} {'pire':>7}",
-        f"  {'-' * 26} {'-' * 7} {'-' * 6} {'-' * 12} {'-' * 7}",
+        # LARGEUR CALCULÉE, ET NON 26 EN DUR. Un libellé plus long que la
+        # colonne repoussait toute la ligne vers la droite et désalignait le
+        # tableau — « composite de la configuration » le faisait déjà avant
+        # qu'une source change de nom. La largeur suit les libellés.
+        f"  {'source':<{_largeur}} {'IC':>7} {'IR':>6} {'périodes >0':>12} "
+        f"{'pire':>7}",
+        f"  {'-' * _largeur} {'-' * 7} {'-' * 6} {'-' * 12} {'-' * 7}",
     ]
     for nom, mes in validation["sources"].items():
         lignes.append(
-            f"  {LIBELLES_SOURCES.get(nom, nom):<26} {mes['ic']:>+7.3f} "
+            f"  {LIBELLES_SOURCES.get(nom, nom):<{_largeur}} {mes['ic']:>+7.3f} "
             f"{mes['ir']:>+6.2f} "
             f"{mes['periodes_positives']:>5} / {mes['periodes']:<4} "
             f"{mes['pire']:>+7.3f}")

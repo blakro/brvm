@@ -79,7 +79,7 @@ DEFAUTS: dict[str, dict] = {
         "min_par_secteur": 5,
     },
     "prediction": {
-        # Horizon en séances — environ trois mois.
+        # Horizon en séances — environ un mois de cotation.
         #
         # PAS UN HORIZON JOURNALIER, ET C'EST STRUCTUREL. La BRVM cote par
         # fixing, avec une limite de variation de ±7,5 % et des lignes qui
@@ -87,7 +87,49 @@ DEFAUTS: dict[str, dict] = {
         # cours ainsi figés, un modèle apprend « demain ≈ aujourd'hui », en
         # tire un R² magnifique, et produit un backtest brillant et
         # inexécutable. Le signal exploitable est à un à six mois.
-        "horizon": 60,
+        #
+        # VINGT SÉANCES, ET NON SOIXANTE. Mesuré sur le rendement de COURS
+        # seul et sur les seules valeurs négociables (médiane de volume au
+        # moins 1 M FCFA) — avantage annualisé des dix premières, avec les
+        # deux moitiés d'archive pour juge :
+        #
+        #     horizon   avantage      t   1re moitié   2nde moitié
+        #           5    +15,50 %  +5,21     +16,48 %      +14,51 %
+        #          10    +10,95 %  +3,77     +11,37 %      +10,53 %
+        #          20     +7,72 %  +2,80      +9,13 %       +6,30 %
+        #          40     +4,13 %  +1,56      +5,33 %       +2,92 %
+        #          60     +3,61 %  +1,19      +4,17 %       +3,06 %
+        #
+        # L'horizon d'un mois rend donc plus du double du trimestriel. Le
+        # classement est monotone — plus court est meilleur, sans exception,
+        # jusqu'à la semaine — et POSITIF SUR LES DEUX MOITIÉS à tous les
+        # horizons, ce qui le distingue du mirage de cadence documenté sous
+        # `pas_rebalancement`.
+        #
+        # POURQUOI PAS CINQ SÉANCES, QUI MESURE LE MIEUX. Deux raisons, et
+        # aucune n'est le confort. D'abord la robustesse à l'exécution : une
+        # séance de retard coûte 30 % de l'avantage à cinq séances contre
+        # 15 % à vingt, et sur une place où une ligne se traite quelques fois
+        # par mois, « exécuter demain » n'est pas acquis. Ensuite la
+        # corroboration : le balayage de 162 cases corrigé par
+        # Benjamini-Hochberg dans `recherche.py` avait déjà désigné le choc
+        # de volume À VINGT SÉANCES comme seul survivant. Deux analyses
+        # indépendantes désignent le même horizon, ce qui est un fondement
+        # plus solide que le maximum d'une courbe.
+        #
+        # Quatre contrôles d'artefact ont précédé ce choix, tous passés :
+        # la part d'étiquettes assises sur un cours reporté ne croît pas
+        # quand l'horizon raccourcit (6,5 % à 5 séances, 6,7 % à 60) et
+        # restreindre la mesure aux cours réels AMÉLIORE le résultat ;
+        # l'avantage survit à un décalage d'entrée de trois séances ; il ne
+        # dépend pas du niveau de cours (+8,6 / +6,2 / +6,2 % par tercile) ;
+        # et la courbe en horizon est lisse, sans pic à l'endroit où
+        # l'horizon coïncide avec les fenêtres des traits.
+        #
+        # À NE PAS CONFONDRE AVEC `pas_rebalancement`, qui dit à quelle
+        # fréquence on ACHÈTE et que les frais commandent — voir plus bas.
+        # Prédire à un mois n'oblige pas à tourner tous les mois.
+        "horizon": 20,
         # Périodes de test successives de la validation glissante.
         #
         # DIX ET NON QUATRE, ET C'ÉTAIT UN DÉFAUT DE MESURE. Avec quatre
@@ -147,6 +189,25 @@ DEFAUTS: dict[str, dict] = {
         # fois l'an, soit plus de trente points de performance à rattraper
         # avant de gagner un centime. Quatre fois par an est déjà
         # ambitieux ; c'est le plancher qu'impose ce marché.
+        #
+        # SOIXANTE ALORS QUE LE MODÈLE PRÉDIT À VINGT, ET C'EST MESURÉ, PAS
+        # UN OUBLI. Prédire à un mois n'oblige pas à tourner tous les mois :
+        # le signal du mois se conserve, les frais du mois non. Rejeu du
+        # modèle livré sur le COURS SEUL, écart annuel contre l'univers :
+        #
+        #     pas    frais nuls   0,25 %   1,50 %   seuil
+        #      20        +3,9 %    +0,0 %  -17,8 %   0,25 %
+        #      60        +2,8 %    +1,5 %   -4,9 %   0,54 %
+        #
+        # Le rééquilibrage mensuel gagne un peu plus à frais nuls et perd
+        # trois fois plus dès qu'on paie : son seuil de rentabilité est de
+        # 0,25 % par sens contre 0,54 % pour le trimestriel. C'est ce seuil
+        # qui décide, parce que c'est lui qu'on compare au devis d'une SGI.
+        #
+        # (Sur soixante rééquilibrages, ces chiffres ne sont pas fins : le
+        # balayage voisin donnait `pas = 40` à -2,3 %, hors de toute
+        # progression. C'est l'ordre de grandeur qui tranche, pas la
+        # décimale.)
         "pas_rebalancement": 60,
         # On décide sur la clôture de t et on achète à celle de t+1. Se
         # servir du même cours pour décider et pour exécuter suppose de
