@@ -279,6 +279,60 @@ Elle n'entre donc ni dans le modèle ni dans la grille de `recherche.py`,
 dont la règle vise les traits qu'emploie la prédiction. La mesure est
 consignée ici pour qu'on ne la refasse pas — ou, si on la refait, pour
 qu'on la passe à l'entrée décalée dès le premier essai.
+
+TREIZE AUTRES ESSAIS, ET UN PLAFOND
+-----------------------------------
+Ensuite, treize variantes du modèle de PRIX, déclarées avant d'être
+mesurées, par trois tours. Le banc d'essai réécrit la validation de
+`prediction.valider` et en reproduit les chiffres à l'identique (IC
++0,0771, haut de liste +16,1 %) : seul ce qu'on y change diffère. Écarts
+appariés à la version livrée, haut de liste en points par an :
+
+                                           écart d'IC      haut de liste
+                                                  (t)        (t)  1re  2nde
+    L'ÉTIQUETTE
+    lissée sur 5, 10 et 20 séances      -0,0002 (-0,1)  -0,2 (-0,1) +0,9 -0,9
+    extrêmes seuls (30 % de chaque côté) +0,0012 (+0,6)  -0,1 (-0,1) +2,1 -1,8
+    continue, par régression ridge       +0,0010 (+0,6)  -0,2 (-0,1) +1,1 -1,1
+    sorties réellement traitées seules   -0,0003 (-0,2)  +0,2 (+0,2) +0,4 -0,1
+    L'APPRENTISSAGE
+    récence, demi-vie de deux ans        -0,0004 (-0,2)  -1,4 (-1,0) -0,0 -2,5
+    trois modèles, à 5, 10 et 20 séances -0,0008 (-0,4)  -0,1 (-0,1) +0,9 -0,9
+    deux niveaux, secteur et marché      +0,0012 (+0,3)  -1,4 (-0,7) -2,0 -1,0
+    score moyenné sur cinq séances       -0,0297 (-6,5)  -6,0 (-2,6) -3,5 -7,9
+    DE L'INFORMATION NOUVELLE
+    pression acheteuse (volume signé)    +0,0005 (+0,2)  +0,2 (+0,1) +2,4 -1,4
+      la même + extrêmes seuls           +0,0014 (+0,4)  +0,2 (+0,1) +3,3 -2,2
+    butées (variation d'au moins 7 %)    +0,0001 (+0,0)  +0,4 (+0,5) +1,0 -0,0
+    position de la clôture dans le jour  +0,0037 (+1,6)  +0,2 (+0,1) +0,8 -0,3
+    attention qui monte ou retombe       -0,0000 (-0,1)  -0,0 (-0,0) +1,0 -0,8
+
+(Les butées sont comptées à 7 % et non 7,5 : l'arrondi au pas de cotation
+empêche souvent d'atteindre la limite exacte.)
+
+AUCUN |t| N'ATTEINT 2, sauf pour une perte. Et les dix variantes qui
+gagnent sur la première moitié perdent toutes sur la seconde. Ce n'est pas
+une malédiction, c'est de l'arithmétique : quand l'écart total est nul, un
+gain sur une moitié impose une perte sur l'autre. La règle des moitiés les
+arrête toutes, et c'est précisément son rôle.
+
+Trois constats, plus utiles que le tableau :
+
+1. LA LIMITE DE ±7,5 % NE PRODUIT PAS DE CONTINUATION. Sur d'autres places
+   à limite de prix, une valeur qui touche la butée a tendance à
+   poursuivre ; ici elle se RETOURNE (IC seul -0,026), comme une clôture
+   en haut de la fourchette du jour (-0,056). Le trait de retournement du
+   modèle porte déjà cette information : ajoutée, elle ne déplace rien.
+
+2. L'INFORMATION DU MODÈLE EST FRAÎCHE. Moyenner son score sur cinq
+   séances coûte près de 40 % de l'IC. Ce que le modèle sait, il le sait le jour
+   même ; c'est aussi pourquoi l'entrée décalée lui coûte.
+
+3. LE PLAFOND EST DANS LES DONNÉES, PAS DANS LE MODÈLE. Étiquette,
+   pondération, forme du modèle, structure, et quatre traits tirés du
+   cours, du volume et de la fourchette : rien ne bouge. Avec neuf traits
+   déjà construits sur ces mêmes séries, le prochain gain, s'il existe,
+   viendra d'une source que l'archive n'a pas encore.
 """
 
 from __future__ import annotations

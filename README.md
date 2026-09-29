@@ -283,7 +283,7 @@ Six changements, par ordre d'importance :
    sur les valeurs achetables — et la section « Le modèle de prix » ci-dessous
    donne la preuve de chacun.
 
-Et **onze idées reçues, mesurées puis jetées** — elles sont documentées
+Et **douze idées reçues, mesurées puis jetées** — elles sont documentées
 dans `src/brvm/apprentissage.py`, parce qu'un échec qu'on ne consigne pas
 sera retenté :
 
@@ -370,6 +370,17 @@ sera retenté :
   **sous** celui du modèle livré (+11,6 % contre +12,3 %). Ce qu'elle ajoute
   se joue dans la séance qui suit la clôture — un rebond de fixing plutôt
   qu'un mouvement de cours. Le détail est dans `src/brvm/apprentissage.py`.
+- **Treize réglages et traits de plus, déclarés avant d'être mesurés.** Sur
+  l'étiquette (lissée, extrêmes seuls, continue, sans cours reportés), sur
+  l'apprentissage (récence, plusieurs horizons, secteur et marché, score
+  lissé) et sur de l'information nouvelle (volume signé, **butées de
+  ±7,5 %**, position de la clôture dans le jour, attention qui monte).
+  Aucun ne bat le modèle livré : aucun écart n'atteint |t| = 2, sauf une
+  perte, et les dix qui gagnent sur la première moitié perdent toutes sur
+  la seconde. Les butées, contrairement à ce qu'on observe sur d'autres
+  places à limite de prix, ne poursuivent pas : elles se retournent, ce que
+  le modèle sait déjà. **Le plafond est dans les données** — cours et
+  volumes ont rendu ce qu'ils avaient.
 
 Un cinquième arbitrage mérite d'être écrit parce qu'il ne s'est pas joué
 sur un chiffre : **ranger dans le secteur** plutôt que retrancher la
