@@ -118,7 +118,8 @@ DEFAUTS: dict[str, dict] = {
         #
         # Le délai d'exécution d'abord : on ne peut pas acheter au cours qui
         # a servi à décider, il est connu après la clôture. Avantage annualisé
-        # selon la séance d'entrée :
+        # selon la séance d'entrée, le modèle étant réentraîné pour chaque
+        # délai k sur le rendement de t+k à t+k+5 :
         #
         #   horizon    t+0       t+1       t+2       t+3
         #         5  +15,50 %  +12,05 %   +9,20 %   +7,12 %
@@ -234,9 +235,9 @@ DEFAUTS: dict[str, dict] = {
         # Le classement garde un avantage au trimestre — mesuré sur toutes
         # les dates plutôt que sur 42, ses dix premières achetables battent
         # l'univers de +2,4 % l'an avant frais, sur chaque moitié de
-        # l'archive — mais c'est le cinquième de ce qu'il rend à la semaine
-        # (+11,4 %), et les 1,50 % facturés en sont à un ordre de grandeur,
-        # pas à « quelques dixièmes ».
+        # l'archive — mais c'est le cinquième de ce qu'il rend à la semaine,
+        # et les 1,50 % facturés en sont à un ordre de grandeur, pas à
+        # « quelques dixièmes ».
         #
         # La valeur reste soixante pour la raison du paragraphe précédent,
         # qui, elle, tient : aux frais réels, tourner moins souvent perd moins
