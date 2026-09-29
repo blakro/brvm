@@ -202,20 +202,26 @@ ajustée, c'est-à-dire un retour vers la moyenne, et une moyenne mobile d'une
 ligne de pandas le capte MIEUX, en millisecondes. Donnés comme traits à la
 régression, sur les mêmes dates :
 
-                                  IC    haut de liste   entrée t+1
-    livré                     +0,078       +10,2 %       +8,8 %
-    + Prophet                 +0,086       +14,3 %      +12,5 %
-    + moyenne mobile 20       +0,102       +16,5 %      +13,8 %
-    + moyenne mobile + Prophet +0,100      +18,3 %      +13,1 %
+                                      IC    haut de liste
+    livré                         +0,078       +10,2 %
+    + Prophet                     +0,086       +14,3 %
+    + moyenne mobile 20           +0,102       +16,5 %
+    + moyenne mobile + Prophet    +0,100       +18,3 %
 
-La moyenne mobile présente, Prophet n'ajoute rien qui tienne : l'IC baisse,
-l'avantage à l'entrée réaliste aussi. Ce qu'il voit encore au-delà de quatre
-moyennes mobiles et des traits du modèle vaut un IC de +0,018. Ce n'est pas
-de quoi payer une dépendance lourde, et une validation qui demanderait
-près de 97 000 ajustements là où l'app tient en quinze secondes.
+(Le modèle n'apprend ici que sur ces dates, une sur cinq : les niveaux ne se
+comparent qu'à l'intérieur du tableau. C'est l'archive complète, plus bas,
+qui juge la moyenne mobile elle-même.)
 
-LA MOYENNE MOBILE, ELLE, A PASSÉ LES DEUX PREMIÈRES PORTES ET PAS LA
-TROISIÈME — et c'est la troisième qui décide.
+La moyenne mobile présente, Prophet n'ajoute rien de mesurable : écart
+apparié de -0,001 d'IC (t -0,5) et de +1,8 point au haut de liste (t +1,1).
+Ce qu'il voit encore au-delà de quatre moyennes mobiles et des traits du
+modèle vaut un IC de +0,018. Ce n'est pas de quoi payer une dépendance
+lourde, et une validation qui demanderait près de 97 000 ajustements là où
+l'app tient en quinze secondes.
+
+LA MOYENNE MOBILE, ELLE, VA PLUS LOIN — ET TOMBE AU CONTRÔLE QUE PASSE LE
+MODÈLE LIVRÉ. Tout ce qui suit est jugé sur le COURS SEUL, comme la section
+« Le modèle de prix » du README : ni frais, ni dividende, ni rejeu.
 
 1. LE TEST MULTIPLE. Ajoutée à la grille de `recherche.py` (390 cases),
    « cours rapporté à sa moyenne de 20 séances » en devient la case la
@@ -226,41 +232,53 @@ TROISIÈME — et c'est la troisième qui décide.
    mesuré en pesant davantage les toutes dernières séances.
 
 2. LE PROTOCOLE DE PRODUCTION. Dixième trait de la régression, dix
-   découpes, archive complète : IC +0,077 -> +0,098, IR inchangé (1,86 ->
-   1,83), haut de liste +16,1 -> +18,2 % l'an, en hausse sur les deux
-   moitiés (12,4 -> 16,0 et 18,9 -> 19,9).
+   découpes, archive complète, écarts appariés à la version livrée :
 
-3. L'EXÉCUTION. On ne peut pas acheter au cours qui a servi à décider : il
-   n'est connu qu'après la clôture. Une séance plus tard, le gain a
-   disparu — le haut de liste passe même sous celui du modèle livré — et
-   l'écart se creuse ensuite :
+                            livré    + moyenne 20    écart apparié
+        IC                 +0,077        +0,098      +0,021  t +4,2
+        IR                   1,86          1,83
+        pire période       +0,018        +0,005
+        haut de liste     +16,1 %       +18,2 %      +2,1 pts  t +0,8
+          1re moitié      +12,4 %       +16,0 %
+          2nde moitié     +18,9 %       +19,9 %
 
-        entrée           t+0       t+1       t+2       t+3
-        livré        +16,1 %   +11,4 %   +10,0 %    +9,0 %
-        + moyenne    +18,2 %   +10,8 %    +8,7 %    +6,6 %
+   L'ordre de toute la cote s'améliore nettement. Le haut de liste, lui,
+   gagne deux points que rien ne distingue du hasard, sans que l'IR ni la
+   pire période ne suivent. La règle des moitiés du projet l'aurait pourtant
+   laissé passer — elle choisit 20 séances sur la première (16,0 contre 12,6
+   à 10 séances et 10,8 à 5) et la seconde confirme d'un point. C'est le
+   contrôle suivant qui tranche.
 
-   Et le backtest, sur le cours seul, en moyenne sur des calendriers de
-   rééquilibrage décalés — voir `config.py` pour la raison de cette moyenne :
+   Deux autres contrôles de la section « Le modèle de prix » ne l'arrêtent
+   pas. Sur les seules sorties réellement traitées, l'écart tient (IC
+   +0,079 -> +0,101). Par tercile de niveau de cours il reste positif
+   partout, mais décroît avec le cours (+0,037, +0,028, +0,015) : il est le
+   plus fort là où un pas de cotation pèse le plus.
 
-        écart à l'univers     sans frais   0,25 %   1,50 % par sens
-        trimestre   livré        +0,7 %    -0,5 %    -6,3 %
-                    + moyenne    +0,2 %    -1,0 %    -6,7 %
-        mois        livré        +4,4 %    +1,1 %   -14,1 %
-                    + moyenne    +3,7 %    +0,5 %   -14,5 %
+3. L'ENTRÉE DÉCALÉE — le contrôle dont le README dit qu'« un effet de
+   rebond de fourchette se serait effondré dès la première » séance. Même
+   méthode que son tableau : pour chaque délai k, le modèle est RÉENTRAÎNÉ
+   sur le rendement de t+k à t+k+5.
 
-   Moins bien aux deux cadences, avec comme sans frais.
+                      t+0       t+1       t+2       t+3
+        livré      +16,1 %   +12,3 %    +9,6 %    +7,5 %
+        + moyenne  +18,2 %   +11,6 %    +8,7 %    +4,8 %
+        écart IC   +0,021    +0,005    +0,005    +0,003
+            (t)      +4,2      +1,8      +1,6      +0,9
 
-L'IC, lui, reste plus haut avec le délai (+0,049 -> +0,055 à t+1) : c'est
-encore la divergence entre l'ordre de toute la cote et les dix lignes qu'on
-achète. L'explication la plus simple, que rien ici ne démontre : ce que la
-moyenne mobile ajoute au haut de liste, c'est un fixing qui a débordé et se
-résorbe au suivant — soit exactement la séance qu'aucun ordre ne peut
-saisir.
+   Le modèle livré passe ce contrôle : son avantage survit à trois séances
+   de retard. Le supplément de la moyenne mobile, lui, s'effondre dès la
+   première — les trois quarts de son gain d'IC disparaissent, le reste
+   n'est plus significatif, et le haut de liste passe sous celui du modèle
+   livré. Ce qu'elle ajoute se joue dans la séance qui suit la clôture :
+   c'est la signature que ce contrôle existe pour détecter — un fixing qui
+   déborde et se résorbe au suivant — plutôt qu'un mouvement de cours
+   durable.
 
 Elle n'entre donc ni dans le modèle ni dans la grille de `recherche.py`,
 dont la règle vise les traits qu'emploie la prédiction. La mesure est
 consignée ici pour qu'on ne la refasse pas — ou, si on la refait, pour
-qu'on la refasse avec une entrée à t+1 dès le premier essai.
+qu'on la passe à l'entrée décalée dès le premier essai.
 """
 
 from __future__ import annotations

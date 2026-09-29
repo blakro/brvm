@@ -360,16 +360,16 @@ sera retenté :
   séances fait mieux (+0,102) en millisecondes. Ajouté au modèle à côté de
   cette moyenne mobile, Prophet n'apporte plus rien qui tienne.
 - **L'écart à la moyenne mobile, que Prophet cachait.** C'est l'idée qui est
-  allée le plus loin avant de tomber. Elle devient la **case la plus forte**
-  des 390 du balayage (t −9,6), et dixième trait du modèle elle porte l'IC
-  de +0,077 à **+0,098**, le haut de liste progressant sur les deux moitiés
-  de l'archive. Puis on entre une
-  séance plus tard, comme il le faut puisque la clôture n'est connue
-  qu'après coup, et l'avantage des dix premières passe **sous** celui du
-  modèle livré (+10,8 % contre +11,4 %). Rejouée avec frais, elle fait moins
-  bien aux deux cadences, sans frais compris. Le chiffre et son explication
-  sont dans `src/brvm/apprentissage.py` ; la leçon, c'est de mesurer
-  l'entrée à t+1 dès le premier essai.
+  allée le plus loin avant de tomber, et elle tombe sur le prix seul. Elle
+  devient la **case la plus forte** des 390 du balayage (t −9,6), et
+  dixième trait du modèle elle porte l'IC de +0,077 à **+0,098** (écart
+  apparié t +4,2). Mais le haut de liste ne gagne que deux points, que rien
+  ne distingue du hasard (t +0,8), et elle échoue au contrôle que passe le
+  modèle livré, l'entrée décalée d'une séance : les trois quarts du gain
+  d'IC disparaissent dès t+1, et l'avantage des dix premières passe
+  **sous** celui du modèle livré (+11,6 % contre +12,3 %). Ce qu'elle ajoute
+  se joue dans la séance qui suit la clôture — un rebond de fixing plutôt
+  qu'un mouvement de cours. Le détail est dans `src/brvm/apprentissage.py`.
 
 Un cinquième arbitrage mérite d'être écrit parce qu'il ne s'est pas joué
 sur un chiffre : **ranger dans le secteur** plutôt que retrancher la
@@ -462,7 +462,8 @@ aucune au-delà de vingt.
 L'autre raison avancée alors — la robustesse à l'exécution — ne tient pas
 non plus, et le chiffre que j'avais donné (30 % d'avantage perdu par séance
 de retard à cinq séances) venait d'une variante à deux sources. Sur la
-configuration livrée :
+configuration livrée — le modèle étant réentraîné, pour chaque délai k, sur
+le rendement de t+k à t+k+5 :
 
 | Horizon | entrée t+0 | t+1 | t+2 | t+3 |
 |---|---|---|---|---|
