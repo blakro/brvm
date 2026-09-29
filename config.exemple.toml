@@ -74,14 +74,21 @@ impact_pourcent = 0.5
 fenetre_variation = 60
 retard = 40
 
-# Série → secteur qu'elle concerne. Les noms sont libres : ce sont ceux
-# employés dans le CSV chargé par « brvm importer-exogenes ».
+# Série → valeurs qu'elle concerne. Les noms sont libres : ce sont ceux
+# employés dans le CSV chargé par « brvm importer-exogenes ». Des listes de
+# valeurs et non des secteurs : le modèle compare chaque valeur à son
+# secteur, et une série versée à tout un secteur n'y apprend rien.
+# Mesurées à cinq séances, ces séries n'améliorent pas le modèle de prix.
 [exogenes.correspondance]
-caoutchouc_tsr20 = "Consommation de Base"
-huile_palme_cpo  = "Consommation de Base"
-sucre            = "Consommation de Base"
-eur_usd          = "Consommation de Base"
-taux_bceao       = "Services Financiers"
+caoutchouc_tsr20 = ["SPHC", "SOGC"]
+huile_palme      = ["PALC", "SOGC"]
+sucre            = ["SCRC"]
+cacao            = ["NTLC"]
+cafe_robusta     = ["NTLC"]
+brent            = ["SHEC", "TTLC", "TTLS", "SMBC"]
+coton            = ["UNXC"]
+cuivre           = ["CABC"]
+huile_coco       = ["SICC"]
 
 [prediction]
 # Horizon en séances (~1 semaine). Pas journalier : la BRVM cote par fixing
