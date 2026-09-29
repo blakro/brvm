@@ -15,7 +15,7 @@ validation glissante à dix découpes sur l'archive complète (2015-2026,
 erreur-type conservatrice de `mesure_ic`, **à l'horizon de soixante séances
 qui était alors celui du projet**. Citer deux protocoles reviendrait à
 choisir le plus flatteur sans le dire — d'où la mention de l'horizon, qui
-vaut aujourd'hui vingt séances et déplace tous ces chiffres.
+vaut aujourd'hui cinq séances et déplace tous ces chiffres.
 
 L'IR est l'IC moyen divisé par son écart-type d'une période à l'autre :
 c'est LUI qui mesure la fiabilité, là où l'IC seul mesure l'ampleur.
@@ -167,6 +167,100 @@ logistique, sur l'univers non corrigé et les quatre traits d'origine, rend
 un IC de -0,056. Ce n'est pas son manque de souplesse qui l'en empêchait,
 ce sont ses données et ses entrées. Le risque ici n'est pas de manquer de
 puissance, il est d'en avoir trop.
+
+NI PROPHET, NI LA MOYENNE MOBILE QU'IL CACHAIT
+----------------------------------------------
+La question revient dès qu'on parle de prévision de cours : « et Prophet ? ».
+Mesuré, à l'horizon livré de cinq séances. Prophet 1.4 à ses réglages par
+défaut, ajusté valeur par valeur sur le logarithme des 750 dernières
+clôtures ÉCHANGÉES jusqu'à t — jamais au-delà —, saisonnalités hebdomadaire
+et annuelle, projeté à t+5.
+Une date sur cinq, pour que les étiquettes ne se recouvrent pas : 506 dates,
+19 398 ajustements, trente et une minutes sur quatre cœurs. Chaque score est
+comparé au modèle livré sur les MÊMES lignes hors échantillon de `valider`.
+
+COMME PRÉVISION DE COURS, IL FAIT PIRE QUE NE RIEN PRÉVOIR. Son erreur
+absolue à cinq séances dépasse de 79 % celle de « le cours ne bouge pas »,
+et il ne devine le sens que 53,1 % du temps. Il projette une tendance et
+des saisons sur des cours de fixing dont 12 % ne bougent pas du tout en une
+semaine.
+
+COMME CLASSEMENT, UN SEUL DE SES MORCEAUX PORTE QUELQUE CHOSE :
+
+                                        IC    avantage des 10 premières
+    modèle livré                    +0,076    +13,0 % l'an
+    Prophet, prévision complète     +0,073    +12,5 %
+    Prophet, tendance seule         +0,000     -6,0 %
+    Prophet, saisonnalité seule     +0,009     +0,2 %
+    Prophet, écart cours - courbe   +0,088    +16,2 %
+    écart à la moyenne 20 séances   +0,102    +19,6 %
+
+La tendance et la saison, qui sont la raison d'être de Prophet, ne valent
+rien ici — la saison confirme au passage ce que `prediction` avait mesuré
+sur le calendrier. Le morceau utile est l'écart entre le cours et la courbe
+ajustée, c'est-à-dire un retour vers la moyenne, et une moyenne mobile d'une
+ligne de pandas le capte MIEUX, en millisecondes. Donnés comme traits à la
+régression, sur les mêmes dates :
+
+                                  IC    haut de liste   entrée t+1
+    livré                     +0,078       +10,2 %       +8,8 %
+    + Prophet                 +0,086       +14,3 %      +12,5 %
+    + moyenne mobile 20       +0,102       +16,5 %      +13,8 %
+    + moyenne mobile + Prophet +0,100      +18,3 %      +13,1 %
+
+La moyenne mobile présente, Prophet n'ajoute rien qui tienne : l'IC baisse,
+l'avantage à l'entrée réaliste aussi. Ce qu'il voit encore au-delà de quatre
+moyennes mobiles et des traits du modèle vaut un IC de +0,018. Ce n'est pas
+de quoi payer une dépendance lourde, et une validation qui demanderait
+près de 97 000 ajustements là où l'app tient en quinze secondes.
+
+LA MOYENNE MOBILE, ELLE, A PASSÉ LES DEUX PREMIÈRES PORTES ET PAS LA
+TROISIÈME — et c'est la troisième qui décide.
+
+1. LE TEST MULTIPLE. Ajoutée à la grille de `recherche.py` (390 cases),
+   « cours rapporté à sa moyenne de 20 séances » en devient la case la
+   PLUS forte : IC -0,078 et t -9,6 à cinq séances sur tout le marché,
+   devant le choc éclair (+7,2). Onze de ses trente cases franchissent la
+   correction, et aucune survivante existante ne perd sa place. Elle est
+   corrélée à -0,78 avec le retournement à un mois : c'est le même effet,
+   mesuré en pesant davantage les toutes dernières séances.
+
+2. LE PROTOCOLE DE PRODUCTION. Dixième trait de la régression, dix
+   découpes, archive complète : IC +0,077 -> +0,098, IR inchangé (1,86 ->
+   1,83), haut de liste +16,1 -> +18,2 % l'an, en hausse sur les deux
+   moitiés (12,4 -> 16,0 et 18,9 -> 19,9).
+
+3. L'EXÉCUTION. On ne peut pas acheter au cours qui a servi à décider : il
+   n'est connu qu'après la clôture. Une séance plus tard, le gain a
+   disparu — le haut de liste passe même sous celui du modèle livré — et
+   l'écart se creuse ensuite :
+
+        entrée           t+0       t+1       t+2       t+3
+        livré        +16,1 %   +11,4 %   +10,0 %    +9,0 %
+        + moyenne    +18,2 %   +10,8 %    +8,7 %    +6,6 %
+
+   Et le backtest, sur le cours seul, en moyenne sur des calendriers de
+   rééquilibrage décalés — voir `config.py` pour la raison de cette moyenne :
+
+        écart à l'univers     sans frais   0,25 %   1,50 % par sens
+        trimestre   livré        +0,7 %    -0,5 %    -6,3 %
+                    + moyenne    +0,2 %    -1,0 %    -6,7 %
+        mois        livré        +4,4 %    +1,1 %   -14,1 %
+                    + moyenne    +3,7 %    +0,5 %   -14,5 %
+
+   Moins bien aux deux cadences, avec comme sans frais.
+
+L'IC, lui, reste plus haut avec le délai (+0,049 -> +0,055 à t+1) : c'est
+encore la divergence entre l'ordre de toute la cote et les dix lignes qu'on
+achète. L'explication la plus simple, que rien ici ne démontre : ce que la
+moyenne mobile ajoute au haut de liste, c'est un fixing qui a débordé et se
+résorbe au suivant — soit exactement la séance qu'aucun ordre ne peut
+saisir.
+
+Elle n'entre donc ni dans le modèle ni dans la grille de `recherche.py`,
+dont la règle vise les traits qu'emploie la prédiction. La mesure est
+consignée ici pour qu'on ne la refasse pas — ou, si on la refait, pour
+qu'on la refasse avec une entrée à t+1 dès le premier essai.
 """
 
 from __future__ import annotations

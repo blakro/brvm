@@ -206,28 +206,44 @@ DEFAUTS: dict[str, dict] = {
         # avant de gagner un centime. Quatre fois par an est déjà
         # ambitieux ; c'est le plancher qu'impose ce marché.
         #
-        # SOIXANTE ALORS QUE LE MODÈLE PRÉDIT À VINGT, ET C'EST MESURÉ, PAS
-        # UN OUBLI. Prédire à un mois n'oblige pas à tourner tous les mois :
-        # le signal du mois se conserve, les frais du mois non. Rejeu du
-        # modèle livré sur le COURS SEUL, écart annuel contre l'univers :
+        # SOIXANTE ALORS QUE LE MODÈLE PRÉDIT À CINQ, ET CE N'EST PAS LE
+        # SIGNAL QUI LE JUSTIFIE. Ce commentaire affirmait que le signal
+        # « se conserve » au trimestre : rejeu à +8,0 % l'an sans frais, seuil
+        # de rentabilité de 1,40 % par sens, à portée des 1,50 % facturés.
+        # Ces chiffres ne se reproduisent pas, pas même au commit qui les a
+        # écrits (c3995bc) sur ses propres données : le même rejeu y rend
+        # -3,7 % sans frais, et aucun seuil.
         #
-        #     pas    frais nuls   0,25 %   1,50 %   seuil
-        #       5        +9,3 %    -1,3 %  -42,5 %   0,22 %
-        #      20        +3,3 %    -0,8 %  -19,0 %   0,20 %
-        #      60        +8,0 %    +6,5 %   -0,5 %   1,40 %
+        # UN SEUL CALENDRIER EST UN SEUL TIRAGE. Tourner toutes les soixante
+        # séances ne tire que 42 dates de décision notées hors échantillon,
+        # et le résultat dépend de LESQUELLES : décaler le calendrier de dix
+        # en dix séances fait passer le modèle livré de -3,5 % à +4,9 % l'an
+        # sans frais. Rejeu du modèle livré sur le COURS SEUL — scores hors
+        # échantillon de `prediction.valider`, `backtest.seuil_frais`, entrée
+        # à t+1 —, écart annuel contre l'univers, EN MOYENNE sur des
+        # calendriers décalés, et le seuil de chaque calendrier :
         #
-        # LE SIGNAL SE CONSERVE BIEN AU-DELÀ DE SON HORIZON DE MESURE, et
-        # c'est le résultat le plus utile du tableau. Prédit à cinq séances,
-        # détenu soixante, il garde l'essentiel de son avantage tout en
-        # payant la rotation douze fois moins souvent : son seuil de
-        # rentabilité est de 1,40 % par sens contre 0,22 % si l'on tourne à
-        # la semaine. C'est ce seuil qui décide, parce que c'est lui qu'on
-        # compare au devis d'une SGI — et il est passé de 0,54 % à 1,40 %
-        # avec le raccourcissement de l'horizon de prédiction, soit à portée
-        # des 1,50 % facturés.
+        #     pas  calendriers  frais nuls   0,25 %   1,50 %   seuil
+        #       5            5      +9,3 %   +0,7 %  -34,0 %   0,19 à 0,34 %
+        #      20            7      +4,4 %   +1,1 %  -14,1 %   0,05 à 0,75 %
+        #      60            6      +0,7 %   -0,5 %   -6,3 %   aucun à 1,01 %
         #
-        # (Sur soixante rééquilibrages, ces chiffres ne sont pas fins. C'est
-        # l'ordre de grandeur qui tranche, pas la décimale.)
+        # (« aucun » : trois calendriers trimestriels sur six ne battent pas
+        # l'univers, même sans frais.)
+        #
+        # Le classement garde un avantage au trimestre — mesuré sur toutes
+        # les dates plutôt que sur 42, ses dix premières achetables battent
+        # l'univers de +2,4 % l'an avant frais, sur chaque moitié de
+        # l'archive — mais c'est le cinquième de ce qu'il rend à la semaine
+        # (+11,4 %), et les 1,50 % facturés en sont à un ordre de grandeur,
+        # pas à « quelques dixièmes ».
+        #
+        # La valeur reste soixante pour la raison du paragraphe précédent,
+        # qui, elle, tient : aux frais réels, tourner moins souvent perd moins
+        # (-6,3 % contre -14,1 % et -34,0 %). Aucune cadence ne bat l'univers
+        # à ces frais. Et c'est même au trimestre que le seuil MOYEN est le
+        # plus bas — environ 0,15 % par sens, contre 0,27 % à la semaine et
+        # 0,34 % au mois : ce qu'il rend avant frais y est déjà presque nul.
         "pas_rebalancement": 60,
         # On décide sur la clôture de t et on achète à celle de t+1. Se
         # servir du même cours pour décider et pour exécuter suppose de

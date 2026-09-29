@@ -283,7 +283,7 @@ Six changements, par ordre d'importance :
    sur les valeurs achetables — et la section « Le modèle de prix » ci-dessous
    donne la preuve de chacun.
 
-Et **neuf idées reçues, mesurées puis jetées** — elles sont documentées
+Et **onze idées reçues, mesurées puis jetées** — elles sont documentées
 dans `src/brvm/apprentissage.py`, parce qu'un échec qu'on ne consigne pas
 sera retenté :
 
@@ -351,6 +351,25 @@ sera retenté :
   vingt séances. Ces lignes portent la même relation entre traits et
   rendement ; les jeter jette deux observations sur cinq pour rien. Le seuil
   d'achetabilité sert donc à MESURER et à trader, jamais à apprendre.
+- **Prophet.** Ajusté valeur par valeur sur le passé seul, à 506 dates
+  (19 398 ajustements), et jugé sur les mêmes lignes que le modèle livré.
+  Comme prévision de cours, il fait **79 % d'erreur de plus** que « le cours
+  ne bouge pas ». Comme classement, sa tendance (IC +0,000) et sa
+  saisonnalité (+0,009) ne valent rien ; seul l'écart entre le cours et sa
+  courbe porte un signal (+0,088), et une simple moyenne mobile à vingt
+  séances fait mieux (+0,102) en millisecondes. Ajouté au modèle à côté de
+  cette moyenne mobile, Prophet n'apporte plus rien qui tienne.
+- **L'écart à la moyenne mobile, que Prophet cachait.** C'est l'idée qui est
+  allée le plus loin avant de tomber. Elle devient la **case la plus forte**
+  des 390 du balayage (t −9,6), et dixième trait du modèle elle porte l'IC
+  de +0,077 à **+0,098**, le haut de liste progressant sur les deux moitiés
+  de l'archive. Puis on entre une
+  séance plus tard, comme il le faut puisque la clôture n'est connue
+  qu'après coup, et l'avantage des dix premières passe **sous** celui du
+  modèle livré (+10,8 % contre +11,4 %). Rejouée avec frais, elle fait moins
+  bien aux deux cadences, sans frais compris. Le chiffre et son explication
+  sont dans `src/brvm/apprentissage.py` ; la leçon, c'est de mesurer
+  l'entrée à t+1 dès le premier essai.
 
 Un cinquième arbitrage mérite d'être écrit parce qu'il ne s'est pas joué
 sur un chiffre : **ranger dans le secteur** plutôt que retrancher la
@@ -483,31 +502,39 @@ l'entrée à la séance suivante en retirait encore 30 %, et le reste est la
 composition du rejeu. La composition n'y était pour rien — la version
 géométrique est plus haute, pas plus basse.
 
-#### Et les frais, qui se sont beaucoup rapprochés
+#### Et les frais, qui restent hors de portée
 
 Cette section est là par honnêteté, pas parce qu'elle a décidé de l'horizon :
 le choix ci-dessus s'est fait sur la prévision seule.
 
 Rejeu du signal à cinq séances sur le **cours seul**, écart annuel contre
-l'univers, selon la cadence d'achat :
+l'univers, selon la cadence d'achat — **en moyenne sur plusieurs calendriers
+de rééquilibrage décalés**, pour la raison donnée juste après :
 
-| Cadence | frais nuls | 0,25 % | 1,50 % | seuil de rentabilité |
+| Cadence | frais nuls | 0,25 % | 1,50 % | seuil de rentabilité, selon le calendrier |
 |---|---|---|---|---|
-| 5 séances | +9,3 % | −1,3 % | −42,5 % | 0,22 % |
-| 20 séances | +3,3 % | −0,8 % | −19,0 % | 0,20 % |
-| **60 séances** | **+8,0 %** | **+6,5 %** | **−0,5 %** | **1,40 %** |
+| 5 séances | +9,3 % | +0,7 % | −34,0 % | 0,19 à 0,34 % |
+| 20 séances | +4,4 % | +1,1 % | −14,1 % | 0,05 à 0,75 % |
+| 60 séances | +0,7 % | −0,5 % | −6,3 % | aucun (3 fois sur 6) à 1,01 % |
 
-Le seuil passe de **0,54 % à 1,40 % par sens** contre les 1,50 % facturés : on
-était à un facteur trois, on est à la limite. La raison est que le signal
-court **se conserve bien au-delà de son horizon de mesure** — détenu au
-trimestre, il paie la rotation quatre fois moins souvent tout en gardant
-l'essentiel de son avantage.
+> **Cette conclusion a changé.** Cette section annonçait, pour 60 séances,
+> **+8,0 %** sans frais et un seuil de **1,40 %** par sens, « à la limite »
+> des 1,50 % facturés, parce que le signal court « se conserverait » au
+> trimestre. Ces chiffres ne se reproduisent pas, pas même au commit qui les
+> a écrits avec ses propres données (−3,7 % sans frais, aucun seuil). Surtout,
+> **un rééquilibrage trimestriel ne tire qu'une quarantaine de dates de
+> décision** sur l'archive : décaler le calendrier de dix séances en dix séances fait passer
+> le même modèle de **−3,5 % à +4,9 %** l'an sans frais. Un seul calendrier
+> est un seul tirage, d'où la moyenne.
 
-Ce n'est pas encore une stratégie rentable, et le conseiller continue de dire
-« ne rien faire » : à 1,50 % l'écart est de −0,5 %, c'est-à-dire zéro à la
-précision de la mesure. Mais la marge à combler n'est plus un ordre de
-grandeur, elle est de quelques dixièmes de pourcent — le niveau d'un
-intermédiaire moins cher.
+Le signal ne disparaît pas au trimestre : mesurées sur toutes les dates, ses
+dix premières achetables battent l'univers de **+2,4 % l'an** avant frais, sur
+chaque moitié de l'archive. Mais c'est le cinquième de ce qu'il rend à la
+semaine, et **la marge à combler reste d'un ordre de grandeur**, pas de
+quelques dixièmes. Aucune cadence ne bat l'univers aux frais réels. Tourner
+au trimestre reste le bon choix pour une seule raison, qui tient : à ces
+frais, c'est la cadence qui perd le moins. Le conseiller continue de dire
+« ne rien faire ».
 
 #### L'IC et l'argent ne disent pas la même chose
 
