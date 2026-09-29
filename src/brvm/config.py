@@ -177,22 +177,35 @@ DEFAUTS: dict[str, dict] = {
         # Le décalage n'est pas un réglage fin : une hausse du caoutchouc
         # n'atteint pas le cours de la SAPH le lendemain, elle passe
         # d'abord dans les marges puis dans des résultats publiés
-        # trimestriellement. Un à trois mois est l'hypothèse de travail, à
-        # revoir quand il y aura de quoi la tester.
+        # trimestriellement. Un à trois mois était l'hypothèse de travail ;
+        # testée sur les prix mensuels de la Banque mondiale, ni ce réglage
+        # ni la variation du dernier mois n'améliorent le modèle de prix à
+        # cinq séances — voir `exogene`.
         "fenetre_variation": 60,
         "retard": 40,
-        # Série → secteur qu'elle concerne. Une série absente de la base est
+        # Série → valeurs qu'elle concerne. Une série absente de la base est
         # simplement ignorée ; ce tableau décrit l'intention, pas l'état.
         #
+        # DES LISTES DE VALEURS, PLUS DES SECTEURS. Le modèle appris compare
+        # chaque valeur à son secteur : une série versée à tout un secteur y
+        # vaut la même chose pour tous ses membres et n'apprend rien. Les
+        # entrées « eur_usd » et « taux_bceao », qui visaient un secteur
+        # entier, sont retirées pour cette raison — voir `exogene`.
+        #
         # Les noms de séries sont libres : ce sont ceux qu'on emploiera en
-        # important les CSV. Aucune source n'est joignable depuis ce projet,
-        # les données doivent donc être fournies (voir README).
+        # important les CSV. La « Pink Sheet » mensuelle de la Banque mondiale
+        # les fournit toutes ; MESURÉES à l'horizon de cinq séances, elles
+        # n'améliorent pas le modèle de prix (détail dans `exogene`).
         "correspondance": {
-            "caoutchouc_tsr20": "Consommation de Base",
-            "huile_palme_cpo": "Consommation de Base",
-            "sucre": "Consommation de Base",
-            "eur_usd": "Consommation de Base",
-            "taux_bceao": "Services Financiers",
+            "caoutchouc_tsr20": ["SPHC", "SOGC"],
+            "huile_palme": ["PALC", "SOGC"],
+            "sucre": ["SCRC"],
+            "cacao": ["NTLC"],
+            "cafe_robusta": ["NTLC"],
+            "brent": ["SHEC", "TTLC", "TTLS", "SMBC"],
+            "coton": ["UNXC"],
+            "cuivre": ["CABC"],
+            "huile_coco": ["SICC"],
         },
     },
     "backtest": {

@@ -9,23 +9,79 @@ une valeur d'une autre, et n'apporte donc rigoureusement rien à l'ordre
 prédit. Un modèle l'ingérerait sans broncher, l'IC ne bougerait pas, et on
 conclurait à tort que les commodités n'expliquent rien.
 
-Elles expliquent beaucoup, mais par SECTEUR. Le caoutchouc pèse sur la
-SAPH et la SOGB, pas sur une banque. La variable utile n'est donc pas
-« cours du caoutchouc » mais son PRODUIT avec l'appartenance sectorielle :
+Elles pourraient expliquer quelque chose, mais valeur par valeur. Le
+caoutchouc pèse sur la SAPH et la SOGB, pas sur une banque. La variable
+utile n'est donc pas « cours du caoutchouc » mais son PRODUIT avec
+l'exposition de la valeur :
 
-    caoutchouc(t-L) × 1[la valeur est en Consommation de Base]
+    caoutchouc(t-L) × 1[la valeur est SAPH ou SOGB]
 
-Cette colonne-là varie bien à l'intérieur d'une séance — elle vaut le cours
-pour les neuf valeurs agro et zéro pour les autres — et c'est elle que le
-modèle peut exploiter.
+Cette colonne-là varie bien à l'intérieur d'une séance — elle vaut la
+variation pour les valeurs exposées et zéro pour les autres — et c'est elle
+que le modèle peut exploiter. (Cet en-tête disait « × 1[Consommation de
+Base] » : la section suivante dit pourquoi le secteur ne suffit plus.)
 
 LES RETARDS NE SONT PAS UN RÉGLAGE FIN
 ---------------------------------------
 Une hausse du caoutchouc n'atteint pas le cours de la SAPH le lendemain :
 elle passe d'abord dans les marges, puis dans des résultats publiés
-trimestriellement. Un à trois mois de retard sont l'hypothèse de travail,
-et c'est pour cela que ce projet vise un horizon trimestriel plutôt que
-journalier.
+trimestriellement. Un à trois mois de retard étaient l'hypothèse de
+travail, du temps où ce projet visait un horizon trimestriel ; il prédit
+aujourd'hui à cinq séances, et la mesure ci-dessous essaie les deux
+tempos.
+
+LE SECTEUR NE SUFFIT PLUS, ET C'ÉTAIT UN PIÈGE SILENCIEUX
+---------------------------------------------------------
+La forme d'origine — le produit avec le SECTEUR — date d'un modèle qui
+apprenait à battre TOUTE la cote. Il apprend désormais à battre SON SECTEUR
+(`cible_secteur`, voir `prediction`). Une variable constante à l'intérieur
+d'un secteur — le caoutchouc pour toute la Consommation de Base — ne peut
+alors plus rien apprendre : dans chaque (séance, secteur), la moitié des
+valeurs bat la médiane quoi qu'elle vaille. Le module aurait tourné sans
+erreur, l'IC n'aurait pas bougé, et on aurait conclu à tort que les
+commodités n'expliquent rien — exactement le piège que l'en-tête
+dénonçait, un étage plus bas.
+
+Et le secteur était de toute façon trop large : la Consommation de Base
+mêle SAPH et SOGB (caoutchouc) avec Nestlé (cacao), Sucrivoire (sucre) et
+Solibra (bière). La correspondance accepte donc une LISTE DE VALEURS en plus
+d'un nom de secteur, et la configuration livrée n'emploie plus que des
+listes — voir `interactions`.
+
+CE QUE LES MATIÈRES PREMIÈRES ONT RENDU, MESURÉ
+-----------------------------------------------
+Source : la « Pink Sheet » de la Banque mondiale, prix mensuels en dollars
+depuis 1960, sous licence CC BY 4.0 — cacao, café robusta, sucre, huile de
+palme, caoutchouc TSR20, coton, cuivre, huile de coco, Brent. Recoupée sur le
+Brent avec les cours quotidiens de l'EIA : 0,9 % d'écart moyen depuis 2015.
+Un mois M n'est tenu pour connu qu'à partir du 6 du mois M+1 (publication
+vers le 2).
+
+Correspondance par valeur : caoutchouc -> SAPH, SOGB ; palme -> Palm CI,
+SOGB ; sucre -> Sucrivoire ; cacao et café -> Nestlé ; Brent -> Vivo, les
+deux TotalEnergies, SMB ; coton -> Uniwax ; cuivre -> Sicable ; coco ->
+Sicor. Quatre variantes déclarées avant mesure, sur le modèle de PRIX à
+cinq séances et son protocole (écarts appariés à la version livrée) :
+
+                                          écart d'IC      haut de liste
+                                                (t)        (t)  1re  2nde
+    producteurs, un trait, dernier mois  +0,0020 (+1,0)  -0,5 (-0,4) +0,7 -1,3
+    une par matière, dernier mois        -0,0003 (-0,1)  -0,1 (-0,1) +0,6 -0,6
+    producteurs, 3 mois décalés de 2     -0,0004 (-0,4)  +0,0 (+0,0) +0,2 -0,1
+    une par matière, 3 mois décalés de 2 -0,0027 (-0,9)  -0,7 (-0,6) +0,2 -1,4
+
+Rien ne bouge le modèle. Le seul indice est local : sur les quatre
+producteurs, la variation du dernier mois précède leur rendement relatif
+(pente de rang +0,051, t +2,0 groupé par date) — mais entièrement dans la
+première moitié de l'archive (t +2,9), plus du tout dans la seconde
+(t -0,1), et porté par l'huile de palme (Palm CI et SOGB) quand Sucrivoire
+va en sens contraire. Des prix MENSUELS sont trop lents pour un horizon
+d'une semaine, et le seul lien visible n'a pas survécu à 2021.
+
+Ni l'app ni la ligne de commande ne passent d'ailleurs `exogenes` à
+`prediction.valider` ou `predire` : des séries importées ne changeraient
+aujourd'hui rien au classement. C'est conforme à la mesure ; les brancher
+demanderait d'abord qu'une série fasse mieux que le modèle livré.
 
 CALENDRIERS DIFFÉRENTS
 ----------------------
@@ -90,33 +146,46 @@ def variations(
 def interactions(
     variations_exo: pd.DataFrame,
     secteurs: pd.Series,
-    correspondance: dict[str, str],
+    correspondance: dict[str, str | list[str]],
 ) -> pd.DataFrame:
-    """Croise chaque série exogène avec le secteur qu'elle concerne.
+    """Croise chaque série exogène avec les valeurs qu'elle concerne.
 
-    `secteurs` : ticker → secteur. `correspondance` : série → secteur.
-    Renvoie une table indexée (date, ticker), une colonne par série
-    retenue, valant la variation de la série pour les valeurs du secteur
-    visé et zéro ailleurs.
+    `secteurs` : ticker → secteur. `correspondance` : série → une LISTE DE
+    TICKERS, ou un nom de secteur. Renvoie une table indexée (date, ticker),
+    une colonne par série retenue, valant la variation de la série pour les
+    valeurs visées et zéro ailleurs.
 
-    Zéro et non NaN pour les autres secteurs : l'absence d'effet est une
+    LA LISTE EST LA FORME À EMPLOYER. Le modèle appris compare chaque valeur
+    à son secteur : une colonne identique pour tout un secteur s'y annule
+    et n'apprend rien — voir l'en-tête. Le nom de secteur reste accepté
+    pour les lectures qui comparent à toute la cote.
+
+    Zéro et non NaN pour les autres valeurs : l'absence d'effet est une
     information, tandis qu'un NaN ferait tomber la ligne entière au
     nettoyage et retirerait la valeur du classement.
     """
     if variations_exo.empty or secteurs.empty:
         return pd.DataFrame()
 
-    utiles = {s: sec for s, sec in correspondance.items()
-              if s in variations_exo.columns and (secteurs == sec).any()}
+    utiles: dict[str, pd.Series] = {}
+    for serie, visees in correspondance.items():
+        if serie not in variations_exo.columns:
+            continue
+        if isinstance(visees, str):
+            appartient = secteurs == visees
+        else:
+            appartient = pd.Series(secteurs.index.isin(list(visees)),
+                                   index=secteurs.index)
+        if appartient.any():
+            utiles[serie] = appartient.astype(float)
     if not utiles:
         return pd.DataFrame()
 
     blocs = []
     for date, ligne in variations_exo.iterrows():
         bloc = pd.DataFrame(index=secteurs.index)
-        for serie, secteur in utiles.items():
+        for serie, appartient in utiles.items():
             valeur = ligne.get(serie)
-            appartient = (secteurs == secteur).astype(float)
             bloc[f"exo_{serie}"] = (
                 0.0 if pd.isna(valeur) else float(valeur)
             ) * appartient

@@ -332,7 +332,9 @@ Trois constats, plus utiles que le tableau :
    pondération, forme du modèle, structure, et quatre traits tirés du
    cours, du volume et de la fourchette : rien ne bouge. Avec neuf traits
    déjà construits sur ces mêmes séries, le prochain gain, s'il existe,
-   viendra d'une source que l'archive n'a pas encore.
+   viendra d'une source que l'archive n'a pas encore. La première essayée
+   ensuite, les prix mensuels des matières premières, n'a rien rendu non
+   plus — voir `exogene`.
 """
 
 from __future__ import annotations

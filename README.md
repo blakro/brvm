@@ -283,7 +283,7 @@ Six changements, par ordre d'importance :
    sur les valeurs achetables — et la section « Le modèle de prix » ci-dessous
    donne la preuve de chacun.
 
-Et **douze idées reçues, mesurées puis jetées** — elles sont documentées
+Et **treize idées reçues, mesurées puis jetées** — elles sont documentées
 dans `src/brvm/apprentissage.py`, parce qu'un échec qu'on ne consigne pas
 sera retenté :
 
@@ -381,6 +381,14 @@ sera retenté :
   places à limite de prix, ne poursuivent pas : elles se retournent, ce que
   le modèle sait déjà. **Le plafond est dans les données** — cours et
   volumes ont rendu ce qu'ils avaient.
+- **Les matières premières.** Cacao, café, sucre, huile de palme,
+  caoutchouc, coton, cuivre, huile de coco et Brent, d'après les prix
+  mensuels de la Banque mondiale, rapportés **valeur par valeur** — le
+  caoutchouc à SAPH et SOGB, le Brent aux distributeurs de carburant. Quatre
+  variantes, aucune ne bouge le modèle (|t| ≤ 1). Le module prévu pour elles
+  les versait à tout un secteur, forme qui s'annule dans un modèle comparant
+  chaque valeur à son secteur : il est corrigé, et la mesure est dans
+  `src/brvm/exogene.py`.
 
 Un cinquième arbitrage mérite d'être écrit parce qu'il ne s'est pas joué
 sur un chiffre : **ranger dans le secteur** plutôt que retrancher la
@@ -1281,7 +1289,7 @@ Le préalable est toujours **la donnée**, jamais le code.
 |---|---|
 | **Une série longue de dividendes** | Quatre exercices donnent un ordre de grandeur, pas de quoi mesurer un pouvoir prédictif. C'est la donnée qui débloquerait le plus. |
 | **Les fondamentaux des émetteurs** (PER, ROE, P/B) | Un des quatre facteurs du cadre initial n'a jamais pu être testé. |
-| **Les cours des commodités et le taux BCEAO** | Aucune source n'est joignable depuis ce projet ; le chargement se fait à la main par `importer-exogenes`. |
+| **Des cours de commodités QUOTIDIENS, et le taux BCEAO** | Les prix mensuels de la Banque mondiale ont été mesurés et n'améliorent pas la prédiction à cinq séances : un mois est trop lent pour une semaine. Des cours quotidiens (contrats à terme) restent à essayer, et aucune source joignable n'en fournit ; le chargement se fait à la main par `importer-exogenes`. |
 
 Et deux **questions ouvertes**, l'une et l'autre sur le seul effet que le
 balayage retient :
@@ -1322,16 +1330,23 @@ Deux exemples de ce que ça donnerait, et de ce qu'il faudrait :
   `python -m brvm rendement` estime ce retour à la moyenne. Manque : une
   série longue de rendements. Cinq valeurs ne font pas un échantillon
   d'apprentissage — pas de modèle appris ici, et ce n'est pas un manque.
-- **Agro-industrie** (SAPH, SOGB, Palmci, Sucrivoire) — c'est là que le
-  pouvoir prédictif serait le meilleur, parce qu'il existe un moteur
-  **extérieur** au marché : le prix du caoutchouc, de l'huile de palme,
-  du sucre. Manque : ces cours, qu'aucune source joignable ne fournit.
+- **Agro-industrie** (SAPH, SOGB, Palmci, Sucrivoire) — on attendait ici
+  le meilleur pouvoir prédictif, parce qu'il existe un moteur **extérieur**
+  au marché : le prix du caoutchouc, de l'huile de palme, du sucre. Ces
+  cours ont été trouvés (les prix mensuels de la Banque mondiale) et
+  mesurés : ils n'améliorent pas le modèle de prix à cinq séances. Le seul
+  lien visible — le dernier mois de l'huile de palme devant Palm CI et
+  SOGB — vit dans la première moitié de l'archive et disparaît dans la
+  seconde. Détail dans `src/brvm/exogene.py`.
 
 Un détail qui a son importance : le prix du caoutchouc à une date donnée
 est **le même pour les 47 sociétés**. Versé tel quel dans un modèle de
 classement, il ne distingue aucune valeur et l'IC ne bougerait pas — on
 conclurait à tort que les commodités n'expliquent rien. La variable utile
-est son produit avec l'appartenance sectorielle.
+est son produit avec l'**exposition de la valeur** — le caoutchouc pour
+SAPH et SOGB. Pas avec son secteur : le modèle compare chaque valeur à son
+secteur, et une série versée à tout un secteur s'y annule. C'était la
+forme d'origine, et elle n'aurait rien pu montrer.
 
 ---
 

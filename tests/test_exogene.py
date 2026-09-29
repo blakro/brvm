@@ -30,7 +30,7 @@ os.environ.setdefault(
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
-from brvm import dividende, exogene  # noqa: E402
+from brvm import dividende, exogene, features  # noqa: E402
 
 SECTEUR_A = "Consommation de Base"
 SECTEUR_B = "Services Financiers"
@@ -98,6 +98,54 @@ def test_l_interaction_avec_le_secteur_cree_la_variance_utile():
     assert (valeurs_a != 0).all(), "le secteur visé doit porter la variation"
     assert (valeurs_b == 0).all(), "les autres secteurs doivent rester à zéro"
     assert tardif["exo_caoutchouc_tsr20"].nunique() > 1
+
+
+def test_versee_a_tout_un_secteur_la_serie_s_annule_une_fois_neutralisee():
+    """Le piège que la version par secteur tendait au modèle appris.
+
+    Le modèle compare chaque valeur à la moyenne de son secteur. Une série
+    versée à TOUT un secteur y vaut la même chose pour tous ses membres :
+    neutralisée, elle tombe à zéro partout, et ne peut plus rien apprendre.
+    Le module aurait tourné sans erreur et l'IC n'aurait pas bougé.
+    """
+    dates = _dates(40)
+    brut = pd.DataFrame({"date": dates, "serie": "caoutchouc_tsr20",
+                         "valeur": np.linspace(100, 200, len(dates))})
+    croisees = exogene.traits(brut, dates, _referentiel(), REGLAGES)
+    tardif = croisees[croisees["date"] == dates[-1]].reset_index(drop=True)
+    secteurs = _referentiel().set_index("ticker")["secteur"]
+
+    neutre = features.neutraliser_secteur(
+        tardif["exo_caoutchouc_tsr20"], tardif["date"],
+        tardif["ticker"].map(secteurs))
+    assert (tardif["exo_caoutchouc_tsr20"] != 0).any()
+    assert np.allclose(neutre, 0.0), "par secteur, la série devait s'annuler"
+
+
+def test_une_correspondance_par_valeur_survit_a_la_neutralisation():
+    """Visée sur des valeurs précises, la série varie DANS le secteur.
+
+    C'est la forme que la configuration livrée emploie : le caoutchouc pour
+    SAPH et SOGB, pas pour toute la Consommation de Base.
+    """
+    dates = _dates(40)
+    brut = pd.DataFrame({"date": dates, "serie": "caoutchouc_tsr20",
+                         "valeur": np.linspace(100, 200, len(dates))})
+    reglages = {**REGLAGES, "exogenes": {
+        **REGLAGES["exogenes"],
+        "correspondance": {"caoutchouc_tsr20": ["A0", "A1"]}}}
+    croisees = exogene.traits(brut, dates, _referentiel(), reglages)
+    tardif = croisees[croisees["date"] == dates[-1]].reset_index(drop=True)
+    colonne = tardif.set_index("ticker")["exo_caoutchouc_tsr20"]
+
+    assert (colonne[["A0", "A1"]] != 0).all(), "les valeurs visées portent la série"
+    assert (colonne[["A2", "A3", "B0", "B1", "B2", "B3"]] == 0).all()
+
+    secteurs = _referentiel().set_index("ticker")["secteur"]
+    neutre = features.neutraliser_secteur(
+        tardif["exo_caoutchouc_tsr20"], tardif["date"],
+        tardif["ticker"].map(secteurs))
+    assert not np.allclose(neutre, 0.0), "par valeur, la série doit survivre"
 
 
 def test_le_report_ne_regarde_pas_la_publication_suivante():
