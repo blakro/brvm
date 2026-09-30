@@ -112,6 +112,10 @@ AVERTISSEMENTS_DATES = (
     "frais et impact estimés, non relevés",
 )
 
+# Frais par sens essayés par `seuil_frais`, en pourcent, frais et impact
+# confondus.
+NIVEAUX = (0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0)
+
 COLONNES = ["date_decision", "date_entree", "date_sortie", "positions",
             "rendement", "dividende", "rotation", "cout", "valeur",
             "valeur_reference"]
@@ -163,7 +167,8 @@ def backtester(
     module dont on veut le plus savoir s'il gagne de l'argent, n'était donc
     pas backtestable. On mesurait son IC, jamais ce qu'il en reste après le
     courtier. La question « ce signal survit-il aux frais ? » ne pouvait
-    littéralement pas être posée.
+    littéralement pas être posée. Ses scores hors échantillon sont rendus par
+    `prediction.valider`, sous `scores_hors_echantillon`.
     """
     conf = reglages or charger()
     bt = conf.get("backtest", {})
@@ -213,6 +218,12 @@ def backtester(
 
     etapes: list[dict] = []
     detenu: set[str] = set()
+    # Les décisions dont l'ordre vient bien de `scores`. Les autres suivent
+    # le composite, faute de ligne pour leur date : c'est le cas des scores
+    # hors échantillon du modèle appris, qui ne notent rien avant la fin de
+    # la première tranche d'apprentissage. Un rejeu « du modèle » qui en
+    # contient doit le dire.
+    notees = 0
     valeur = 1.0
     valeur_prix = 1.0
     valeur_reference = 1.0
@@ -245,7 +256,8 @@ def backtester(
             continue
 
         eligibles = list(classement["ticker"])
-        if scores is not None and dates[i] in scores.index:
+        notee = scores is not None and dates[i] in scores.index
+        if notee:
             # L'éligibilité reste celle de `noter` ; seul l'ordre change.
             ordre = (scores.loc[dates[i]].reindex(eligibles).dropna()
                      .sort_values(ascending=False))
@@ -322,6 +334,7 @@ def backtester(
         )
         cout = rotation * cout_unitaire * 2
         detenu = nouveaux
+        notees += int(notee)
 
         valeur *= 1 + gain - cout
         valeur_prix *= 1 + gain_prix - cout
@@ -351,6 +364,8 @@ def backtester(
         "etapes": journal,
         "seances": len(dates),
         "rebalancements": len(journal),
+        # None sans `scores` : la question ne se pose pas.
+        "decisions_notees": None if scores is None else notees,
         "rendement_total": valeur - 1,
         "rendement_annualise": _annualiser(valeur, seances),
         "rendement_prix": valeur_prix - 1,
@@ -374,7 +389,7 @@ def seuil_frais(
     fondamentaux: pd.DataFrame | None = None,
     dividendes: pd.DataFrame | None = None,
     scores: pd.DataFrame | None = None,
-    niveaux: tuple[float, ...] = (0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0),
+    niveaux: tuple[float, ...] = NIVEAUX,
 ) -> dict:
     """À partir de quels frais la stratégie cesse-t-elle de battre l'univers ?
 
@@ -408,6 +423,9 @@ def seuil_frais(
     # daté, et un avertissement qui décrit autre chose que le calcul rendu
     # est pire que pas d'avertissement.
     avertissements = AVERTISSEMENTS
+    # Les décisions ne dépendent pas des frais : le premier rejeu suffit à
+    # les compter.
+    rebalancements, notees = 0, None
     for niveau in niveaux:
         # `frais` porte tout : séparer frais et impact n'aurait de sens que
         # si on cherchait lequel des deux mord, et ils mordent pareil.
@@ -418,6 +436,8 @@ def seuil_frais(
         if resultat["etapes"].empty:
             continue
         avertissements = resultat["avertissements"]
+        rebalancements = resultat["rebalancements"]
+        notees = resultat["decisions_notees"]
         ecart = (resultat["rendement_annualise"]
                  - resultat["reference_annualisee"])
         lignes.append({
@@ -432,35 +452,161 @@ def seuil_frais(
     table = pd.DataFrame(lignes)
     vide = {"niveaux": table, "seuil": float("nan"),
             "ecart_sans_frais": float("nan"), "reel": None,
+            "rebalancements": 0, "decisions_notees": None,
             "avertissements": avertissements}
     if table.empty:
         return vide
-
-    # Le seuil : dernier niveau où l'écart est encore positif, interpolé
-    # linéairement avec le premier où il ne l'est plus. L'interpolation n'est
-    # pas de la précision — c'est pour ne pas faire croire que le seuil est
-    # l'un des niveaux qu'on a choisi de tester.
-    positifs = table[table["ecart"] > 0]
-    negatifs = table[table["ecart"] <= 0]
-    seuil = float("nan")
-    if not positifs.empty and not negatifs.empty:
-        bas = positifs.iloc[-1]
-        haut = negatifs.iloc[0]
-        largeur = haut["ecart"] - bas["ecart"]
-        part = bas["ecart"] / (bas["ecart"] - haut["ecart"]) if largeur else 0.0
-        seuil = float(bas["frais_par_sens"]
-                      + part * (haut["frais_par_sens"] - bas["frais_par_sens"]))
-    elif not positifs.empty:
-        # Positif partout, jusqu'au niveau le plus élevé testé : on le dit
-        # comme une borne, pas comme un seuil.
-        seuil = float(positifs.iloc[-1]["frais_par_sens"])
 
     reel = (float(base.get("frais_pourcent", 1.0))
             + float(base.get("impact_pourcent", 0.5))) / 100.0
     return {
         "niveaux": table,
-        "seuil": seuil,
+        "seuil": _seuil(table),
         "ecart_sans_frais": float(table.iloc[0]["ecart"]),
+        "reel": reel,
+        "rebalancements": rebalancements,
+        "decisions_notees": notees,
+        "avertissements": avertissements,
+    }
+
+
+def _seuil(table: pd.DataFrame) -> float:
+    """Le niveau de frais où l'écart change de signe, NaN s'il n'en change pas.
+
+    Dernier niveau où l'écart est encore positif, interpolé linéairement
+    avec le premier où il ne l'est plus. L'interpolation n'est pas de la
+    précision — c'est pour ne pas faire croire que le seuil est l'un des
+    niveaux qu'on a choisi de tester.
+    """
+    positifs = table[table["ecart"] > 0]
+    negatifs = table[table["ecart"] <= 0]
+    if not positifs.empty and not negatifs.empty:
+        bas = positifs.iloc[-1]
+        haut = negatifs.iloc[0]
+        largeur = haut["ecart"] - bas["ecart"]
+        part = bas["ecart"] / (bas["ecart"] - haut["ecart"]) if largeur else 0.0
+        return float(bas["frais_par_sens"]
+                     + part * (haut["frais_par_sens"] - bas["frais_par_sens"]))
+    if not positifs.empty:
+        # Positif partout, jusqu'au niveau le plus élevé testé : on le dit
+        # comme une borne, pas comme un seuil.
+        return float(positifs.iloc[-1]["frais_par_sens"])
+    return float("nan")
+
+
+def decalages(pas: int, calendriers: int) -> list[int]:
+    """Séances retirées en tête de l'archive, une par calendrier.
+
+    Les départs sont espacés régulièrement dans un pas : 0, 10 … 50 pour six
+    calendriers à soixante séances ; 0, 3 … 18 pour sept à vingt ; 0 … 4
+    pour cinq à cinq. Au-delà de `pas` calendriers, on ne ferait que rejouer
+    les mêmes dates de décision amputées de la première : le nombre est donc
+    borné à `pas`.
+    """
+    pas = max(1, int(pas))
+    nombre = max(1, min(int(calendriers), pas))
+    ecart = max(1, round(pas / nombre))
+    if (nombre - 1) * ecart >= pas:
+        # L'arrondi par excès ferait sortir le dernier départ du pas, où il
+        # retomberait sur un calendrier déjà rejoué.
+        ecart = pas // nombre
+    return [k * ecart for k in range(nombre)]
+
+
+def seuil_frais_decale(
+    cours: pd.DataFrame,
+    referentiel: pd.DataFrame | None = None,
+    reglages: dict | None = None,
+    fondamentaux: pd.DataFrame | None = None,
+    dividendes: pd.DataFrame | None = None,
+    scores: pd.DataFrame | None = None,
+    niveaux: tuple[float, ...] = NIVEAUX,
+    calendriers: int = 1,
+) -> dict:
+    """`seuil_frais` sur plusieurs calendriers de rééquilibrage décalés.
+
+    UN SEUL CALENDRIER EST UN SEUL TIRAGE. Tourner toutes les soixante
+    séances ne tire qu'une quarantaine de dates de décision sur l'archive,
+    et le résultat dépend de LESQUELLES : décaler le départ de dix en dix
+    séances fait passer le modèle appris de -3,5 % à +4,9 % l'an sans frais.
+    C'est ainsi qu'un « +8,0 % sans frais, seuil 1,40 % » s'est glissé dans
+    la configuration — un calendrier favorable, pris pour une mesure.
+
+    Chaque calendrier retire les `k` premières séances de `cours` avant
+    d'appeler `seuil_frais` ; les dates de décision glissent d'autant. Les
+    `scores`, eux, ne bougent pas : ils ont été calculés une fois, sur
+    l'archive entière.
+
+    Ce que la fonction rend :
+
+        calendriers     une ligne par calendrier : départ, décisions, écart
+                        sans frais, seuil
+        niveaux         l'écart MOYEN par niveau de frais, et son étendue
+        seuil           celui de l'écart moyen, interpolé comme ailleurs
+        seuil_min/max   l'étendue des seuils des calendriers qui en ont un
+        sans_seuil      les calendriers qui ne battent pas l'univers, même
+                        sans frais
+    """
+    conf = reglages or charger()
+    pas = int(conf.get("backtest", {}).get("pas_rebalancement", 20))
+    dates = sorted(cours["date"].unique())
+
+    lignes: list[dict] = []
+    tables: list[pd.DataFrame] = []
+    avertissements = AVERTISSEMENTS
+    reel = None
+    for decalage in decalages(pas, calendriers):
+        if decalage >= len(dates):
+            break
+        tranche = cours[cours["date"] >= dates[decalage]]
+        resultat = seuil_frais(tranche, referentiel, conf, fondamentaux,
+                               dividendes, scores=scores, niveaux=niveaux)
+        reel = resultat["reel"] if resultat["reel"] is not None else reel
+        if resultat["niveaux"].empty:
+            continue
+        avertissements = resultat["avertissements"]
+        lignes.append({
+            "decalage": decalage,
+            "rebalancements": resultat["rebalancements"],
+            "decisions_notees": resultat["decisions_notees"],
+            "ecart_sans_frais": resultat["ecart_sans_frais"],
+            "seuil": resultat["seuil"],
+        })
+        tables.append(resultat["niveaux"].assign(decalage=decalage))
+
+    par_calendrier = pd.DataFrame(lignes)
+    if par_calendrier.empty:
+        return {"calendriers": par_calendrier, "niveaux": pd.DataFrame(),
+                "pas": pas, "seuil": float("nan"), "seuil_min": float("nan"),
+                "seuil_max": float("nan"), "sans_seuil": 0,
+                "ecart_sans_frais": float("nan"), "reel": reel,
+                "avertissements": avertissements}
+
+    # Chaque calendrier retenu porte tous les niveaux : qu'un rejeu soit vide
+    # ne dépend pas des frais. La moyenne se fait donc toujours sur la même
+    # population, d'une ligne du tableau à l'autre.
+    tout = pd.concat(tables, ignore_index=True)
+    moyenne = tout.groupby("frais_par_sens", sort=True).agg(
+        aller_retour=("aller_retour", "first"),
+        rendement_annualise=("rendement_annualise", "mean"),
+        reference_annualisee=("reference_annualisee", "mean"),
+        ecart=("ecart", "mean"),
+        ecart_min=("ecart", "min"),
+        ecart_max=("ecart", "max"),
+        rotation_moyenne=("rotation_moyenne", "mean"),
+    ).reset_index()
+
+    seuils = par_calendrier["seuil"].dropna()
+    return {
+        "calendriers": par_calendrier,
+        "niveaux": moyenne,
+        "pas": pas,
+        "seuil": _seuil(moyenne) if not moyenne.empty else float("nan"),
+        "seuil_min": float(seuils.min()) if len(seuils) else float("nan"),
+        "seuil_max": float(seuils.max()) if len(seuils) else float("nan"),
+        "sans_seuil": int(par_calendrier["seuil"].isna().sum()),
+        "ecart_sans_frais": (float(moyenne.iloc[0]["ecart"])
+                             if not moyenne.empty else float("nan")),
         "reel": reel,
         "avertissements": avertissements,
     }
@@ -492,16 +638,108 @@ def expliquer_seuil(resultat: dict) -> str:
         lignes.append(
             f"SEUIL : {seuil:.2%} par sens. Au-delà, la stratégie rend moins "
             f"que la simple détention du même univers.")
-    if reel is not None and seuil == seuil:
-        if reel > seuil:
-            lignes.append(
-                f"Les frais réels valent {reel:.2%} par sens, soit "
+    lignes += _comparer_au_reel(seuil, reel)
+    lignes += _decisions_hors_signal(resultat.get("rebalancements", 0),
+                                     resultat.get("decisions_notees"))
+    lignes += ["", "À retenir avant de citer ces chiffres :"]
+    lignes += [f"  - {a}" for a in resultat["avertissements"]]
+    return "\n".join(lignes)
+
+
+def _comparer_au_reel(seuil: float, reel: float | None) -> list[str]:
+    if reel is None or seuil != seuil:
+        return []
+    if reel > seuil:
+        return [f"Les frais réels valent {reel:.2%} par sens, soit "
                 f"{reel / seuil:.1f} fois le seuil. Il ne manque pas un "
-                "réglage, il manque un courtier.")
-        else:
-            lignes.append(
-                f"Les frais réels ({reel:.2%}) sont sous le seuil — "
-                "vérifiez la rotation et les avertissements avant d'y croire.")
+                "réglage, il manque un courtier."]
+    return [f"Les frais réels ({reel:.2%}) sont sous le seuil — "
+            "vérifiez la rotation et les avertissements avant d'y croire."]
+
+
+def _decisions_hors_signal(rebalancements: int, notees: int | None) -> list[str]:
+    """Les décisions que le signal fourni n'a pas ordonnées, s'il y en a.
+
+    Les scores hors échantillon du modèle appris ne notent rien pendant la
+    première tranche d'apprentissage : les premières décisions du rejeu y
+    suivent le composite. Le taire ferait passer un rejeu mixte pour celui
+    du seul modèle.
+    """
+    if notees is None or notees >= rebalancements:
+        return []
+    return ["", f"{rebalancements - notees} décision(s) sur {rebalancements} "
+                "tombent hors des dates notées par le signal et suivent le "
+                "composite."]
+
+
+def expliquer_seuil_decale(resultat: dict) -> str:
+    """Rendu texte du seuil moyenné sur des calendriers décalés.
+
+    La moyenne ne circule jamais sans son étendue : c'est l'écart entre le
+    pire et le meilleur calendrier qui dit ce que vaut un calendrier seul.
+    """
+    par_calendrier = resultat["calendriers"]
+    if par_calendrier.empty:
+        return ("Seuil de frais incalculable : pas assez de séances pour un "
+                "seul rééquilibrage.")
+    pas, reel = resultat["pas"], resultat["reel"]
+    departs = list(par_calendrier["decalage"])
+    enumeration = (", ".join(map(str, departs)) if len(departs) <= 4 else
+                   f"{departs[0]}, {departs[1]} … {departs[-1]}")
+    sans_frais = par_calendrier["ecart_sans_frais"]
+    lignes = [
+        f"Rééquilibrage toutes les {pas} séances, moyenne sur "
+        f"{len(departs)} calendrier(s) décalé(s) — départs {enumeration}.",
+        f"Écart contre l'univers éligible, SANS frais : "
+        f"{resultat['ecart_sans_frais']:+.2%} l'an en moyenne, de "
+        f"{sans_frais.min():+.2%} à {sans_frais.max():+.2%} selon le "
+        "calendrier.",
+        "",
+        f"  {'frais par sens':>15}{'aller-retour':>14}{'écart moyen':>13}"
+        f"{'le pire':>10}{'le meilleur':>13}{'rotation':>10}",
+        f"  {'-' * 15}{'-' * 14}{'-' * 13}{'-' * 10}{'-' * 13}{'-' * 10}",
+    ]
+    for ligne in resultat["niveaux"].itertuples():
+        marque = "  ←" if reel and abs(ligne.frais_par_sens - reel) < 1e-9 else ""
+        lignes.append(
+            f"  {ligne.frais_par_sens:>15.2%}{ligne.aller_retour:>14.1%}"
+            f"{ligne.ecart:>+13.2%}{ligne.ecart_min:>+10.2%}"
+            f"{ligne.ecart_max:>+13.2%}{ligne.rotation_moyenne:>10.0%}{marque}")
+
+    lignes.append("")
+    seuil, sans_seuil = resultat["seuil"], resultat["sans_seuil"]
+    if seuil != seuil:
+        lignes.append("Aucun seuil pour l'écart moyen : il ne change pas de "
+                      "signe dans la plage testée.")
+    else:
+        lignes.append(f"SEUIL de l'écart moyen : {seuil:.2%} par sens.")
+    if sans_seuil == len(departs):
+        lignes.append("Aucun calendrier ne bat l'univers, même sans frais.")
+    else:
+        bas = ("aucun" if sans_seuil else f"{resultat['seuil_min']:.2%}")
+        precision = (f" ({sans_seuil} fois sur {len(departs)})"
+                     if sans_seuil else "")
+        lignes.append(f"Seuil selon le calendrier : {bas}{precision} à "
+                      f"{resultat['seuil_max']:.2%}.")
+    lignes += _comparer_au_reel(seuil, reel)
+
+    notees = par_calendrier["decisions_notees"]
+    avec_signal = notees.notna().all()
+    lignes += ["", "Calendrier par calendrier :",
+               f"  {'départ':>8}{'décisions':>11}"
+               + (f"{'notées':>8}" if avec_signal else "")
+               + f"{'sans frais':>12}{'seuil':>9}"]
+    for ligne in par_calendrier.itertuples():
+        seuil_ligne = ("aucun" if ligne.seuil != ligne.seuil
+                       else f"{ligne.seuil:.2%}")
+        lignes.append(
+            f"  {ligne.decalage:>8}{ligne.rebalancements:>11}"
+            + (f"{int(ligne.decisions_notees):>8}" if avec_signal else "")
+            + f"{ligne.ecart_sans_frais:>+12.2%}{seuil_ligne:>9}")
+    if avec_signal and (notees < par_calendrier["rebalancements"]).any():
+        lignes += ["", "Les décisions non notées tombent hors des dates du "
+                       "signal et suivent le composite."]
+
     lignes += ["", "À retenir avant de citer ces chiffres :"]
     lignes += [f"  - {a}" for a in resultat["avertissements"]]
     return "\n".join(lignes)

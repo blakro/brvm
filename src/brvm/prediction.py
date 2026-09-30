@@ -690,6 +690,10 @@ def valider(
         stabilite       la même chose pour la combinaison retenue
         retenue         ce qui part en production, et pourquoi
         calibrage       rang combiné → probabilité, appris hors échantillon
+        scores_hors_echantillon
+                        matrice dates × tickers de `score_combinaison`,
+                        chaque date notée par le seul modèle de sa découpe —
+                        c'est elle que `backtest` rejoue avec frais
     """
     conf = reglages or charger()
     pred = conf.get("prediction", {})
@@ -730,6 +734,7 @@ def valider(
                           "dates": 0, "blocs": 0,
                           "erreur_type": float("nan"), "liquidite_min": None},
         "calibrage": apprentissage.Calibrage(),
+        "scores_hors_echantillon": pd.DataFrame(),
         "avertissements": AVERTISSEMENTS,
     }
     if len(echantillon) < minimum:
@@ -877,6 +882,17 @@ def valider(
         "avantage_tout": apprentissage.mesure_avantage(
             tout, f"score_{retenue}", horizon, positions),
         "calibrage": calibrage,
+        # CE QUE LE BACKTEST REJOUE, ET QUE PERSONNE NE POUVAIT REJOUER. Le
+        # rejeu avec frais du modèle appris se faisait hors du dépôt, faute
+        # d'accès à ces scores : un tableau faux s'est ainsi glissé dans la
+        # configuration (+8,0 % sans frais au trimestre, là où le même rejeu
+        # rendait -3,7 %), sans qu'aucune commande puisse le démentir. Chaque
+        # date n'y est notée QUE par le modèle de sa propre découpe, entraîné
+        # sur des dates antérieures et purgées ; la première tranche, qui ne
+        # sert qu'à apprendre, n'y figure pas. Un pivot sur des lignes déjà
+        # calculées : la validation ne s'en trouve pas alourdie.
+        "scores_hors_echantillon": tout.pivot(
+            index="date", columns="ticker", values="score_combinaison"),
         "poids_fiabilite": dernier_detail["poids_fiabilite"],
         "coefficients": dernier_detail["coefficients"],
         # Les traits un par un : c'est là qu'on voit sur quoi le classement

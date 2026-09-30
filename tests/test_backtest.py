@@ -375,6 +375,68 @@ def test_le_seuil_rend_les_avertissements_du_calcul_reellement_fait():
     assert "frais par sens" in rendu
 
 
+def test_les_calendriers_decales_sont_ceux_de_la_mesure_documentee():
+    """Les départs qui ont produit le tableau de `config.py`, et pas d'autres.
+
+    Changer la règle d'espacement changerait les chiffres sans que rien ne
+    le dise : la moyenne ne porterait plus sur les mêmes calendriers.
+    """
+    assert backtest.decalages(60, 6) == [0, 10, 20, 30, 40, 50]
+    assert backtest.decalages(20, 7) == [0, 3, 6, 9, 12, 15, 18]
+    assert backtest.decalages(5, 5) == [0, 1, 2, 3, 4]
+    # Plus de calendriers que de séances dans un pas : on rejouerait les
+    # mêmes dates de décision.
+    assert backtest.decalages(5, 9) == [0, 1, 2, 3, 4]
+    assert backtest.decalages(60, 1) == [0]
+    for pas, nombre in ((6, 4), (20, 8), (7, 7), (10, 3)):
+        departs = backtest.decalages(pas, nombre)
+        assert len(departs) == nombre and max(departs) < pas, (pas, departs)
+
+
+def test_le_rejeu_decale_rend_une_ligne_par_calendrier():
+    """Une ligne par calendrier demandé, et une moyenne qui en est une.
+
+    Le premier calendrier est le rejeu ordinaire : s'il différait de
+    `seuil_frais`, le décalage aurait changé autre chose que le départ.
+    """
+    n = 240
+    import numpy as np
+    rng = np.random.default_rng(9)
+    cours = _cours({f"T{i}": list(100 * np.exp(np.cumsum(
+        rng.normal(0, 0.02, n)))) for i in range(6)})
+    reglages = {**REGLAGES, "backtest": {**REGLAGES["backtest"], "positions": 2}}
+    niveaux = (0.0, 0.5, 1.0)
+
+    # Un signal qui ne note que la seconde moitié, comme les scores hors
+    # échantillon du modèle appris, muets pendant la première tranche.
+    dates = sorted(cours["date"].unique())
+    scores = _matrice(cours, {f"T{i}": float(i) for i in range(6)})
+    scores = scores.loc[dates[n // 2]:]
+
+    resultat = backtest.seuil_frais_decale(
+        cours, None, reglages, scores=scores, niveaux=niveaux, calendriers=4)
+    table = resultat["calendriers"]
+    assert len(table) == 4
+    assert list(table["decalage"]) == backtest.decalages(10, 4)
+
+    seul = backtest.seuil_frais(cours, None, reglages, scores=scores,
+                                niveaux=niveaux)
+    assert table.iloc[0]["ecart_sans_frais"] == pytest.approx(
+        seul["ecart_sans_frais"])
+    assert resultat["ecart_sans_frais"] == pytest.approx(
+        table["ecart_sans_frais"].mean())
+    moyenne = resultat["niveaux"]
+    assert len(moyenne) == len(niveaux)
+    assert ((moyenne["ecart_min"] <= moyenne["ecart"] + 1e-12)
+            & (moyenne["ecart"] <= moyenne["ecart_max"] + 1e-12)).all()
+
+    # Les décisions antérieures au signal suivent le composite, et le rendu
+    # le dit au lieu de présenter un rejeu mixte comme celui du signal.
+    assert (table["decisions_notees"] < table["rebalancements"]).all()
+    rendu = backtest.expliquer_seuil_decale(resultat)
+    assert "composite" in rendu and "calendrier" in rendu
+
+
 def test_les_avertissements_accompagnent_tout_resultat():
     """Un chiffre de performance ne doit jamais circuler seul.
 

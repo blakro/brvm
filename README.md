@@ -541,6 +541,10 @@ de rééquilibrage décalés**, pour la raison donnée juste après :
 | 20 séances | +4,4 % | +1,1 % | −14,1 % | 0,05 à 0,75 % |
 | 60 séances | +0,7 % | −0,5 % | −6,3 % | aucun (3 fois sur 6) à 1,01 % |
 
+Chaque ligne se refait depuis le dépôt : `python -m brvm backtester --signal
+modele --seuil-frais --hors-dividende --pas 60 --calendriers 6`, et de même
+pour les autres cadences (voir « La ligne de commande »).
+
 > **Cette conclusion a changé.** Cette section annonçait, pour 60 séances,
 > **+8,0 %** sans frais et un seuil de **1,40 %** par sens, « à la limite »
 > des 1,50 % facturés, parce que le signal court « se conserverait » au
@@ -1003,7 +1007,37 @@ python -m brvm conseiller --detenu SGBC BOAC --frais 1.0
                              # acheter, conserver ou vendre, à VOS frais
 python -m brvm backtester --signal choc_volume --seuil-frais
                              # à partir de quels frais ce signal cesse de payer
+python -m brvm backtester --signal modele --seuil-frais --hors-dividende --calendriers 6
+                             # le modèle appris, avec frais, sur six calendriers
 ```
+
+**Rejouer le modèle appris avec frais.** `--signal modele` rejoue les scores
+hors échantillon de la validation glissante, où chaque date n'est notée que
+par le modèle de sa propre découpe. `--calendriers N` fait la moyenne sur N
+calendriers dont le départ glisse à l'intérieur d'un pas. C'est nécessaire,
+parce qu'au trimestre un calendrier ne tire qu'une quarantaine de décisions,
+et que décaler son départ fait passer le même modèle de **−3,5 % à +4,9 %**
+l'an sans frais. Le tableau de « Et les frais, qui restent hors de portée »
+se refait avec trois commandes, `--pas` choisissant la cadence :
+
+```bash
+python -m brvm backtester --signal modele --seuil-frais --hors-dividende --pas 5 --calendriers 5
+python -m brvm backtester --signal modele --seuil-frais --hors-dividende --pas 20 --calendriers 7
+python -m brvm backtester --signal modele --seuil-frais --hors-dividende --pas 60 --calendriers 6
+```
+
+Sur l'archive arrêtée au 28 septembre 2026, elles rendent **+9,3, +4,4 et
++0,7 %** d'écart annuel sans frais, puis **−34,0, −14,1 et −6,3 %** à 1,50 %
+par sens : le tableau, au dixième près. Les chiffres bougeront un peu à chaque
+séance versée. Comptez un peu plus d'une minute au trimestre et six à la
+semaine ; `--niveaux 0 0.25 0.5 1 1.5`, la grille du tableau, en retire un
+tiers sans changer aucun seuil au centième près.
+
+Le rendu dit aussi combien de décisions le modèle a réellement prises. Il ne
+note rien avant la fin de sa première tranche d'apprentissage : les premières
+décisions du rejeu suivent donc le composite, soit **5 sur 47** au
+trimestre, **13 sur 140** au mois et **52 sur 558** à la semaine, pour le
+premier calendrier. Les moyennes du tableau les contiennent.
 
 ### Archiver et diagnostiquer
 
