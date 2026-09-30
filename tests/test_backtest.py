@@ -407,11 +407,7 @@ def test_le_rejeu_decale_rend_une_ligne_par_calendrier():
     reglages = {**REGLAGES, "backtest": {**REGLAGES["backtest"], "positions": 2}}
     niveaux = (0.0, 0.5, 1.0)
 
-    # Un signal qui ne note que la seconde moitié, comme les scores hors
-    # échantillon du modèle appris, muets pendant la première tranche.
-    dates = sorted(cours["date"].unique())
     scores = _matrice(cours, {f"T{i}": float(i) for i in range(6)})
-    scores = scores.loc[dates[n // 2]:]
 
     resultat = backtest.seuil_frais_decale(
         cours, None, reglages, scores=scores, niveaux=niveaux, calendriers=4)
@@ -429,12 +425,44 @@ def test_le_rejeu_decale_rend_une_ligne_par_calendrier():
     assert len(moyenne) == len(niveaux)
     assert ((moyenne["ecart_min"] <= moyenne["ecart"] + 1e-12)
             & (moyenne["ecart"] <= moyenne["ecart_max"] + 1e-12)).all()
+    assert (table["decisions_notees"] == table["rebalancements"]).all()
+    assert "calendrier" in backtest.expliquer_seuil_decale(resultat)
 
-    # Les décisions antérieures au signal suivent le composite, et le rendu
-    # le dit au lieu de présenter un rejeu mixte comme celui du signal.
-    assert (table["decisions_notees"] < table["rebalancements"]).all()
-    rendu = backtest.expliquer_seuil_decale(resultat)
-    assert "composite" in rendu and "calendrier" in rendu
+
+def test_un_signal_ne_se_rejoue_que_la_ou_il_existe():
+    """Avant la première date de `scores`, le rejeu ne décide rien.
+
+    Les scores hors échantillon du modèle appris ne notent rien pendant la
+    première tranche d'apprentissage. Le backtest y laissait décider le
+    composite : un dixième des décisions du « rejeu du modèle » documenté
+    n'étaient pas les siennes. Le calendrier, lui, ne doit pas bouger : les
+    décisions gardées sont celles du rejeu complet, moins les premières.
+    """
+    n = 240
+    import numpy as np
+    rng = np.random.default_rng(9)
+    cours = _cours({f"T{i}": list(100 * np.exp(np.cumsum(
+        rng.normal(0, 0.02, n)))) for i in range(6)})
+    reglages = {**REGLAGES, "backtest": {**REGLAGES["backtest"], "positions": 2}}
+    dates = sorted(cours["date"].unique())
+    partout = _matrice(cours, {f"T{i}": float(i) for i in range(6)})
+    tardif = partout.loc[dates[n // 2]:]
+
+    complet = backtest.backtester(cours, None, reglages, scores=partout)
+    strict = backtest.backtester(cours, None, reglages, scores=tardif)
+    decisions = list(strict["etapes"]["date_decision"])
+    assert decisions and min(decisions) >= dates[n // 2]
+    assert strict["decisions_notees"] == strict["rebalancements"]
+    toutes = list(complet["etapes"]["date_decision"])
+    assert decisions == toutes[-len(decisions):], (
+        "le départ du calendrier a bougé : ce ne sont plus les mêmes dates")
+    # L'annualisation part de la première décision prise, pas du début de
+    # l'archive : sinon les séances sautées dilueraient le rendement.
+    valeur = strict["etapes"]["valeur"].iloc[-1]
+    seances = len(dates) - dates.index(decisions[0])
+    par_an = backtest.features.SEANCES_PAR_AN
+    assert strict["rendement_annualise"] == pytest.approx(
+        valeur ** (par_an / seances) - 1, rel=1e-9)
 
 
 def test_les_avertissements_accompagnent_tout_resultat():

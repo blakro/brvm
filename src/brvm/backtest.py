@@ -169,6 +169,16 @@ def backtester(
     courtier. La question « ce signal survit-il aux frais ? » ne pouvait
     littéralement pas être posée. Ses scores hors échantillon sont rendus par
     `prediction.valider`, sous `scores_hors_echantillon`.
+
+    LE REJEU COMMENCE À LA PREMIÈRE DATE DE `scores`. Le calendrier garde
+    son départ, mais les décisions antérieures sont sautées, et
+    l'annualisation part de la première décision prise. Sans cela, un
+    signal qui ne note rien au début — les scores hors échantillon du
+    modèle appris, muets pendant la première tranche d'apprentissage —
+    laisserait le composite décider à sa place : c'était un dixième des
+    décisions du « rejeu du modèle » documenté. Le rejeu mixte donnait un
+    écart sans frais plus bas que le modèle seul, mais des frais plus doux,
+    le composite tournant moins.
     """
     conf = reglages or charger()
     bt = conf.get("backtest", {})
@@ -216,19 +226,26 @@ def backtester(
     # recalculait sinon tous les traits à chaque rééquilibrage.
     matrices = features.traits_glissants(cours, conf)
 
+    # Première décision : celle du calendrier qui tombe sur une date notée
+    # par `scores`, s'il y en a — voir la docstring.
+    debut = besoin - 1
+    if scores is not None and not scores.empty:
+        premiere = scores.index.min()
+        while debut < len(dates) and dates[debut] < premiere:
+            debut += pas
+
     etapes: list[dict] = []
     detenu: set[str] = set()
     # Les décisions dont l'ordre vient bien de `scores`. Les autres suivent
-    # le composite, faute de ligne pour leur date : c'est le cas des scores
-    # hors échantillon du modèle appris, qui ne notent rien avant la fin de
-    # la première tranche d'apprentissage. Un rejeu « du modèle » qui en
-    # contient doit le dire.
+    # le composite, faute de ligne pour leur date : une séance trop creuse
+    # écartée de l'échantillon du modèle, par exemple. Un rejeu « du
+    # modèle » qui en contient doit le dire.
     notees = 0
     valeur = 1.0
     valeur_prix = 1.0
     valeur_reference = 1.0
 
-    for i in range(besoin - 1, len(dates) - delai - 1, pas):
+    for i in range(debut, len(dates) - delai - 1, pas):
         entree = i + delai
         sortie = min(i + delai + pas, len(dates) - 1)
         if sortie <= entree:
@@ -359,7 +376,7 @@ def backtester(
     if journal.empty:
         return vide
 
-    seances = len(dates) - (besoin - 1)
+    seances = len(dates) - debut
     return {
         "etapes": journal,
         "seances": len(dates),
@@ -528,7 +545,7 @@ def seuil_frais_decale(
     UN SEUL CALENDRIER EST UN SEUL TIRAGE. Tourner toutes les soixante
     séances ne tire qu'une quarantaine de dates de décision sur l'archive,
     et le résultat dépend de LESQUELLES : décaler le départ de dix en dix
-    séances fait passer le modèle appris de -3,5 % à +4,9 % l'an sans frais.
+    séances fait passer le modèle appris de -4,0 % à +5,4 % l'an sans frais.
     C'est ainsi qu'un « +8,0 % sans frais, seuil 1,40 % » s'est glissé dans
     la configuration — un calendrier favorable, pris pour une mesure.
 
@@ -660,10 +677,10 @@ def _comparer_au_reel(seuil: float, reel: float | None) -> list[str]:
 def _decisions_hors_signal(rebalancements: int, notees: int | None) -> list[str]:
     """Les décisions que le signal fourni n'a pas ordonnées, s'il y en a.
 
-    Les scores hors échantillon du modèle appris ne notent rien pendant la
-    première tranche d'apprentissage : les premières décisions du rejeu y
-    suivent le composite. Le taire ferait passer un rejeu mixte pour celui
-    du seul modèle.
+    Le rejeu commence à la première date du signal, mais le signal peut
+    avoir des trous ensuite : une séance trop creuse est écartée de
+    l'échantillon du modèle appris, et la décision de ce jour-là suit le
+    composite. Le taire ferait passer un rejeu mixte pour celui du signal.
     """
     if notees is None or notees >= rebalancements:
         return []

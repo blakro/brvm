@@ -236,16 +236,17 @@ DEFAUTS: dict[str, dict] = {
         # UN SEUL CALENDRIER EST UN SEUL TIRAGE. Tourner toutes les soixante
         # séances ne tire que 42 dates de décision notées hors échantillon,
         # et le résultat dépend de LESQUELLES : décaler le calendrier de dix
-        # en dix séances fait passer le modèle livré de -3,5 % à +4,9 % l'an
+        # en dix séances fait passer le modèle livré de -4,0 % à +5,4 % l'an
         # sans frais. Rejeu du modèle livré sur le COURS SEUL — scores hors
         # échantillon de `prediction.valider`, `backtest.seuil_frais`, entrée
-        # à t+1 —, écart annuel contre l'univers, EN MOYENNE sur des
-        # calendriers décalés, et le seuil de chaque calendrier :
+        # à t+1, à partir de la première date notée —, écart annuel contre
+        # l'univers, EN MOYENNE sur des calendriers décalés, et le seuil de
+        # chaque calendrier :
         #
         #     pas  calendriers  frais nuls   0,25 %   1,50 %   seuil
-        #       5            5      +9,3 %   +0,7 %  -34,0 %   0,19 à 0,34 %
-        #      20            7      +4,4 %   +1,1 %  -14,1 %   0,05 à 0,75 %
-        #      60            6      +0,7 %   -0,5 %   -6,3 %   aucun à 1,01 %
+        #       5            5     +10,3 %   +0,9 %  -36,1 %   0,19 à 0,36 %
+        #      20            7      +4,9 %   +1,3 %  -15,1 %   0,05 à 0,76 %
+        #      60            6      +0,7 %   -0,6 %   -6,9 %   aucun à 1,05 %
         #
         # (« aucun » : trois calendriers trimestriels sur six ne battent pas
         # l'univers, même sans frais.)
@@ -256,6 +257,17 @@ DEFAUTS: dict[str, dict] = {
         #     python -m brvm backtester --signal modele --seuil-frais \
         #         --hors-dividende --pas 60 --calendriers 6
         #
+        # LA PREMIÈRE VERSION DE CE TABLEAU N'ÉTAIT PAS CELLE DU MODÈLE SEUL.
+        # Le modèle ne note rien pendant sa première tranche d'apprentissage,
+        # et le rejeu y laissait décider le composite : 5 décisions sur 47 au
+        # trimestre, 13 sur 140 au mois, 52 sur 558 à la semaine. Le rejeu
+        # commence désormais à la première date notée. Sans frais, le modèle
+        # seul fait un peu mieux (+10,3 % contre +9,3 % à la semaine) ; à
+        # 1,50 %, il perd davantage (-6,9 % contre -6,3 % au trimestre, -36,1 %
+        # contre -34,0 % à la semaine), parce qu'il tourne plus que le
+        # composite (58 % des lignes par rééquilibrage au trimestre, contre
+        # 44 %). Les seuils et le verdict ne bougent pas.
+        #
         # Le classement garde un avantage au trimestre — mesuré sur toutes
         # les dates plutôt que sur 42, ses dix premières achetables battent
         # l'univers de +2,4 % l'an avant frais, sur chaque moitié de
@@ -265,10 +277,10 @@ DEFAUTS: dict[str, dict] = {
         #
         # La valeur reste soixante pour la raison du paragraphe précédent,
         # qui, elle, tient : aux frais réels, tourner moins souvent perd moins
-        # (-6,3 % contre -14,1 % et -34,0 %). Aucune cadence ne bat l'univers
+        # (-6,9 % contre -15,1 % et -36,1 %). Aucune cadence ne bat l'univers
         # à ces frais. Et c'est même au trimestre que le seuil MOYEN est le
-        # plus bas — environ 0,15 % par sens, contre 0,27 % à la semaine et
-        # 0,34 % au mois : ce qu'il rend avant frais y est déjà presque nul.
+        # plus bas — environ 0,13 % par sens, contre 0,28 % à la semaine et
+        # 0,35 % au mois : ce qu'il rend avant frais y est déjà presque nul.
         "pas_rebalancement": 60,
         # On décide sur la clôture de t et on achète à celle de t+1. Se
         # servir du même cours pour décider et pour exécuter suppose de
