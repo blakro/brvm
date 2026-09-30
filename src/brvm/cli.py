@@ -538,7 +538,8 @@ def _scores_du_signal(cours, nom: str, referentiel=None, reglages=None):
             raise SystemExit("modèle appris non validable : échantillon trop "
                              "court pour une seule découpe.")
         print(f"Modèle appris, noté hors échantillon : {len(scores)} dates, "
-              f"du {scores.index[0]} au {scores.index[-1]}.\n")
+              f"du {scores.index[0]} au {scores.index[-1]}. Le rejeu commence "
+              "à la première ; avant, le modèle n'a rien noté.\n")
         return scores
     matrices = features.traits_glissants(cours)
     if nom not in matrices:
@@ -589,7 +590,7 @@ def _backtester(args) -> int:
 
     if args.seuil_frais and args.calendriers > 1:
         # UN CALENDRIER EST UN TIRAGE. Au trimestre, décaler le départ de
-        # dix séances fait passer le modèle appris de -3,5 % à +4,9 % l'an
+        # dix séances fait passer le modèle appris de -4,0 % à +5,4 % l'an
         # sans frais : un chiffre tiré d'un seul calendrier ne se cite pas.
         resultat = backtest.seuil_frais_decale(
             cours, referentiel, reglages, niveaux=tuple(args.niveaux),

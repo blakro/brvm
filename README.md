@@ -537,13 +537,22 @@ de rééquilibrage décalés**, pour la raison donnée juste après :
 
 | Cadence | frais nuls | 0,25 % | 1,50 % | seuil de rentabilité, selon le calendrier |
 |---|---|---|---|---|
-| 5 séances | +9,3 % | +0,7 % | −34,0 % | 0,19 à 0,34 % |
-| 20 séances | +4,4 % | +1,1 % | −14,1 % | 0,05 à 0,75 % |
-| 60 séances | +0,7 % | −0,5 % | −6,3 % | aucun (3 fois sur 6) à 1,01 % |
+| 5 séances | +10,3 % | +0,9 % | −36,1 % | 0,19 à 0,36 % |
+| 20 séances | +4,9 % | +1,3 % | −15,1 % | 0,05 à 0,76 % |
+| 60 séances | +0,7 % | −0,6 % | −6,9 % | aucun (3 fois sur 6) à 1,05 % |
 
 Chaque ligne se refait depuis le dépôt : `python -m brvm backtester --signal
 modele --seuil-frais --hors-dividende --pas 60 --calendriers 6`, et de même
 pour les autres cadences (voir « La ligne de commande »).
+
+> **Ce tableau a été corrigé une seconde fois.** Sa première version mêlait
+> au modèle des décisions du composite : le modèle ne note rien pendant sa
+> première tranche d'apprentissage, et le rejeu laissait alors le composite
+> choisir, pour **5 décisions sur 47** au trimestre et **52 sur 558** à la
+> semaine. Le rejeu commence désormais à la première date notée. Sans frais,
+> le modèle seul fait un peu mieux (+10,3 % contre +9,3 % à la semaine) ; à
+> 1,50 %, il perd davantage (−6,9 % contre −6,3 % au trimestre), parce qu'il
+> tourne plus que le composite. Les seuils et le verdict ne bougent pas.
 
 > **Cette conclusion a changé.** Cette section annonçait, pour 60 séances,
 > **+8,0 %** sans frais et un seuil de **1,40 %** par sens, « à la limite »
@@ -552,7 +561,7 @@ pour les autres cadences (voir « La ligne de commande »).
 > a écrits avec ses propres données (−3,7 % sans frais, aucun seuil). Surtout,
 > **un rééquilibrage trimestriel ne tire qu'une quarantaine de dates de
 > décision** sur l'archive : décaler le calendrier de dix séances en dix séances fait passer
-> le même modèle de **−3,5 % à +4,9 %** l'an sans frais. Un seul calendrier
+> le même modèle de **−4,0 % à +5,4 %** l'an sans frais. Un seul calendrier
 > est un seul tirage, d'où la moyenne.
 
 Le signal ne disparaît pas au trimestre : mesurées sur toutes les dates, ses
@@ -1013,12 +1022,14 @@ python -m brvm backtester --signal modele --seuil-frais --hors-dividende --calen
 
 **Rejouer le modèle appris avec frais.** `--signal modele` rejoue les scores
 hors échantillon de la validation glissante, où chaque date n'est notée que
-par le modèle de sa propre découpe. `--calendriers N` fait la moyenne sur N
-calendriers dont le départ glisse à l'intérieur d'un pas. C'est nécessaire,
-parce qu'au trimestre un calendrier ne tire qu'une quarantaine de décisions,
-et que décaler son départ fait passer le même modèle de **−3,5 % à +4,9 %**
-l'an sans frais. Le tableau de « Et les frais, qui restent hors de portée »
-se refait avec trois commandes, `--pas` choisissant la cadence :
+par le modèle de sa propre découpe. Le rejeu commence à la première date
+notée : avant, le modèle n'a rien vu, et c'est le composite qui aurait
+décidé à sa place. `--calendriers N` fait la moyenne sur N calendriers dont
+le départ glisse à l'intérieur d'un pas. C'est nécessaire, parce qu'au
+trimestre un calendrier ne tire qu'une quarantaine de décisions, et que
+décaler son départ fait passer le même modèle de **−4,0 % à +5,4 %** l'an
+sans frais. Le tableau de « Et les frais, qui restent hors de portée » se
+refait avec trois commandes, `--pas` choisissant la cadence :
 
 ```bash
 python -m brvm backtester --signal modele --seuil-frais --hors-dividende --pas 5 --calendriers 5
@@ -1026,18 +1037,17 @@ python -m brvm backtester --signal modele --seuil-frais --hors-dividende --pas 2
 python -m brvm backtester --signal modele --seuil-frais --hors-dividende --pas 60 --calendriers 6
 ```
 
-Sur l'archive arrêtée au 28 septembre 2026, elles rendent **+9,3, +4,4 et
-+0,7 %** d'écart annuel sans frais, puis **−34,0, −14,1 et −6,3 %** à 1,50 %
+Sur l'archive arrêtée au 28 septembre 2026, elles rendent **+10,3, +4,9 et
++0,7 %** d'écart annuel sans frais, puis **−36,1, −15,1 et −6,9 %** à 1,50 %
 par sens : le tableau, au dixième près. Les chiffres bougeront un peu à chaque
-séance versée. Comptez un peu plus d'une minute au trimestre et six à la
-semaine ; `--niveaux 0 0.25 0.5 1 1.5`, la grille du tableau, en retire un
-tiers sans changer aucun seuil au centième près.
+séance versée. Comptez un peu plus d'une minute au trimestre et cinq à la
+semaine ; `--niveaux 0 0.25 0.5 1 1.5` en retire un tiers sans changer aucun
+seuil au centième près.
 
-Le rendu dit aussi combien de décisions le modèle a réellement prises. Il ne
-note rien avant la fin de sa première tranche d'apprentissage : les premières
-décisions du rejeu suivent donc le composite, soit **5 sur 47** au
-trimestre, **13 sur 140** au mois et **52 sur 558** à la semaine, pour le
-premier calendrier. Les moyennes du tableau les contiennent.
+Le rendu dit aussi combien de décisions le modèle a réellement prises. Une
+séance trop creuse est écartée de son échantillon, et la décision de ce
+jour-là suit le composite : cela arrive **au plus deux fois sur 506** à la
+semaine, une fois sur 127 au mois, jamais au trimestre.
 
 ### Archiver et diagnostiquer
 
