@@ -382,13 +382,17 @@ sera retenté :
   le modèle sait déjà. **Le plafond est dans les données** — cours et
   volumes ont rendu ce qu'ils avaient.
 - **Les matières premières.** Cacao, café, sucre, huile de palme,
-  caoutchouc, coton, cuivre, huile de coco et Brent, d'après les prix
-  mensuels de la Banque mondiale, rapportés **valeur par valeur** — le
-  caoutchouc à SAPH et SOGB, le Brent aux distributeurs de carburant. Quatre
-  variantes, aucune ne bouge le modèle (|t| ≤ 1). Le module prévu pour elles
-  les versait à tout un secteur, forme qui s'annule dans un modèle comparant
-  chaque valeur à son secteur : il est corrigé, et la mesure est dans
-  `src/brvm/exogene.py`.
+  caoutchouc, coton, cuivre et huile de coco, d'après les prix mensuels de
+  la Banque mondiale, rapportés **valeur par valeur** — le caoutchouc à
+  SAPH et SOGB, le sucre à Sucrivoire. Quatre variantes, aucune ne bouge le
+  modèle (|t| ≤ 1). Le module prévu pour elles les versait à tout un
+  secteur, forme qui s'annule dans un modèle comparant chaque valeur à son
+  secteur : il est corrigé. Le **Brent**, qui viserait tout le secteur
+  Énergie, a été mesuré à part, sur ses cours quotidiens et contre le
+  marché : quand il vient de monter, le secteur tend à battre la cote la
+  semaine suivante, sur les deux moitiés et même en entrant trois séances
+  plus tard — mais t 1,8, et sans effet sur le classement. Le détail est
+  dans `src/brvm/exogene.py`.
 
 Un cinquième arbitrage mérite d'être écrit parce qu'il ne s'est pas joué
 sur un chiffre : **ranger dans le secteur** plutôt que retrancher la
@@ -1289,7 +1293,7 @@ Le préalable est toujours **la donnée**, jamais le code.
 |---|---|
 | **Une série longue de dividendes** | Quatre exercices donnent un ordre de grandeur, pas de quoi mesurer un pouvoir prédictif. C'est la donnée qui débloquerait le plus. |
 | **Les fondamentaux des émetteurs** (PER, ROE, P/B) | Un des quatre facteurs du cadre initial n'a jamais pu être testé. |
-| **Des cours de commodités QUOTIDIENS, et le taux BCEAO** | Les prix mensuels de la Banque mondiale ont été mesurés et n'améliorent pas la prédiction à cinq séances : un mois est trop lent pour une semaine. Des cours quotidiens (contrats à terme) restent à essayer, et aucune source joignable n'en fournit ; le chargement se fait à la main par `importer-exogenes`. |
+| **Des cours de commodités QUOTIDIENS, et le taux BCEAO** | Les prix mensuels de la Banque mondiale ont été mesurés et n'améliorent pas la prédiction à cinq séances : un mois est trop lent pour une semaine. Le Brent quotidien l'a été (signal faible et régulier sur le secteur Énergie, sans effet sur le classement) ; le cacao, le sucre, le caoutchouc et l'huile de palme quotidiens restent à essayer, et aucune source joignable d'ici n'en fournit ; le chargement se fait à la main par `importer-exogenes`. |
 
 Et deux **questions ouvertes**, l'une et l'autre sur le seul effet que le
 balayage retient :

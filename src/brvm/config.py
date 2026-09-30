@@ -196,13 +196,18 @@ DEFAUTS: dict[str, dict] = {
         # important les CSV. La « Pink Sheet » mensuelle de la Banque mondiale
         # les fournit toutes ; MESURÉES à l'horizon de cinq séances, elles
         # n'améliorent pas le modèle de prix (détail dans `exogene`).
+        #
+        # PAS DE BRENT, et pour la même raison que les secteurs : il viserait
+        # Vivo, les deux TotalEnergies et SMB, soit tout le secteur Énergie,
+        # et s'y annulerait. Mesuré à la place contre le marché, il donne un
+        # signal faible et régulier qui ne bouge pas le classement — voir
+        # `exogene`.
         "correspondance": {
             "caoutchouc_tsr20": ["SPHC", "SOGC"],
             "huile_palme": ["PALC", "SOGC"],
             "sucre": ["SCRC"],
             "cacao": ["NTLC"],
             "cafe_robusta": ["NTLC"],
-            "brent": ["SHEC", "TTLC", "TTLS", "SMBC"],
             "coton": ["UNXC"],
             "cuivre": ["CABC"],
             "huile_coco": ["SICC"],

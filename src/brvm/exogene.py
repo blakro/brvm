@@ -70,6 +70,10 @@ cinq séances et son protocole (écarts appariés à la version livrée) :
     producteurs, 3 mois décalés de 2     -0,0004 (-0,4)  +0,0 (+0,0) +0,2 -0,1
     une par matière, 3 mois décalés de 2 -0,0027 (-0,9)  -0,7 (-0,6) +0,2 -1,4
 
+UNE CORRECTION SUR CE TABLEAU : le Brent y vise Vivo, les deux TotalEnergies
+et SMB, c'est-à-dire TOUT le secteur Énergie — la forme même que la section
+précédente déclare inerte. Il n'y a donc pas été testé. Il l'est ci-dessous.
+
 Rien ne bouge le modèle. Le seul indice est local : sur les quatre
 producteurs, la variation du dernier mois précède leur rendement relatif
 (pente de rang +0,051, t +2,0 groupé par date) — mais entièrement dans la
@@ -77,6 +81,31 @@ première moitié de l'archive (t +2,9), plus du tout dans la seconde
 (t -0,1), et porté par l'huile de palme (Palm CI et SOGB) quand Sucrivoire
 va en sens contraire. Des prix MENSUELS sont trop lents pour un horizon
 d'une semaine, et le seul lien visible n'a pas survécu à 2021.
+
+LE BRENT, QUOTIDIEN, CONTRE LE MARCHÉ. Puisqu'il ne peut rien dire à
+l'intérieur de son secteur, la seule question qu'il tranche est celle du
+secteur Énergie contre le marché. Cours quotidiens de l'EIA, un cours du jour
+J tenu pour connu le jour J+1 ; rendement moyen des quatre valeurs moins la
+médiane de la cote sur les cinq séances suivantes ; une date sur cinq.
+Déclaré avant mesure : 5 et 20 séances de variation.
+
+                              corr. de rang (t)      1re      2nde
+    Brent sur 5 séances        +0,076 (+1,8)       +0,045    +0,111
+    Brent sur 20 séances       +0,053 (+1,3)       +0,026    +0,088
+
+    entrée à            t+0      t+1      t+2      t+3
+    corr. (5 séances)  +0,076   +0,054   +0,088   +0,051
+    tiers haut - bas   +0,51    +0,49    +0,63    +0,62   (points par semaine)
+
+C'est le premier signal exogène du projet qui garde son signe sur les deux
+moitiés ET à toutes les entrées décalées : quand le Brent vient de monter,
+le secteur Énergie tend à battre la cote la semaine suivante, et pas
+seulement à la première séance. Mais son t reste sous 2, deux fenêtres ont
+été essayées, et il ne sert pas le classement : donné au modèle à deux
+niveaux (cible « battre le marché »), il déplace l'IC de -0,0009 (t -1,4)
+et le haut de liste de -0,15 point. Un demi-point par semaine sur quatre
+valeurs d'une quarantaine est trop étroit pour bouger un ordre de toute la
+cote. À suivre, donc, pas à brancher.
 
 Ni l'app ni la ligne de commande ne passent d'ailleurs `exogenes` à
 `prediction.valider` ou `predire` : des séries importées ne changeraient
