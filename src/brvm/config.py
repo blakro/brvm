@@ -250,6 +250,12 @@ DEFAUTS: dict[str, dict] = {
         # (« aucun » : trois calendriers trimestriels sur six ne battent pas
         # l'univers, même sans frais.)
         #
+        # Chaque ligne se refait depuis le dépôt, `--pas` et `--calendriers`
+        # pris dans les deux premières colonnes :
+        #
+        #     python -m brvm backtester --signal modele --seuil-frais \
+        #         --hors-dividende --pas 60 --calendriers 6
+        #
         # Le classement garde un avantage au trimestre — mesuré sur toutes
         # les dates plutôt que sur 42, ses dix premières achetables battent
         # l'univers de +2,4 % l'an avant frais, sur chaque moitié de

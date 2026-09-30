@@ -516,19 +516,33 @@ def _noter(args) -> int:
     return 0 if not classement.empty else 1
 
 
-def _scores_du_signal(cours, nom: str):
+def _scores_du_signal(cours, nom: str, referentiel=None, reglages=None):
     """Matrice dates × tickers du signal demandé, ou None pour le composite.
 
     Les traits se calculent en une passe glissante et ne demandent aucun
     apprentissage : le backtest peut donc rejouer n'importe lequel d'entre
     eux sans réentraîner quoi que ce soit à chaque rééquilibrage, et sans
     le risque de fuite qui va avec.
+
+    Le modèle appris, lui, ne se rejoue que sur ses scores HORS ÉCHANTILLON :
+    chaque date notée par le modèle de sa découpe, entraîné sur des dates
+    antérieures et purgées. C'est `prediction.valider` qui les fabrique, avec
+    le référentiel, comme l'app et `predire`.
     """
     if nom == "composite":
         return None
+    if nom == "modele":
+        validation = prediction.valider(cours, reglages, referentiel=referentiel)
+        scores = validation["scores_hors_echantillon"]
+        if scores.empty:
+            raise SystemExit("modèle appris non validable : échantillon trop "
+                             "court pour une seule découpe.")
+        print(f"Modèle appris, noté hors échantillon : {len(scores)} dates, "
+              f"du {scores.index[0]} au {scores.index[-1]}.\n")
+        return scores
     matrices = features.traits_glissants(cours)
     if nom not in matrices:
-        connus = ", ".join(["composite", *features.TOUS_TRAITS])
+        connus = ", ".join(["composite", "modele", *features.TOUS_TRAITS])
         raise SystemExit(f"signal inconnu : {nom}. Au choix : {connus}.")
     # La volatilité et le retournement se lisent à l'envers : le classement
     # trie du plus grand au plus petit, et ces deux-là pénalisent.
@@ -542,7 +556,19 @@ def _backtester(args) -> int:
         print("aucun cours en base — lancez « brvm ingerer »", file=sys.stderr)
         return 1
 
-    scores = _scores_du_signal(cours, args.signal)
+    if args.calendriers > 1 and not args.seuil_frais:
+        print("--calendriers ne s'emploie qu'avec --seuil-frais",
+              file=sys.stderr)
+        return 1
+    if args.pas is not None and args.pas < 1:
+        print("--pas compte des séances : au moins 1", file=sys.stderr)
+        return 1
+
+    reglages = config.charger()
+    if args.pas is not None:
+        reglages["backtest"]["pas_rebalancement"] = args.pas
+    referentiel = db.lire("referentiel")
+    scores = _scores_du_signal(cours, args.signal, referentiel, reglages)
     # HORS DIVIDENDE : ce que le modèle prédit, et rien d'autre. Le modèle
     # apprend sur le rendement de COURS ; y ajouter le dividende dans le
     # rejeu mesure une autre grandeur que celle qu'il estime, et sur cette
@@ -558,19 +584,29 @@ def _backtester(args) -> int:
     else:
         commun = dict(fondamentaux=db.lire("fondamentaux"),
                       dividendes=db.lire("dividendes"), scores=scores)
-    referentiel = db.lire("referentiel")
     if args.hors_dividende:
         print("Rendement de COURS seul : le dividende n'est pas compté.\n")
+
+    if args.seuil_frais and args.calendriers > 1:
+        # UN CALENDRIER EST UN TIRAGE. Au trimestre, décaler le départ de
+        # dix séances fait passer le modèle appris de -3,5 % à +4,9 % l'an
+        # sans frais : un chiffre tiré d'un seul calendrier ne se cite pas.
+        resultat = backtest.seuil_frais_decale(
+            cours, referentiel, reglages, niveaux=tuple(args.niveaux),
+            calendriers=args.calendriers, **commun)
+        print(backtest.expliquer_seuil_decale(resultat))
+        return 0 if not resultat["calendriers"].empty else 1
 
     if args.seuil_frais:
         # LA QUESTION QUI COMPTE, ET ELLE N'ÉTAIT PAS POSABLE. « Ça ne
         # survit pas aux frais » ne dit pas si on en est loin de 10 % ou
         # d'un facteur dix. Le seuil, lui, se compare au devis d'une SGI.
-        resultat = backtest.seuil_frais(cours, referentiel, None, **commun)
+        resultat = backtest.seuil_frais(cours, referentiel, reglages,
+                                        niveaux=tuple(args.niveaux), **commun)
         print(backtest.expliquer_seuil(resultat))
         return 0 if not resultat["niveaux"].empty else 1
 
-    resultat = backtest.backtester(cours, referentiel, **commun)
+    resultat = backtest.backtester(cours, referentiel, reglages, **commun)
     print(backtest.expliquer(resultat))
     if args.journal and not resultat["etapes"].empty:
         print("\nJournal des rééquilibrages :")
@@ -1142,7 +1178,8 @@ def construire_analyseur() -> argparse.ArgumentParser:
                             help="détailler chaque rééquilibrage")
     backtester.add_argument(
         "--signal", default="composite",
-        help="ce qu'on rejoue : composite (défaut), ou un trait — "
+        help="ce qu'on rejoue : composite (défaut), modele (le modèle appris, "
+             "noté hors échantillon), ou un trait — "
              + ", ".join(features.TOUS_TRAITS))
     backtester.add_argument(
         "--seuil-frais", action="store_true", dest="seuil_frais",
@@ -1151,6 +1188,20 @@ def construire_analyseur() -> argparse.ArgumentParser:
         "--hors-dividende", action="store_true", dest="hors_dividende",
         help="ne compter que le cours : ce que prédit le modèle, et rien "
              "d'autre")
+    backtester.add_argument(
+        "--pas", type=int, default=None,
+        help="séances entre deux rééquilibrages (défaut : configuration, "
+             f"{config.DEFAUTS['backtest']['pas_rebalancement']})")
+    backtester.add_argument(
+        "--calendriers", type=int, default=1,
+        help="avec --seuil-frais : moyenner sur N calendriers aux départs "
+             "décalés dans un pas (1 par défaut) — un seul calendrier est un "
+             "seul tirage")
+    backtester.add_argument(
+        "--niveaux", type=float, nargs="+", default=list(backtest.NIVEAUX),
+        metavar="POURCENT",
+        help="avec --seuil-frais : frais par sens testés, en %% (défaut : "
+             + " ".join(f"{n:g}" for n in backtest.NIVEAUX) + ")")
     backtester.set_defaults(fonction=_backtester)
 
     conseiller = commandes.add_parser(

@@ -269,6 +269,43 @@ def test_refus_quand_l_echantillon_est_maigre():
     assert "Pas assez de données" in message and "minimum" in message
 
 
+def test_les_scores_rejoues_ne_notent_aucune_date_d_entrainement():
+    """Les scores que `backtest` rejoue avec frais sont HORS ÉCHANTILLON.
+
+    Noter une date avec un modèle qui l'a apprise, c'est lui faire deviner
+    un rendement qu'il connaît : le rejeu brillerait, et rien dans ses
+    chiffres ne le trahirait. On vérifie donc, découpe par découpe, que
+    chaque date notée tombe dans SA période de test, après la dernière date
+    d'entraînement ET la purge de l'horizon, et que la première tranche, qui
+    ne sert qu'à apprendre, n'est jamais notée.
+    """
+    cours = _marche_aleatoire(graine=4)
+    resultat = prediction.valider(cours, REGLAGES)
+    scores = resultat["scores_hors_echantillon"]
+    assert not scores.empty and scores.index.is_unique
+
+    horizon = REGLAGES["prediction"]["horizon"]
+    dates = sorted(
+        prediction.construire_echantillon(cours, REGLAGES)["date"].unique())
+    couvertes: list = []
+    for periode in resultat["periodes"].itertuples():
+        debut, fin = periode.periode.split(" → ")
+        propres = scores[(scores.index >= debut) & (scores.index <= fin)]
+        entrainement = [d for d in dates if d < debut][:-horizon]
+        assert entrainement and not propres.empty
+        assert not set(propres.index) & set(entrainement)
+        # La purge sépare la dernière date apprise de la première notée.
+        assert (dates.index(propres.index[0])
+                - dates.index(entrainement[-1])) > horizon
+        # Chaque ligne de test est notée, et une seule fois.
+        assert int(propres.notna().sum().sum()) == periode.lignes_test
+        couvertes += list(propres.index)
+
+    assert couvertes == list(scores.index), (
+        "une date notée tombe hors de toute période de test")
+    assert dates[0] not in scores.index
+
+
 def test_les_probabilites_restent_des_probabilites():
     """Bornes et ordre : une sortie hors [0, 1] ou mal triée serait un
     signe que la colonne lue n'est pas celle qu'on croit."""
