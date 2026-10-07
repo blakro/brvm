@@ -2,12 +2,8 @@
 
 Une phrase fausse trompe aussi sûrement qu'un chiffre faux, et elle passe
 plus facilement inaperçue : personne ne relit « 3ᵉ sur 47 » avec méfiance.
-Trois choses sont vérifiées ici.
+Deux choses sont vérifiées ici.
 
-  - Les termes que l'app demande au glossaire y sont. Une clé absente ne se
-    verrait qu'au moment où un lecteur ouvre le dépliant, en production, et
-    seulement dans l'onglet concerné. Le test lit `streamlit_app.py` et
-    confronte chaque appel au dictionnaire.
   - L'attente compte juste et n'invente pas de date quand elle ne peut pas
     en calculer une.
   - Les montants gardent leur ordre de grandeur. Se tromper d'un facteur
@@ -20,7 +16,6 @@ Trois choses sont vérifiées ici.
 
 from __future__ import annotations
 
-import ast
 import sys
 from pathlib import Path
 
@@ -28,68 +23,6 @@ RACINE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(RACINE / "src"))
 
 from brvm import pedagogie  # noqa: E402
-
-
-def _termes_demandes_par_l_app() -> set[str]:
-    """Les clés passées à `_glossaire(...)` dans le fichier de l'app."""
-    arbre = ast.parse((RACINE / "streamlit_app.py").read_text(encoding="utf-8"))
-    termes: set[str] = set()
-    for noeud in ast.walk(arbre):
-        if (isinstance(noeud, ast.Call)
-                and isinstance(noeud.func, ast.Name)
-                and noeud.func.id == "_glossaire"):
-            for argument in noeud.args:
-                assert isinstance(argument, ast.Constant), (
-                    "les termes du glossaire doivent être des littéraux, "
-                    "sinon ce test ne peut plus les vérifier"
-                )
-                termes.add(argument.value)
-    return termes
-
-
-def test_l_app_ne_demande_que_des_termes_definis():
-    """La panne serait invisible jusqu'à ce qu'un lecteur ouvre le dépliant."""
-    demandes = _termes_demandes_par_l_app()
-    assert demandes, "aucun appel à _glossaire trouvé — le test ne teste rien"
-    inconnus = demandes - set(pedagogie.GLOSSAIRE)
-    assert not inconnus, f"termes absents du glossaire : {sorted(inconnus)}"
-
-
-def test_chaque_onglet_offre_son_depliant():
-    """Un onglet sans glossaire est un onglet qu'un novice ne peut pas lire.
-
-    L'exigence est simple et structurelle : les cinq onglets emploient tous du
-    vocabulaire de métier, donc les cinq doivent offrir de quoi le traduire.
-    « Données » n'en avait aucun — et c'est celui qui parle le plus de
-    séances, d'archive et de référentiel, trois mots que rien ne définissait.
-
-    Le test lit la source de l'application plutôt que son rendu : un onglet
-    fermé n'est pas exécuté, donc aucun test de rendu ne peut couvrir les
-    cinq d'un coup.
-    """
-    import re
-
-    source = (RACINE / "streamlit_app.py").read_text(encoding="utf-8")
-    lignes = source.splitlines()
-    bornes = [(i, int(re.search(r"\[(\d)\]", l).group(1)))
-              for i, l in enumerate(lignes)
-              if re.match(r"\s*with onglets\[\d\]:", l)]
-    assert bornes, "aucun bloc « with onglets[i] » trouvé : le test ne teste rien"
-
-    sans = set()
-    couverts = set()
-    for rang, (debut, onglet) in enumerate(bornes):
-        fin = bornes[rang + 1][0] if rang + 1 < len(bornes) else len(lignes)
-        corps = "\n".join(lignes[debut:fin])
-        if "_glossaire(" in corps:
-            couverts.add(onglet)
-        else:
-            sans.add(onglet)
-    # Un onglet peut être servi par plusieurs blocs — « Classement » en a
-    # trois : il suffit qu'un seul porte le dépliant.
-    manquants = sorted(sans - couverts)
-    assert not manquants, f"onglets sans glossaire : {manquants}"
-    assert couverts == {0, 1, 2, 3, 4}, sorted(couverts)
 
 
 def test_le_glossaire_refuse_un_terme_inconnu():

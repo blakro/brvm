@@ -15,8 +15,9 @@ Ce qui est testé ici est donc l'ÉTAT, pas le calcul :
 
 1. l'app se rend sans lever, ce qui n'est pas acquis — un `st.tabs` mal
    employé lève au démarrage et emporte toute la page ;
-2. la séance lue en direct TIENT à travers les relances ;
-3. l'onglet ouvert et la société affichée tiennent aussi, y compris quand
+2. chacun des quatre onglets se rend ;
+3. la séance lue en direct TIENT à travers les relances ;
+4. l'onglet ouvert et la société affichée tiennent aussi, y compris quand
    la session est vidée et que seule l'URL subsiste.
 
 Le réseau n'est jamais touché : `brvm_org.lire_cote` est remplacé par une
@@ -117,33 +118,41 @@ def _app(lanceur: str) -> AppTest:
 
 
 def _seance_affichee(at: AppTest) -> str:
-    """La date que porte la tuile « Séance » de l'onglet Marché."""
+    """La date que porte la carte « Séance » de l'onglet Aujourd'hui."""
     for bloc in at.markdown:
-        if "SÉANCE</div>" in bloc.value or "Séance</div>" in bloc.value:
+        if 'class="label">Séance</div>' in bloc.value:
             return bloc.value
     return ""
 
 
 def test_l_app_se_rend_sans_lever(lanceur):
-    """Le garde-fou le plus bête, et le plus rentable.
-
-    Une erreur au démarrage — un `key` refusé par la version de Streamlit
-    installée, un widget mal formé — n'emporte pas un onglet : elle emporte
-    la page entière, et l'app en ligne ne montre plus rien du tout.
-    """
+    """Une erreur au démarrage emporte la page entière, pas un onglet."""
     at = _app(lanceur).run()
     assert not at.exception, [str(e) for e in at.exception]
-    assert at.session_state["onglet"] == "Marché"
+    assert at.session_state["onglet"] == "🏠 Aujourd'hui"
+
+
+@pytest.mark.parametrize("onglet, libelle", [
+    ("action", "🔎 Une action"),
+    ("dividendes", "💰 Dividendes"),
+    ("comprendre", "🎓 Comprendre"),
+])
+def test_chaque_onglet_se_rend_sans_lever(lanceur, onglet, libelle):
+    """Le corps des onglets fermés n'est pas exécuté : un rendu par défaut
+    ne prouve rien des trois autres."""
+    at = _app(lanceur)
+    at.query_params["onglet"] = onglet
+    at.run()
+    assert not at.exception, [str(e) for e in at.exception]
+    assert at.session_state["onglet"] == libelle
 
 
 def test_la_seance_lue_en_direct_survit_aux_relances(lanceur):
     """LE DÉFAUT QUI A ATTEINT LA PRODUCTION.
 
     Après « Actualiser », l'app doit afficher la séance publiée sur le
-    site, et continuer de l'afficher. Elle ne le faisait qu'un passage : la
-    variable qui la portait retombait à `None` dès la relance suivante, et
-    la date revenait à celle de l'archive. Avec des onglets qui relancent
-    le script, changer d'onglet suffisait à la reperdre.
+    site, et continuer de l'afficher — y compris après un changement
+    d'onglet, qui relance le script.
     """
     at = _app(lanceur).run()
     assert SEANCE_AFFICHEE not in _seance_affichee(at), (
@@ -155,34 +164,23 @@ def test_la_seance_lue_en_direct_survit_aux_relances(lanceur):
         "« Actualiser » n'a pas affiché la séance lue en direct"
     )
 
-    # Trois relances de natures différentes : un changement d'onglet, une
-    # recherche, un retour. Chacune reperdait la séance.
-    at.session_state["onglet"] = "Données"
+    at.session_state["onglet"] = "🎓 Comprendre"
     at.run()
-    at.session_state["onglet"] = "Marché"
+    at.session_state["onglet"] = "🏠 Aujourd'hui"
     at.run()
     assert SEANCE_AFFICHEE in _seance_affichee(at), (
         "la séance a été reperdue en changeant d'onglet"
-    )
-
-    at.text_input[0].set_value("BOA").run()
-    at.text_input[0].set_value("").run()
-    assert SEANCE_AFFICHEE in _seance_affichee(at), (
-        "la séance a été reperdue en cherchant une valeur"
     )
 
 
 def test_l_onglet_ouvert_tient_d_une_relance_a_l_autre(lanceur):
     """Sans cela, toute interaction ramenait au premier onglet."""
     at = _app(lanceur).run()
-    at.session_state["onglet"] = "Backtest"
+    at.session_state["onglet"] = "💰 Dividendes"
     at.run()
 
-    at.button[0].click().run()          # ↻ Actualiser
-    assert at.session_state["onglet"] == "Backtest"
-
-    at.text_input[0].set_value("BOA").run()
-    assert at.session_state["onglet"] == "Backtest"
+    at.button[0].click().run()          # 🔄 Actualiser
+    assert at.session_state["onglet"] == "💰 Dividendes"
 
 
 def test_l_onglet_et_la_societe_se_relisent_dans_l_URL(lanceur):
@@ -191,99 +189,18 @@ def test_l_onglet_et_la_societe_se_relisent_dans_l_URL(lanceur):
     C'est aussi ce qui rend une fiche partageable par son lien.
     """
     at = _app(lanceur)
-    at.query_params["onglet"] = "Valeur"
+    at.query_params["onglet"] = "action"
     at.query_params["valeur"] = "SNTS"
     at.run()
     assert not at.exception, [str(e) for e in at.exception]
-    assert at.session_state["onglet"] == "Valeur"
+    assert at.session_state["onglet"] == "🔎 Une action"
     assert at.session_state["valeur"] == "SNTS"
 
 
-def test_la_section_prediction_se_rend_sans_lever(lanceur):
-    """L'ONGLET LE PLUS COÛTEUX À CASSER, ET LE SEUL QUE LA SUITE NE
-    RENDAIT PAS.
-
-    Le corps des onglets fermés n'est pas exécuté — c'est voulu, et c'est
-    ce qui rend l'app rapide. Mais cela veut dire qu'un rendu par défaut
-    ne prouve rien du contenu de « Classement », qui porte la section
-    Prédiction : ses tuiles, sa table de dispersion, son graphique à
-    barres d'erreur et ses `column_config`. Une clé de colonne qui
-    n'existe plus dans le tableau des périodes, un `_panneau` employé sans
-    son conteneur, et la page entière tombe — sans qu'aucun test ne
-    bronche.
-
-    C'est exactement la famille de défauts pour laquelle ce fichier
-    existe, appliquée à la partie du code qui vient de changer le plus.
-    """
-    at = _app(lanceur)
-    at.query_params["onglet"] = "Classement"
-    at.run()
-    assert not at.exception, [str(e) for e in at.exception]
-    assert at.session_state["onglet"] == "Classement"
-
-    # Rendue, et pas seulement sans erreur. La preuve passe par les
-    # TABLEAUX plutôt que par le texte : un test qui cherche un mot dans la
-    # page trouve toujours quelque chose, et passerait sur une section
-    # vide. Chaque table ci-dessous n'existe que si le code qui la
-    # construit est allé au bout.
-    colonnes = [set(d.value.columns) for d in at.dataframe]
-
-    def rendue(*exigees):
-        return any(set(exigees) <= c for c in colonnes)
-
-    assert rendue("ticker", "action", "paire", "net"), \
-        "table de conseil absente — acheter/conserver/vendre n'est pas rendu"
-    assert rendue("source", "IC", "IR", "pire période"), \
-        "table de dispersion par source absente"
-    assert rendue("trait", "IC", "poids retenu"), \
-        "table des traits et de leurs poids appris absente"
-    assert rendue("periode", "ic_combinaison", "ic_composite"), \
-        "journal des périodes de test absent"
-    assert rendue("ticker", "probabilite", "incertitude", "rang_combine"), \
-        "classement des probabilités absent — ou privé de son incertitude"
-    # DANS QUOI TOMBENT LES RECOMMANDATIONS. Ajoutée parce qu'un porteur qui
-    # suit dix lignes dont quatre sont des banques n'est pas réparti, et que
-    # rien d'autre dans l'onglet ne le lui dit. La table n'existe que si la
-    # section est allée au bout.
-    assert rendue("secteur", "part du haut de liste", "écart à l'univers"), \
-        "table de concentration sectorielle absente"
-
-    # L'AVANTAGE DU HAUT DE LISTE, qui est le seul chiffre de l'onglet à se
-    # comparer aux frais sans passer par une formule.
-    textes = " ".join(bloc.value for bloc in at.markdown)
-    assert "premières" in textes, \
-        "l'avantage du haut de liste n'est pas affiché"
-
-
-def test_la_section_seuil_de_frais_se_rend_sans_lever(lanceur):
-    """L'onglet Backtest porte désormais un second calcul complet.
-
-    Le seuil de frais rejoue le backtest à huit niveaux de coût, avec un
-    sélecteur de signal, trois tuiles, un graphique et une table. Beaucoup
-    de choses à casser pour un onglet que la suite ne rendait pas — et un
-    `column_config` sur une colonne disparue emporte la page entière.
-    """
-    at = _app(lanceur)
-    at.query_params["onglet"] = "Backtest"
-    at.run()
-    assert not at.exception, [str(e) for e in at.exception]
-
-    colonnes = [set(d.value.columns) for d in at.dataframe]
-    assert any({"frais_par_sens", "ecart", "rotation_moyenne"} <= c
-               for c in colonnes), (
-        "la table du seuil de frais est absente : la section n'a pas été "
-        "rendue, ou ses colonnes ont changé de nom"
-    )
-    textes = " ".join(bloc.value for bloc in at.markdown)
-    assert "Seuil de rentabilité" in textes and "Frais réels" in textes
-
-
 def test_un_symbole_inconnu_dans_l_URL_ne_fait_pas_tomber_l_app(lanceur):
-    """Un lien peut désigner une valeur radiée, ou mal recopiée. Le
-    sélecteur reste seul juge de ce qui existe : il retombe sur sa première
-    option plutôt que de lever."""
+    """Un lien peut désigner une valeur radiée, ou mal recopiée."""
     at = _app(lanceur)
-    at.query_params["onglet"] = "Valeur"
+    at.query_params["onglet"] = "action"
     at.query_params["valeur"] = "CE_SYMBOLE_N_EXISTE_PAS"
     at.run()
     assert not at.exception, [str(e) for e in at.exception]

@@ -1,41 +1,36 @@
-"""Tableau de bord BRVM — point d'entrée de Streamlit Community Cloud.
+"""BRVM — la bourse d'Afrique de l'Ouest, expliquée simplement.
 
-L'app ne lit que les CSV versionnés du dépôt : pas de base sur le
-conteneur, pas d'écriture, pas d'état. Un hébergeur gratuit redémarre le
-conteneur quand il veut et son disque ne survit pas ; y stocker quoi que ce
-soit donnerait une app qui affiche des données introuvables ailleurs. Les
-données arrivent par l'action `ingestion.yml` ; l'app lit et calcule.
+Point d'entrée de Streamlit Community Cloud. L'app ne lit que les CSV
+versionnés du dépôt (`data/`) et, sur demande, la cote du jour sur
+brvm.org. Elle n'écrit rien.
 
-PARTIS PRIS DE VISUALISATION
-----------------------------
-- Paire divergente bleu ↔ rouge, jamais vert/rouge : la confusion
-  vert-rouge est le déficit visuel le plus répandu. Les deux modes ont été
-  validés au script — séparation en vision déficiente et contraste au fond.
-- Le mode sombre est une palette CHOISIE, pas un inversement automatique :
-  les mêmes teintes, reprises à des pas adaptés à un fond sombre.
-- Le texte ne porte jamais la couleur d'une série. L'identité vient de la
-  marque colorée posée à côté — un point en bout de courbe — parce qu'une
-  teinte claire est illisible en texte sur le fond.
-- Un seul rang de filtres, au-dessus des onglets, cadre tout ce qu'il
-  concerne : le lecteur n'a pas à se demander quel réglage s'applique où.
+Quatre onglets, pensés pour quelqu'un qui découvre la bourse :
+
+1. Aujourd'hui  — ce qui s'est passé à la dernière séance ;
+2. Une action   — la fiche d'une société, son cours, ses dividendes ;
+3. Dividendes   — ce qui rapporte vraiment sur ce marché ;
+4. Comprendre   — la BRVM et ses mots, en quelques cartes.
+
+Les analyses statistiques avancées (classement, prédiction, backtest)
+restent disponibles en ligne de commande : `brvm --help`.
 """
 
 from __future__ import annotations
+
+import html
 
 import altair as alt
 import pandas as pd
 import streamlit as st
 
-from brvm import (backtest, conseil, db, dividende, features, pedagogie,
-                  prediction, qualite, scoring)
-from brvm.config import DEFAUTS
+from brvm import db, pedagogie
 from brvm.ingestion import brvm_org
 
-st.set_page_config(page_title="BRVM — cours et analyse",
+st.set_page_config(page_title="BRVM — la bourse expliquée simplement",
                    page_icon="📈", layout="wide")
 
 
-# --- Palette --------------------------------------------------------------
+# --- Couleurs -------------------------------------------------------------
 
 def _sombre() -> bool:
     """Thème actif côté navigateur, si Streamlit sait le dire."""
@@ -47,401 +42,278 @@ def _sombre() -> bool:
 
 SOMBRE = _sombre()
 
-# Validées par scripts/validate_palette.js dans les deux modes : séparation
-# en protanopie ΔE 21,6 (clair) / 19,2 (sombre) pour la paire divergente,
-# 24,7 / 26,8 pour les deux séries du backtest.
+# Hausse et baisse gardent toujours une flèche ▲ ▼ à côté de la couleur :
+# un lecteur qui confond le vert et le rouge lit quand même le sens.
+HAUSSE, BAISSE, STABLE = "#10b981", "#f43f5e", "#94a3b8"
+VIOLET, BLEU, CYAN, ORANGE, ROSE, AMBRE = (
+    "#8b5cf6", "#3b82f6", "#06b6d4", "#f97316", "#ec4899", "#f59e0b")
+
 if SOMBRE:
-    HAUSSE, BAISSE = "#3987e5", "#e66767"
-    SERIE_1, SERIE_2 = "#3987e5", "#d95926"
-    ENCRE, ENCRE_DOUCE = "#ffffff", "#c3c2b7"
-    GRILLE, AXE, SURFACE = "#2c2c2a", "#383835", "#1a1a19"
+    FOND, SURFACE, ENCRE, DOUX = "#0b1020", "#141a2e", "#f1f5f9", "#94a3b8"
+    BORDURE = "rgba(255,255,255,0.08)"
 else:
-    HAUSSE, BAISSE = "#2a78d6", "#e34948"
-    SERIE_1, SERIE_2 = "#2a78d6", "#eb6834"
-    ENCRE, ENCRE_DOUCE = "#0b0b0b", "#52514e"
-    GRILLE, AXE, SURFACE = "#e1e0d9", "#c3c2b7", "#fcfcfb"
+    FOND, SURFACE, ENCRE, DOUX = "#f6f7fb", "#ffffff", "#0f172a", "#64748b"
+    BORDURE = "rgba(15,23,42,0.08)"
 
-# Le plan de page est un cran SOUS la surface des cartes. C'est ce
-# décalage — et pas la couleur — qui fait qu'un tableau de bord paraît
-# construit plutôt que posé à plat : les cartes flottent au-dessus du
-# plan, et la hiérarchie se lit avant qu'on ait lu un mot.
-PLAN = "#0d0d0d" if SOMBRE else "#f9f9f7"
-MUET = "#898781"
-BORDURE = "rgba(255,255,255,0.10)" if SOMBRE else "rgba(11,11,11,0.10)"
-# Statut : jamais réutilisé pour une série, toujours accompagné d'un mot.
-BON, ALERTE, GRAVE, CRITIQUE = "#0ca30c", "#fab219", "#ec835a", "#d03b3b"
-
-# LA RAMPE SÉQUENTIELLE : une seule teinte, du clair au foncé. C'est
-# l'encodage d'une grandeur continue — un score, un rendement — et le seul
-# moyen d'ajouter beaucoup de couleur sans mentir : la teinte y dit
-# « combien », jamais « lequel ».
-#
-# Sept teintes distinctes pour les sept secteurs ont été MESURÉES et
-# rejetées : l'orange et le rouge de la palette sont à ΔE 7,1 en vision
-# NORMALE, sous le plancher de 15. Un lecteur sans déficit visuel ne les
-# distingue pas, et aucun encodage secondaire n'excuse cela.
-RAMPE = (["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95"]
-         if not SOMBRE else
-         ["#0d366b", "#184f95", "#256abf", "#3987e5", "#6da7ec", "#9ec5f4"])
+SECTEURS = {
+    "Services Financiers": ("🏦", "#6366f1"),
+    "Télécommunications": ("📡", "#06b6d4"),
+    "Consommation de Base": ("🛒", "#f59e0b"),
+    "Consommation Discrétionnaire": ("🛍️", "#ec4899"),
+    "Industriels": ("🏭", "#8b5cf6"),
+    "Energie": ("⚡", "#f97316"),
+    "Services Publics": ("💡", "#14b8a6"),
+}
 
 
-def _fond_divergent(valeur, plafond: float = 0.02) -> str:
-    """Fond de cellule : bleu si ça monte, rouge si ça baisse, rien sinon.
-
-    L'intensité suit l'ampleur, plafonnée : une variation de 2 % ne doit
-    pas teindre comme une de 0,1 %. Et le maximum reste à 22 % d'opacité —
-    au-delà, le texte de la cellule perdrait son contraste, et une couleur
-    qu'on ne peut plus lire à travers n'informe plus, elle décore.
-    """
-    if valeur is None or valeur != valeur or valeur == 0:
-        return ""
-    force = min(abs(float(valeur)) / plafond, 1.0)
-    couleur = HAUSSE if valeur > 0 else BAISSE
-    return f"background-color: {_lavis(couleur, 0.05 + 0.17 * force)}"
+def _secteur(nom) -> tuple[str, str]:
+    return SECTEURS.get(nom, ("🏢", BLEU))
 
 
-def _fond_sequentiel(valeur, maximum: float) -> str:
-    """Fond de cellule sur la rampe : plus la valeur pèse, plus c'est dense."""
-    if valeur is None or valeur != valeur or not maximum:
-        return ""
-    # Racine carrée : les volumes de la BRVM s'étalent sur quatre ordres de
-    # grandeur, et une échelle linéaire laisserait quarante lignes
-    # indistinctement pâles autour d'une seule foncée.
-    force = min((float(valeur) / maximum) ** 0.5, 1.0)
-    return f"background-color: {_lavis(SERIE_1, 0.04 + 0.20 * force)}"
-
-
-def _teinte(fraction: float) -> str:
-    """Un pas de la rampe séquentielle, pour une valeur entre 0 et 1."""
-    fraction = 0.0 if fraction != fraction else min(max(fraction, 0.0), 1.0)
-    return RAMPE[min(int(fraction * len(RAMPE)), len(RAMPE) - 1)]
-
-
-def _lavis(couleur: str, alpha: float) -> str:
-    """La même couleur en fond très dilué.
-
-    Un lavis teinte une surface sans devenir de l'encre : le texte posé
-    dessus garde son propre contraste, et la couleur ne prétend pas porter
-    une valeur qu'elle ne porte pas. C'est là que la couleur est
-    illimitée — sur la surface, pas sur le signe.
-    """
-    couleur = couleur.lstrip("#")
-    r, v, b = (int(couleur[i:i + 2], 16) for i in (0, 2, 4))
+def _rgba(couleur: str, alpha: float) -> str:
+    c = couleur.lstrip("#")
+    r, v, b = (int(c[i:i + 2], 16) for i in (0, 2, 4))
     return f"rgba({r},{v},{b},{alpha})"
 
-POLICE = 'system-ui, -apple-system, "Segoe UI", sans-serif'
 
+def _sens(valeur) -> int:
+    if valeur is None or valeur != valeur or valeur == 0:
+        return 0
+    return 1 if valeur > 0 else -1
+
+
+def _couleur(valeur) -> str:
+    return {1: HAUSSE, -1: BAISSE, 0: STABLE}[_sens(valeur)]
+
+
+def _fleche(valeur) -> str:
+    return {1: "▲", -1: "▼", 0: "●"}[_sens(valeur)]
+
+
+def _pastille(valeur) -> str:
+    """« ▲ +2,1 % » dans une pastille colorée."""
+    c = _couleur(valeur)
+    return (f'<span class="pastille" style="background:{_rgba(c, .14)};'
+            f'color:{c}">{_fleche(valeur)} {pedagogie.pourcentage(valeur)}</span>')
+
+
+# --- Habillage ------------------------------------------------------------
 
 def _habiller() -> None:
-    """Le système visuel, injecté une fois.
-
-    Streamlit rend des blocs empilés sur un fond uni : correct, et plat.
-    Trois choses suffisent à en faire un tableau de bord — un plan de page
-    sous des cartes, une échelle typographique, et de l'air. Tout le reste
-    ci-dessous n'est que l'application de ces trois-là.
-    """
     st.markdown(f"""<style>
-    :root {{
-      --plan: {PLAN}; --surface: {SURFACE}; --bordure: {BORDURE};
-      --encre: {ENCRE}; --encre-douce: {ENCRE_DOUCE}; --muet: {MUET};
-      --serie-1: {SERIE_1}; --hausse: {HAUSSE}; --baisse: {BAISSE};
-    }}
-    /* UN DÉGRADÉ, PAS UNE COULEUR. Le plan reste presque neutre — deux
-       nappes de la teinte de série à 5 % et 3,5 %, posées aux deux angles
-       hauts. Assez pour que les cartes se détachent au lieu de flotter
-       sur un aplat, trop peu pour qu'on puisse nommer la couleur du fond.
-       C'est le seuil : dès qu'un fond se remarque, il concurrence ce
-       qu'il porte. */
-    .stApp {{
-      background:
-        radial-gradient(1200px 620px at 12% -8%,
-                        {_lavis(SERIE_1, 0.05)}, transparent 62%),
-        radial-gradient(1000px 540px at 88% -4%,
-                        {_lavis(SERIE_2, 0.035)}, transparent 58%),
-        var(--plan);
-      background-attachment: fixed;
-    }}
-    .block-container {{ padding-top: 2.2rem; max-width: 1420px; }}
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap');
+@property --n {{ syntax: '<integer>'; initial-value: 0; inherits: false; }}
 
-    /* Échelle typographique : trois tailles, pas sept. */
-    h1 {{ font-size: 1.9rem !important; font-weight: 650 !important;
-         letter-spacing: -0.02em; margin-bottom: .1rem !important; }}
-    /* Le filet porte la couleur, le mot garde son encre : c'est la même
-       règle que pour les tuiles, appliquée aux titres de section. */
-    h2 {{ font-size: 1.05rem !important; font-weight: 600 !important;
-         letter-spacing: .01em; text-transform: uppercase;
-         color: var(--muet) !important; margin-top: 2rem !important;
-         display: flex; align-items: center; gap: .55rem; }}
-    h2::before {{
-      content: ""; width: 3px; height: 1em; border-radius: 2px;
-      background: var(--serie-1); flex: 0 0 auto;
-    }}
-    h3 {{ font-size: .95rem !important; font-weight: 600 !important; }}
+html, body, [class*="css"], .stMarkdown, button, input {{
+  font-family: 'Plus Jakarta Sans', system-ui, sans-serif !important;
+}}
+.stApp {{
+  background:
+    radial-gradient(900px 500px at 0% 0%, {_rgba(VIOLET, .12)}, transparent 60%),
+    radial-gradient(900px 500px at 100% 0%, {_rgba(CYAN, .12)}, transparent 60%),
+    radial-gradient(900px 600px at 50% 100%, {_rgba(ROSE, .08)}, transparent 60%),
+    {FOND};
+  background-attachment: fixed;
+}}
+.block-container {{ padding-top: 3.2rem; max-width: 1280px; }}
 
-    /* La carte : un anneau d'un pixel, jamais une ombre portée. Une ombre
-       simule une profondeur que l'écran n'a pas ; l'anneau se contente de
-       délimiter. */
-    .carte {{
-      background: var(--surface); border: 1px solid var(--bordure);
-      border-radius: 12px; padding: 1rem 1.15rem; height: 100%;
-    }}
-    .tuile-label {{
-      font-size: .72rem; font-weight: 600; letter-spacing: .06em;
-      text-transform: uppercase; color: var(--muet); margin-bottom: .35rem;
-    }}
-    /* Chiffres proportionnels : `tabular-nums` donne à chaque chiffre la
-       largeur d'un zéro, et « 121 » paraît alors distendu en grande
-       taille. Le tabulaire est réservé aux colonnes. */
-    .tuile-valeur {{
-      font-size: 1.85rem; font-weight: 650; line-height: 1.05;
-      color: var(--encre); letter-spacing: -0.02em;
-    }}
-    .tuile-delta {{ font-size: .82rem; font-weight: 600; margin-top: .3rem; }}
-    .tuile-note {{ font-size: .75rem; color: var(--muet); margin-top: .3rem; }}
-    .hausse {{ color: var(--hausse); }} .baisse {{ color: var(--baisse); }}
+/* --- Animations ------------------------------------------------------- */
+@keyframes monte {{ from {{ opacity: 0; transform: translateY(18px); }}
+                    to {{ opacity: 1; transform: none; }} }}
+@keyframes degrade {{ 0% {{ background-position: 0% 50%; }}
+                      50% {{ background-position: 100% 50%; }}
+                      100% {{ background-position: 0% 50%; }} }}
+@keyframes flotte {{ 0%,100% {{ transform: translateY(0); }}
+                     50% {{ transform: translateY(-8px); }} }}
+@keyframes pousse {{ from {{ transform: scaleX(0); }} to {{ transform: scaleX(1); }} }}
+@keyframes pouls {{ 0% {{ box-shadow: 0 0 0 0 {_rgba(HAUSSE, .6)}; }}
+                    70% {{ box-shadow: 0 0 0 10px {_rgba(HAUSSE, 0)}; }}
+                    100% {{ box-shadow: 0 0 0 0 {_rgba(HAUSSE, 0)}; }} }}
+@keyframes compte {{ from {{ --n: 0; }} to {{ --n: var(--cible); }} }}
+@keyframes brille {{ from {{ left: -60%; }} to {{ left: 130%; }} }}
 
-    /* Le héros : un seul par vue, et il porte le chiffre qui résume. */
-    .heros {{ font-size: 3.4rem; font-weight: 680; line-height: 1;
-             letter-spacing: -0.03em; color: var(--encre); }}
+.anime {{ animation: monte .6s cubic-bezier(.2,.8,.2,1) both; }}
+.d1 {{ animation-delay: .05s; }} .d2 {{ animation-delay: .12s; }}
+.d3 {{ animation-delay: .19s; }} .d4 {{ animation-delay: .26s; }}
+.d5 {{ animation-delay: .33s; }} .d6 {{ animation-delay: .40s; }}
+.d7 {{ animation-delay: .47s; }}
 
-    /* Onglets : une barre, pas des boutons. */
-    .stTabs [data-baseweb="tab-list"] {{
-      gap: 1.6rem; border-bottom: 1px solid var(--bordure);
-    }}
-    .stTabs [data-baseweb="tab"] {{
-      padding: .4rem 0 .7rem 0; font-weight: 550; font-size: .93rem;
-    }}
-    .stTabs [data-baseweb="tab-highlight"] {{ height: 2px; }}
+.compteur {{ animation: compte 1.4s cubic-bezier(.2,.8,.2,1) forwards;
+            counter-reset: n var(--n); }}
+.compteur::after {{ content: counter(n); }}
 
-    /* Le chrome recule : la donnée est la seule chose autorisée à être
-       bruyante. */
-    [data-testid="stDataFrame"] {{ border-radius: 10px; }}
-    [data-testid="stExpander"] details {{
-      border: 1px solid var(--bordure) !important; border-radius: 10px;
-      background: var(--surface);
-      border-left: 3px solid var(--serie-1) !important;
-    }}
-    /* L'onglet actif est le seul point coloré de la barre : le reste
-       recule, sinon six accents se disputent le regard. */
-    .stTabs [aria-selected="true"] {{ color: var(--serie-1) !important; }}
-    hr {{ border-color: var(--bordure); }}
+/* --- Bandeau d'accueil ------------------------------------------------ */
+.bandeau {{
+  position: relative; overflow: hidden; border-radius: 24px;
+  padding: 1.8rem 2rem; color: #fff;
+  background: linear-gradient(120deg, #7c3aed, #2563eb, #06b6d4, #ec4899, #7c3aed);
+  background-size: 300% 300%; animation: degrade 14s ease infinite;
+  box-shadow: 0 20px 45px -20px {_rgba(VIOLET, .7)};
+}}
+.bandeau::after {{
+  content: ""; position: absolute; top: 0; bottom: 0; width: 40%;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.18), transparent);
+  transform: skewX(-20deg); animation: brille 6s ease-in-out infinite;
+}}
+.bandeau h1 {{ color: #fff !important; font-size: 2.1rem !important;
+              font-weight: 800 !important; margin: 0 !important;
+              padding: 0 !important; letter-spacing: -.02em; }}
+.bandeau p {{ margin: .35rem 0 0; opacity: .92; font-size: 1.02rem; }}
+.bandeau .emoji {{ font-size: 3rem; display: inline-block;
+                  animation: flotte 3.5s ease-in-out infinite; }}
+.puce {{ display: inline-flex; align-items: center; gap: .4rem;
+        background: rgba(255,255,255,.18); backdrop-filter: blur(6px);
+        border: 1px solid rgba(255,255,255,.25); border-radius: 999px;
+        padding: .28rem .8rem; font-size: .82rem; font-weight: 600;
+        margin: .8rem .4rem 0 0; }}
+.point-direct {{ width: 9px; height: 9px; border-radius: 50%;
+                background: #34d399; animation: pouls 1.8s infinite; }}
 
-    /* Le conteneur bordé natif, habillé comme les tuiles pour que tout
-       le tableau de bord soit fait du même matériau. */
-    [data-testid="stVerticalBlockBorderWrapper"] {{
-      background: var(--surface); border: 1px solid var(--bordure);
-      border-radius: 12px; padding: 1rem 1.15rem;
-    }}
-    </style>""", unsafe_allow_html=True)
+/* --- Cartes ----------------------------------------------------------- */
+.carte {{
+  background: {SURFACE}; border: 1px solid {BORDURE}; border-radius: 20px;
+  padding: 1.1rem 1.25rem; height: 100%;
+  box-shadow: 0 10px 30px -18px rgba(15,23,42,.35);
+  transition: transform .25s ease, box-shadow .25s ease;
+}}
+.carte:hover {{ transform: translateY(-4px);
+               box-shadow: 0 18px 40px -18px rgba(15,23,42,.45); }}
+.stat {{ color: #fff; border: none; position: relative; overflow: hidden; }}
+.stat .icone {{ position: absolute; right: .7rem; bottom: .4rem;
+               font-size: 2.6rem; opacity: .28; filter: grayscale(.2); }}
+.stat .label, .stat .valeur, .stat .note {{ position: relative; z-index: 1; }}
+.stat .label {{ font-size: .78rem; font-weight: 700; text-transform: uppercase;
+               letter-spacing: .06em; opacity: .9; }}
+.stat .valeur {{ font-size: 2.2rem; font-weight: 800; line-height: 1.15;
+                letter-spacing: -.02em; margin-top: .2rem; }}
+.stat .note {{ font-size: .82rem; opacity: .9; margin-top: .2rem; }}
+
+.titre {{ font-size: 1.25rem; font-weight: 800; color: {ENCRE};
+         margin: 1.8rem 0 .8rem; display: flex; align-items: center; gap: .5rem; }}
+.titre .barre {{ width: 6px; height: 1.3rem; border-radius: 4px;
+                background: linear-gradient(180deg, {VIOLET}, {CYAN}); }}
+.sous {{ color: {DOUX}; font-size: .95rem; margin: -.5rem 0 1rem; }}
+
+.pastille {{ display: inline-block; padding: .18rem .6rem; border-radius: 999px;
+            font-weight: 700; font-size: .85rem; white-space: nowrap; }}
+
+.ligne {{ display: flex; align-items: center; gap: .75rem; padding: .6rem .2rem;
+         border-bottom: 1px dashed {BORDURE}; }}
+.ligne:last-child {{ border-bottom: none; }}
+.rang {{ width: 2rem; height: 2rem; border-radius: 50%; display: grid;
+        place-items: center; font-weight: 800; color: #fff; flex: 0 0 auto; }}
+.nom {{ flex: 1; min-width: 0; }}
+.nom b {{ color: {ENCRE}; }}
+.nom small {{ color: {DOUX}; display: block; white-space: nowrap;
+             overflow: hidden; text-overflow: ellipsis; }}
+.jauge {{ height: 10px; border-radius: 999px; background: {_rgba(STABLE, .2)};
+         overflow: hidden; display: flex; }}
+.jauge > div {{ height: 100%; transform-origin: left;
+               animation: pousse 1.1s cubic-bezier(.2,.8,.2,1) both; }}
+
+.secteur {{ border-top: 5px solid; text-align: center; }}
+.secteur .emo {{ font-size: 1.9rem; }}
+.secteur .nomsec {{ font-size: .78rem; font-weight: 700; color: {DOUX};
+                   min-height: 2.4em; line-height: 1.2; margin: .2rem 0; }}
+
+.meteo {{ display: flex; align-items: center; gap: 1.1rem; }}
+.meteo .emoji {{ font-size: 3.6rem; animation: flotte 4s ease-in-out infinite; }}
+.meteo h3 {{ margin: 0 !important; padding: 0 !important; color: {ENCRE};
+            font-size: 1.5rem !important; font-weight: 800 !important; }}
+.meteo p {{ margin: .2rem 0 0; color: {DOUX}; }}
+
+.lecon {{ border-radius: 20px; padding: 1.2rem 1.4rem; color: #fff;
+         background: linear-gradient(120deg, {ORANGE}, {ROSE});
+         box-shadow: 0 18px 40px -20px {_rgba(ROSE, .8)}; }}
+.lecon b {{ font-size: 1.15rem; }}
+
+.mot {{ border-left: 6px solid; }}
+.mot h4 {{ margin: 0 0 .3rem !important; padding: 0 !important;
+          color: {ENCRE}; font-size: 1.05rem !important; }}
+.mot p {{ margin: 0; color: {DOUX}; font-size: .92rem; line-height: 1.5; }}
+
+/* --- Onglets : des pilules ------------------------------------------- */
+.stTabs [role="tablist"] {{
+  gap: .4rem; background: {SURFACE}; padding: .4rem; border-radius: 999px;
+  border: 1px solid {BORDURE}; width: fit-content; max-width: 100%;
+  overflow-x: auto; box-shadow: 0 8px 24px -16px rgba(15,23,42,.4);
+}}
+.stTabs [role="tablist"] > *:not([role="tab"]) {{ display: none; }}
+.stTabs [role="tablist"]::after, .stTabs [role="tablist"]::before {{ display: none; }}
+.stTabs [role="tab"] {{
+  border-radius: 999px; padding: .55rem 1.15rem !important; font-weight: 700;
+  transition: background .25s ease, color .25s ease, transform .2s ease;
+  border: none !important; height: auto; margin: 0 !important;
+}}
+.stTabs [role="tab"] p {{ font-weight: 700; font-size: .98rem; }}
+.stTabs [role="tab"]:hover {{ background: {_rgba(VIOLET, .1)}; transform: translateY(-1px); }}
+.stTabs [role="tab"][aria-selected="true"] {{
+  background: linear-gradient(120deg, {VIOLET}, {BLEU}) !important;
+  color: #fff !important; box-shadow: 0 8px 18px -8px {_rgba(VIOLET, .9)};
+}}
+.stTabs [role="tab"][aria-selected="true"] p {{ color: #fff !important; }}
+.stTabs [role="tabpanel"] {{ animation: monte .5s ease both; }}
+
+[data-testid^="stBaseButton"] {{
+  border-radius: 999px !important; font-weight: 700; border: none !important;
+  color: #fff !important; padding: .6rem 1rem !important;
+  background: linear-gradient(120deg, {VIOLET}, {BLEU}) !important;
+  transition: transform .2s ease, box-shadow .2s ease;
+}}
+[data-testid^="stBaseButton"] p {{ color: #fff !important; font-weight: 700; }}
+[data-testid^="stBaseButton"]:hover {{ transform: translateY(-2px) scale(1.02);
+  box-shadow: 0 10px 24px -10px {_rgba(VIOLET, .9)}; }}
+[data-testid="stExpander"] details {{ border-radius: 16px;
+  background: {SURFACE}; border: 1px solid {BORDURE}; }}
+[data-testid="stVerticalBlockBorderWrapper"] {{ border-radius: 20px; }}
+
+@media (max-width: 640px) {{
+  .bandeau {{ padding: 1.3rem; }} .bandeau h1 {{ font-size: 1.5rem !important; }}
+  .stat .valeur {{ font-size: 1.7rem; }}
+}}
+@media (prefers-reduced-motion: reduce) {{
+  *, *::before, *::after {{ animation: none !important; transition: none !important; }}
+}}
+</style>""", unsafe_allow_html=True)
 
 
-def _etincelle(valeurs, largeur=112, hauteur=30) -> str:
-    """Sparkline SVG : douze points de contexte à côté d'un chiffre.
-
-    Une valeur seule ne dit pas si elle sort de l'ordinaire. La courbe
-    n'a ni axe ni graduation — ce n'est pas un graphique, c'est une
-    texture qui répond à « et avant ? ». Le dernier point porte l'accent,
-    le reste est en gris : c'est là que le lecteur regarde.
-    """
-    points = [v for v in valeurs if v == v]
-    if len(points) < 2:
-        return ""
-    bas, haut = min(points), max(points)
-    etendue = (haut - bas) or 1
-    pas = largeur / (len(points) - 1)
-    marge = 3
-    chemin = " ".join(
-        f"{i * pas:.1f},"
-        f"{marge + (hauteur - 2 * marge) * (1 - (v - bas) / etendue):.1f}"
-        for i, v in enumerate(points)
-    )
-    fin = chemin.split(" ")[-1]
-    monte = points[-1] >= points[0]
-    couleur = HAUSSE if monte else BAISSE
-    return (
-        f'<svg width="{largeur}" height="{hauteur}" viewBox="0 0 {largeur} '
-        f'{hauteur}" fill="none" style="display:block;margin-top:.45rem">'
-        f'<polyline points="{chemin}" stroke="{MUET}" stroke-width="1.5" '
-        f'stroke-linejoin="round" stroke-linecap="round" opacity="0.55"/>'
-        # L'anneau à la couleur de la surface détache le point de la
-        # courbe là où ils se croisent.
-        f'<circle cx="{fin.split(",")[0]}" cy="{fin.split(",")[1]}" r="3.2" '
-        f'fill="{couleur}" stroke="{SURFACE}" stroke-width="2"/></svg>'
-    )
+def _html(code: str) -> None:
+    st.markdown(code, unsafe_allow_html=True)
 
 
-def _carte_secteur(colonne, nom: str, variation, valeurs: int,
-                   part_hausse: float) -> None:
-    """Un secteur en une carte : nom, variation médiane, largeur interne.
+def _titre(texte: str, sous: str = "") -> None:
+    _html(f'<div class="titre anime"><span class="barre"></span>{texte}</div>'
+          + (f'<div class="sous">{sous}</div>' if sous else ""))
 
-    C'est la première lecture que fait un professionnel devant un marché —
-    quel secteur porte la séance ? — et l'app ne la permettait pas : elle
-    alignait 47 valeurs et jamais les sept secteurs.
 
-    La barre dit la part de valeurs en hausse À L'INTÉRIEUR du secteur.
-    Une médiane positive portée par une valeur sur sept ne dit pas la même
-    chose qu'une hausse partagée, et le chiffre seul ne l'avoue pas.
-    """
-    signe = 0 if variation is None or variation != variation else (
-        1 if variation > 0 else -1 if variation < 0 else 0)
-    couleur = HAUSSE if signe > 0 else BAISSE if signe < 0 else MUET
-    # ENCODAGE DIVERGENT : deux pôles, un milieu neutre, l'intensité
-    # suivant l'ampleur. Une variation de 2 % ne doit pas teindre la carte
-    # comme une de 0,1 %, sinon la couleur crie là où il ne se passe
-    # presque rien. Le plafond est à 2 % — au-delà, une séance de la BRVM
-    # est déjà remarquable.
-    force = 0.0 if signe == 0 else min(abs(variation) / 0.02, 1.0)
+def _stat(colonne, label: str, valeur: str, note: str, couleurs: tuple,
+          icone: str, delai: int = 1, nombre: int | None = None) -> None:
+    """Une carte colorée. `nombre` : un entier qui défile de 0 à sa valeur."""
+    contenu = (f'<span class="compteur" style="--cible:{nombre}" '
+               f'aria-label="{nombre}"></span>' if nombre is not None
+               else valeur)
     colonne.markdown(
-        f'<div class="carte" style="padding:.75rem .85rem;'
-        f'border-left:3px solid {couleur};'
-        f'background:linear-gradient(160deg,'
-        f'{_lavis(couleur, 0.06 + 0.18 * force)} 0%,'
-        f'{_lavis(couleur, 0.0)} 78%)">'
-        # DEUX LIGNES RÉSERVÉES, quelle que soit la longueur du nom :
-        # « Consommation Discrétionnaire » en prend deux et « Energie »
-        # une, et sans réserve les chiffres des sept cartes ne s'alignent
-        # plus — l'œil compare des hauteurs avant de lire des mots.
-        f'<div class="tuile-label" style="font-size:.65rem;line-height:1.3;'
-        f'height:2.6em;overflow:hidden">{nom}</div>'
-        f'<div style="font-size:1.15rem;font-weight:650;color:{couleur};'
-        f'letter-spacing:-.01em">{pedagogie.pourcentage(variation)}</div>'
-        # Piste et remplissage du même bleu, deux pas d'écart : l'état se
-        # lit sur toute la barre, pas seulement sur la partie pleine.
-        f'<div style="display:flex;height:4px;border-radius:2px;'
-        f'background:{GRILLE};margin-top:.5rem;overflow:hidden">'
-        f'<div style="flex:{max(part_hausse, 0.001)} 0 0;background:{HAUSSE}">'
-        f'</div><div style="flex:{max(1 - part_hausse, 0.001)} 0 0"></div></div>'
-        f'<div class="tuile-note" style="margin-top:.35rem;font-size:.7rem">'
-        f'{valeurs} valeur{"s" if valeurs > 1 else ""} · '
-        f'{part_hausse:.0%} en hausse</div></div>',
+        f'<div class="carte stat anime d{delai}" style="background:'
+        f'linear-gradient(135deg,{couleurs[0]},{couleurs[1]});'
+        f'box-shadow:0 16px 36px -18px {couleurs[0]}">'
+        f'<span class="icone">{icone}</span>'
+        f'<div class="label">{label}</div>'
+        f'<div class="valeur">{contenu}</div>'
+        f'<div class="note">{note}</div></div>',
         unsafe_allow_html=True)
 
 
-def _panneau(titre: str = "", note: str = ""):
-    """Un graphique posé sur une surface, pas flottant sur le plan.
-
-    Même décalage que pour les tuiles : une carte sous le tracé le fait
-    paraître construit plutôt qu'inséré. Le graphique reste sur fond
-    transparent — c'est la carte qui porte la surface, et une seule des
-    deux doit le faire.
-
-    Bâti sur le conteneur bordé de Streamlit plutôt que sur un sélecteur
-    CSS remontant l'arbre : la structure du DOM de Streamlit change d'une
-    version à l'autre, un `:has(> div > div > …)` casserait sans bruit à
-    la première mise à jour.
-    """
-    boite = st.container(border=True)
-    if titre:
-        boite.markdown(f'<div class="tuile-label">{titre}</div>',
-                       unsafe_allow_html=True)
-    if note:
-        boite.markdown(f'<div class="tuile-note" style="margin:0 0 .4rem">'
-                       f'{note}</div>', unsafe_allow_html=True)
-    return boite
-
-
-def _tuile(colonne, label: str, valeur: str, delta: str = "",
-           sens: int = 0, note: str = "", etincelle: str = "",
-           teinte: str = "") -> None:
-    """Une tuile : intitulé, valeur, écart signé, contexte. Dans cet ordre.
-
-    Le contrat vient de la référence de conception — `label`, `value`,
-    `delta`, `trend` — et l'ordre n'est pas décoratif : on lit ce que
-    c'est, puis combien, puis si c'est inhabituel.
-    """
-    classe = "hausse" if sens > 0 else "baisse" if sens < 0 else ""
-    # LE BANDEAU PORTE LA COULEUR, LE TEXTE GARDE SON ENCRE. Une teinte
-    # claire est illisible en texte sur le fond, et un intitulé coloré
-    # confierait l'identité à un canal qui ne l'assume pas. Le lavis, lui,
-    # est de la surface : il peut être aussi coloré qu'on veut.
-    accent = teinte or (HAUSSE if sens > 0 else BAISSE if sens < 0 else SERIE_1)
-    style = (f' style="border-left:3px solid {accent};'
-             f'background:linear-gradient(100deg,{_lavis(accent, 0.13)} 0%,'
-             f'{_lavis(accent, 0.04)} 45%,{_lavis(accent, 0.0)} 80%)"')
-    couleur_valeur = (f' style="color:{accent}"'
-                      if sens else "")
-    morceaux = [f'<div class="tuile-label">{label}</div>',
-                f'<div class="tuile-valeur"{couleur_valeur}>{valeur}</div>']
-    if delta:
-        morceaux.append(f'<div class="tuile-delta {classe}">{delta}</div>')
-    if note:
-        morceaux.append(f'<div class="tuile-note">{note}</div>')
-    if etincelle:
-        morceaux.append(etincelle)
-    colonne.markdown(f'<div class="carte"{style}>{"".join(morceaux)}</div>',
-                     unsafe_allow_html=True)
-
-
-@alt.theme.register("brvm", enable=True)
-def _theme() -> alt.theme.ThemeConfig:
-    """Chrome discret : la grille et les axes ne concurrencent pas les
-    marques qui portent la donnée. Traits pleins, jamais pointillés — un
-    pointillé se lit comme une projection ou un seuil."""
+# Thème des graphiques : fond transparent, grille discrète, police ronde.
+@alt.theme.register("brvm_couleurs", enable=True)
+def _theme_graphiques() -> alt.theme.ThemeConfig:
     return alt.theme.ThemeConfig({
-        "background": "transparent",   # la carte porte la surface
+        "background": "transparent",
         "view": {"stroke": "transparent"},
-        "padding": {"left": 4, "right": 4, "top": 8, "bottom": 4},
-        "axis": {
-            "labelColor": ENCRE_DOUCE, "titleColor": ENCRE_DOUCE,
-            "gridColor": GRILLE, "domainColor": AXE, "tickColor": AXE,
-            "labelFontSize": 12, "titleFontSize": 12,
-        },
-        "legend": {"labelColor": ENCRE, "titleColor": ENCRE_DOUCE},
-        "font": POLICE,
+        "font": "Plus Jakarta Sans, system-ui, sans-serif",
+        "axis": {"labelColor": DOUX, "titleColor": DOUX, "gridColor": BORDURE,
+                 "domain": False, "tickColor": BORDURE, "labelFontSize": 12},
+        "legend": {"labelColor": ENCRE, "titleColor": DOUX},
     })
-
-
-def _telecharger(donnees: pd.DataFrame, nom: str, cle: str) -> None:
-    """Bouton d'export : un tableau à l'écran doit pouvoir en sortir."""
-    st.download_button(
-        "Télécharger en CSV", donnees.to_csv(index=False).encode("utf-8"),
-        file_name=nom, mime="text/csv", key=cle,
-    )
-
-
-def _glossaire(*termes: str) -> None:
-    """Les mots de l'onglet, en bas de l'onglet.
-
-    Un glossaire relégué dans une page à part n'est ouvert par personne :
-    il faut quitter ce qu'on lisait pour aller chercher le mot, et revenir.
-    Chaque onglet porte donc les siens, et eux seuls.
-    """
-    with st.expander("Les mots de cet onglet"):
-        st.markdown(pedagogie.glossaire(*termes))
-
-
-def _attente(titre: str, disponible: int, requis: int, pourquoi: str,
-             unite: str = "séance") -> None:
-    """Un refus affiché comme un compteur qui avance, pas comme une panne.
-
-    « Aucune valeur classée » se lit comme un bug. Une barre au dixième,
-    assortie du mois où le premier résultat tombera, se lit pour ce qu'elle
-    est : l'archive n'a pas encore l'âge requis, et elle vieillit.
-    """
-    etat = pedagogie.attente(disponible, requis, derniere, unite)
-    boite = st.container(border=True)
-    # La jauge est dessinée à la main plutôt que confiée à `st.progress` :
-    # celle de Streamlit occupe toute la largeur en pleine saturation, et
-    # une attente n'a pas à crier. Piste et remplissage du même bleu à
-    # deux pas d'écart, pour que l'état se lise sur toute la barre.
-    boite.markdown(
-        f'<div class="tuile-label">{titre} — en attente de données</div>'
-        f'<div style="display:flex;align-items:baseline;gap:.6rem;'
-        f'margin:.25rem 0 .6rem">'
-        f'<div style="font-size:1.6rem;font-weight:650;color:{ENCRE}">'
-        f'{etat["disponible"]}</div>'
-        f'<div style="color:{MUET};font-size:.95rem">sur '
-        f'{etat["requis"]} {unite}s nécessaires</div></div>'
-        f'<div style="display:flex;height:6px;border-radius:3px;'
-        f'background:{GRILLE};overflow:hidden">'
-        f'<div style="flex:{max(etat["part"], 0.004)} 0 0;'
-        f'background:{SERIE_1}"></div>'
-        f'<div style="flex:{max(1 - etat["part"], 0.004)} 0 0"></div></div>'
-        f'<div class="tuile-note" style="margin-top:.6rem">{etat["phrase"]}'
-        f'</div>'
-        f'<div class="tuile-note" style="margin-top:.5rem;line-height:1.5">'
-        f'{pourquoi}</div>',
-        unsafe_allow_html=True)
 
 
 # --- Données --------------------------------------------------------------
@@ -454,11 +326,9 @@ def charger_archive():
 
 @st.cache_data(ttl=900, show_spinner="Lecture de brvm.org…")
 def lire_en_direct():
-    """Séance publiée, lue sur le site. (cote, erreur) — l'un vaut None.
+    """Séance publiée sur brvm.org. (cote, erreur) — l'un vaut None.
 
-    L'app ne doit pas dépendre de l'action planifiée pour montrer quelque
-    chose. Affiché seulement, jamais archivé : hors clôture, la colonne
-    « Cours Clôture » du site porte le dernier cours traité.
+    Affichée seulement, jamais archivée.
     """
     try:
         return brvm_org.lire_cote(), None
@@ -467,2129 +337,523 @@ def lire_en_direct():
         return None, f"{type(erreur).__name__} — {detail}"
 
 
-# --- Calculs lourds, gardés d'une relance à l'autre ------------------------
-#
-# STREAMLIT REJOUE TOUT LE SCRIPT À CHAQUE CLIC, et rien ici ne s'en
-# souvenait. Taper une lettre dans la recherche relançait la validation du
-# modèle, sa prédiction, le backtest deux fois et le signal de dividende :
-# 176 secondes mesurées entre deux rendus, pour un résultat identique au
-# précédent puisque aucune de ces entrées n'avait bougé.
-#
-# Les tables passent en `_table` : le tiret bas dit à Streamlit de ne PAS
-# les empreinter, car hacher cent mille lignes à chaque appel rendrait une
-# partie de ce qu'on économise. Ce sont `archive` et `univers` qui font la
-# clé — l'empreinte des quatre tables et la liste des valeurs retenues par
-# le filtre — et elles déterminent entièrement les tables passées à côté.
-#
-# L'EMPREINTE PORTE LES QUATRE TABLES, PAS SEULEMENT LES COURS. Dividendes
-# et fondamentaux s'importent par une commande distincte de l'ingestion
-# quotidienne : une clé qui n'aurait regardé que `cours.csv` aurait servi
-# un backtest calculé sur les dividendes de la veille sans rien signaler.
-#
-# PAS DE DÉLAI DE PÉREMPTION ICI, ET C'EST VOULU. Une durée de vie ferait
-# recalculer à date fixe un résultat qui n'a pas bougé : la clé porte déjà
-# l'empreinte de l'archive, donc un résultat périmé est un résultat dont la
-# clé a changé. C'est `charger_archive` qui décide de la fraîcheur, en un
-# seul endroit. `max_entries` borne ce que le filtre peut faire accumuler.
-
-def _empreinte(*tables: pd.DataFrame) -> tuple:
-    """Empreinte bon marché d'un jeu de tables.
-
-    Nombre de lignes et somme de chaque colonne chiffrée : des agrégats qui
-    coûtent quelques millisecondes sur cent mille lignes et changent dès
-    qu'une valeur change — qu'une séance s'ajoute, qu'un montant se corrige
-    ou que la cote lue en direct vienne s'y greffer. C'est une clé de
-    mémoire, pas une signature : elle n'a rien à authentifier.
-    """
-    return tuple(
-        (len(table),
-         *(float(table[colonne].sum(skipna=True))
-           for colonne in table.select_dtypes("number").columns))
-        for table in tables
-    )
-
-
-@st.cache_data(max_entries=8, show_spinner=False)
-def calculer_classement(_cours, _referentiel, archive, univers, reglages):
-    return scoring.noter(features.calculer(_cours, reglages),
-                         _referentiel, reglages)
-
-
-@st.cache_data(max_entries=8, show_spinner="Rejeu de l'historique…")
-def calculer_backtest(_cours, _referentiel, _fondamentaux, _dividendes,
-                      archive, univers, positions, frais, impact,
-                      source="archive"):
-    """`source` ne sert qu'à distinguer les deux jeux de dividendes.
-
-    Le même backtest est rejoué avec l'autre source pour en donner
-    l'intervalle ; sans ce mot dans la clé, le second appel lirait le
-    résultat du premier et les deux bornes seraient identiques.
-    """
-    return backtest.backtester(
-        _cours, _referentiel,
-        {"analyse": DEFAUTS["analyse"], "ponderations": DEFAUTS["ponderations"],
-         "backtest": {**DEFAUTS["backtest"], "positions": positions,
-                      "frais_pourcent": frais, "impact_pourcent": impact}},
-        fondamentaux=_fondamentaux, dividendes=_dividendes,
-    )
-
-
-@st.cache_data(max_entries=4, show_spinner=False)
-def echantillon_prediction(_cours, _referentiel, archive, univers):
-    """L'échantillon de prédiction, pour en tirer la dispersion transversale.
-
-    Mémoïsé ici en plus du mémo interne de `prediction` : la dispersion sert
-    à chaque mouvement de curseur de frais, et reconstruire cent mille lignes
-    pour un écart-type serait payer très cher un nombre qui ne change pas.
-    """
-    # Le référentiel est passé comme ailleurs : l'échantillon porte alors les
-    # colonnes sectorielles, et le mémo interne n'a plus qu'une seule entrée
-    # à tenir au lieu de deux qui se chassent l'une l'autre.
-    return prediction.construire_echantillon(_cours, DEFAUTS, _referentiel)
-
-
-@st.cache_data(max_entries=8, show_spinner="Arithmétique de l'arbitrage…")
-def calculer_conseil(_cours, _classement, _mesure, dispersion, archive, univers,
-                     detenu, frais, impact, positions, prudence,
-                     _avantage=None, source=None):
-    """Acheter, conserver, vendre — aux frais que l'utilisateur a saisis.
-
-    Les frais entrent dans la clé de cache : c'est le paramètre dont toute la
-    réponse dépend, et deux niveaux différents doivent donner deux résultats
-    différents sans qu'on lise celui de l'autre.
-    """
-    reglages = {"analyse": DEFAUTS["analyse"],
-                "ponderations": DEFAUTS["ponderations"],
-                "backtest": {**DEFAUTS["backtest"], "positions": positions,
-                             "frais_pourcent": frais, "impact_pourcent": impact}}
-    return conseil.conseiller(_classement, detenu=list(detenu), mesure=_mesure,
-                              dispersion_=dispersion, reglages=reglages,
-                              prudence=prudence, avantage=_avantage,
-                              source=source)
-
-
-@st.cache_data(max_entries=4, show_spinner="Recherche du seuil de frais…")
-def calculer_seuil_frais(_cours, _referentiel, _fondamentaux, _dividendes,
-                         archive, univers, positions, signal):
-    """À partir de quels frais la stratégie cesse de battre l'univers.
-
-    `signal` entre dans la clé de cache et sert à choisir la matrice de
-    scores : « composite » pour le classement de la configuration, sinon un
-    trait, que `traits_glissants` calcule sans aucun apprentissage — donc
-    sans risque de fuite à chaque rééquilibrage.
-    """
-    scores = None
-    if signal != "composite":
-        matrices = features.traits_glissants(_cours, DEFAUTS)
-        signe = -1.0 if signal in ("volatilite", "retournement") else 1.0
-        scores = matrices[signal] * signe
-    reglages = {"analyse": DEFAUTS["analyse"],
-                "ponderations": DEFAUTS["ponderations"],
-                "backtest": {**DEFAUTS["backtest"], "positions": positions}}
-    return backtest.seuil_frais(_cours, _referentiel, reglages,
-                                fondamentaux=_fondamentaux,
-                                dividendes=_dividendes, scores=scores)
-
-
-@st.cache_data(max_entries=8, show_spinner="Classement de production…")
-def classement_de_production(_cours, _referentiel, archive, univers,
-                             _validation, _composite, ordre_composite=(),
-                             _appris=None):
-    """Le classement qui sert à DÉCIDER, avec ses propres mesures.
-
-    Le couplage vit dans `prediction` ; cette enveloppe ne fait que le
-    mémoïser, parce qu'il rejoue le modèle sur la dernière séance.
-
-    `ordre_composite` N'EST PAS DÉCORATIF : c'est la clé de cache du
-    classement de repli. Les curseurs de pondération de l'onglet changent le
-    composite, et lui seul — les autres arguments qui en dépendent sont
-    préfixés d'un tiret, donc exclus du hachage. Sans cette clé, un
-    utilisateur qui déplace un curseur recevrait, le jour où la porte de
-    production refuse le modèle appris, le conseil calculé sur le classement
-    d'avant. Le cas ne se produit pas aujourd'hui ; il se produirait en
-    silence.
-    """
-    return prediction.classement_de_production(
-        _cours, DEFAUTS, _referentiel, _validation, composite=_composite,
-        appris=_appris)
-
-
-@st.cache_data(max_entries=8, show_spinner="Validation du modèle appris…")
-def valider_modele(_cours, _referentiel, archive, univers):
-    return prediction.valider(_cours, referentiel=_referentiel)
-
-
-@st.cache_data(max_entries=8, show_spinner="Application du modèle…")
-def appliquer_modele(_cours, _referentiel, archive, univers, _validation):
-    """La validation est PASSÉE au modèle, et ce n'est pas une commodité.
-
-    C'est elle qui porte le calibrage appris hors échantillon, et qui dit
-    laquelle des sources part en production. Sans elle, `predire` rend le
-    rang combiné en guise de probabilité : 100 % pour la première valeur du
-    classement, 0 % pour la dernière — deux nombres que l'IC mesuré
-    n'autorise pas, et que personne ne lirait comme des rangs.
-
-    Le tiret initial exclut l'argument du hachage de cache (il contient des
-    objets non hachables) ; `archive` et `univers`, eux, changent dès que la
-    validation change, et suffisent donc à distinguer les entrées.
-    """
-    return prediction.predire(_cours, referentiel=_referentiel,
-                              validation=_validation)
-
-
-@st.cache_data(max_entries=8, show_spinner=False)
-def signal_dividende(_cours, _dividendes, archive, univers, cibles):
-    return dividende.signal(_cours, _dividendes, tickers=list(cibles))
-
-
-@st.cache_data(max_entries=8, show_spinner=False)
-def variante_dividendes(_dividendes, _fondamentaux, archive):
-    """L'autre source de dividendes, si elle diffère — sinon None."""
-    autre = qualite.variante_sources(_dividendes, _fondamentaux)
-    if len(autre) == len(_dividendes) and autre.equals(_dividendes):
-        return None
-    return autre
-
-
 cours, referentiel, dividendes, fondamentaux = charger_archive()
 if referentiel.empty:
     referentiel = brvm_org.referentiel_amorce()
 
 _habiller()
 
-# LE PREMIER ÉCRAN APPARTIENT À LA DONNÉE. Titre, avertissement et bouton
-# d'actualisation tiennent sur une seule rangée : auparavant chacun avait
-# la sienne, et les onglets commençaient à 410 px du haut sur ordinateur,
-# 1 640 px sur téléphone. Un tableau de bord doit montrer un chiffre avant
-# de montrer ses réglages.
-titre_1, titre_2 = st.columns([4, 1], vertical_alignment="center")
-with titre_1:
-    st.title("Bourse Régionale des Valeurs Mobilières")
-    # L'avertissement reste au-dessus de tout, jamais en légende sous le
-    # classement : un tableau ordonné de valeurs se lit comme une liste
-    # d'achat si rien ne dit le contraire AVANT qu'on l'ait vu.
-    st.caption(
-        f"Les cours des {len(referentiel)} sociétés cotées à Abidjan, et de "
-        "quoi les lire. "
-        "**Ce n'est pas un conseil d'investissement** : rien ici n'a été "
-        "calibré sur quoi que ce soit, et aucun classement affiché n'est un "
-        "signal validé."
-    )
-
-# LA SÉANCE LUE EN DIRECT DOIT TENIR, ET ELLE NE TENAIT PAS. La cote
-# relue par le bouton n'était versée dans `direct` QU'AU passage où l'on
-# cliquait : à la relance suivante la variable retombait à `None`, la
-# séance disparaissait de l'écran et la date revenait à celle de
-# l'archive. Il fallait donc réactualiser sans cesse.
-#
-# Le défaut était latent — n'importe quel filtre le déclenchait déjà —
-# mais des onglets qui relancent le script l'ont rendu permanent : changer
-# d'onglet suffisait à reperdre la séance.
-#
-# C'est l'INTENTION qui est retenue, pas la table : la relecture reste
-# derrière `lire_en_direct`, qui garde sa réponse un quart d'heure. La
-# rejouer à chaque relance ne coûte donc rien et ne retouche pas le site.
-with titre_2:
-    if st.button("↻ Actualiser", width="stretch",
-                 help="Relire la cote publiée sur brvm.org, sans rien écrire"):
+# La cote relue sur le site doit rester affichée d'une relance à l'autre :
+# c'est l'INTENTION qui est retenue dans la session, et `lire_en_direct`
+# garde la réponse un quart d'heure, donc la rejouer ne coûte rien.
+haut_1, haut_2 = st.columns([5, 1], vertical_alignment="bottom")
+with haut_2:
+    if st.button("🔄 Actualiser", width="stretch",
+                 help="Relire la cote publiée sur brvm.org"):
         lire_en_direct.clear()
         st.session_state["en_direct"] = True
 
 direct, echec = (None, None)
 if cours.empty or st.session_state.get("en_direct"):
     direct, echec = lire_en_direct()
-
-# Replié par défaut, et ce n'est pas un détail : ce dépliant est au-dessus
-# des onglets, donc ouvert il le reste sur les cinq et leur mange le premier
-# écran.
-with st.expander("Première visite ? Comment lire cette app, et trois choses "
-                 "à savoir sur la BRVM"):
-    st.markdown(
-        """
-**Ce que fait cette app.** Elle lit chaque jour la cote publiée par
-brvm.org, la conserve, et propose quelques lectures de cet historique.
-Elle n'exécute aucun ordre et ne vous connaît pas.
-
-**Par où commencer.**
-
-1. **Marché** — ce qui s'est passé à la dernière séance : qui monte, qui
-   baisse, combien s'est échangé.
-2. **Valeur** — la fiche d'une société : son cours, son historique, ses
-   dividendes. Le plus utile si vous avez déjà un nom en tête.
-3. **Classement**, **Prédiction**, **Backtest** — des lectures outillées de
-   l'historique. Elles demandent des années de cotation et refusent de
-   répondre tant qu'elles ne les ont pas : ce refus est le fonctionnement
-   normal, pas une panne.
-
-**Trois choses à savoir sur ce marché avant de lire le reste.**
-
-- La BRVM ne cote pas en continu. Les ordres sont regroupés et **un seul
-  cours est fixé par séance**.
-- Un cours ne peut ni monter ni baisser de **plus de 7,5 % par séance**.
-- Acheter puis revendre coûte **2,5 à 3,5 %** entre courtage, commissions
-  et taxes, et passe obligatoirement par une SGI. Un écart de performance
-  inférieur à ce montant ne se récupère pas.
-"""
-    )
-
 if direct is not None and not direct.empty:
     cours = (pd.concat([cours, direct], ignore_index=True)
              .drop_duplicates(subset=["date", "ticker"], keep="last"))
-    st.success(
-        f"Séance du {direct['date'].iloc[0]} lue à l'instant "
-        f"(site mis à jour à {direct.attrs.get('heure_mise_a_jour') or '?'}). "
-        "Affichée seulement — l'archive du dépôt n'est pas modifiée."
-    )
 
 if cours.empty:
-    st.warning(
-        "**Aucune donnée.** L'archive `data/cours.csv` est vide et brvm.org "
-        "n'a pas répondu" + (f" — {echec}." if echec else ".")
-        + " L'archive se remplit quand l'action `ingestion.yml` tourne, "
-        "chaque jour ouvré à 16 h UTC."
-    )
+    st.warning("**Aucune donnée.** L'archive est vide et brvm.org n'a pas "
+               "répondu" + (f" — {echec}." if echec else "."))
     st.stop()
+
+dates = sorted(cours["date"].unique())
+derniere = dates[-1]
+en_direct = direct is not None and not direct.empty
+
+with haut_1:
+    _html(
+        '<div class="bandeau anime"><div style="display:flex;gap:1.1rem;'
+        'align-items:center;position:relative;z-index:1">'
+        '<span class="emoji">📈</span><div>'
+        '<h1>La Bourse d\'Afrique de l\'Ouest</h1>'
+        f'<p>Les {len(referentiel)} sociétés cotées à la BRVM, '
+        'expliquées simplement.</p></div></div>'
+        '<div style="position:relative;z-index:1">'
+        + (f'<span class="puce"><span class="point-direct"></span>En direct · '
+           f'{pedagogie.jour(derniere)}</span>' if en_direct else
+           f'<span class="puce">📅 Dernière séance : '
+           f'{pedagogie.jour(derniere)}</span>')
+        + '<span class="puce">🌍 8 pays · 1 bourse</span>'
+          '<span class="puce">⚠️ Pas un conseil d\'investissement</span>'
+          '</div></div>')
 
 if echec:
     st.caption(f"brvm.org injoignable ({echec}) — affichage de l'archive.")
 
-seances = cours["date"].nunique()
-derniere = cours["date"].max()
-dates_triees = sorted(cours["date"].unique())
-
-
-# --- Filtre unique, au-dessus de tout ce qu'il cadre ----------------------
-
-secteurs_connus = sorted(referentiel["secteur"].dropna().unique())
-
-# LE FILTRE SE REPLIE. Sept puces de secteur occupaient deux lignes
-# pleines pour dire « tout est sélectionné », c'est-à-dire rien. La
-# pastille annonce l'état en trois mots et n'ouvre le détail qu'au clic ;
-# la place gagnée revient à la donnée.
-filtre_1, filtre_2 = st.columns([1, 2], vertical_alignment="bottom")
-with filtre_1:
-    choisis = st.session_state.get("secteurs", secteurs_connus)
-    resume = ("tous les secteurs" if len(choisis) == len(secteurs_connus)
-              else f"{len(choisis)} secteur{'s' if len(choisis) > 1 else ''}"
-              if choisis else "aucun secteur")
-    with st.popover(f"⚟  {resume}", width="stretch"):
-        secteurs = st.multiselect(
-            "Secteurs", secteurs_connus, default=secteurs_connus,
-            key="secteurs", label_visibility="collapsed",
-            help="Cadre l'ensemble du tableau de bord.",
-        )
-with filtre_2:
-    recherche = st.text_input(
-        "Rechercher", placeholder="Symbole ou société",
-        label_visibility="collapsed")
-
-retenus = (set(referentiel[referentiel["secteur"].isin(secteurs)]["ticker"])
-           if secteurs else set(referentiel["ticker"]))
-if recherche:
-    motif = recherche.strip().lower()
-    retenus &= set(referentiel[
-        referentiel["ticker"].str.lower().str.contains(motif, na=False)
-        | referentiel["nom"].str.lower().str.contains(motif, na=False)
-    ]["ticker"])
-
-cours_filtre = cours[cours["ticker"].isin(retenus)]
-if cours_filtre.empty:
-    st.warning("Aucune valeur ne correspond à ce filtre.")
-    st.stop()
-referentiel_filtre = referentiel[referentiel["ticker"].isin(retenus)]
-
-# La clé des calculs gardés en mémoire. L'archive et le filtre : rien
-# d'autre n'entre dans les tables qu'ils reçoivent, donc rien d'autre n'a
-# besoin d'entrer dans la clé.
-ARCHIVE = _empreinte(cours, referentiel, dividendes, fondamentaux)
-UNIVERS = tuple(sorted(retenus))
-
-# CINQ ONGLETS, ET « PRÉDICTION » N'EN EST PLUS UN. Un onglet est une
-# promesse : il annonce qu'il y a quelque chose à voir. Le modèle appris
-# mesurait alors un IC de −0,045 — pire que la référence, pire que le
-# hasard — et lui donner le même rang qu'au marché lui prêtait une
-# autorité que la mesure lui refusait ; le message rouge à l'intérieur ne
-# la reprenait pas, car on lit la structure avant le texte.
-#
-# IL MESURE AUJOURD'HUI +0,045, ET IL RESTE UNE SECTION. Le signe a
-# changé, la dispersion a fondu, sept périodes de test sur dix sont
-# positives — mais le t vaut 1,5 là où il en faudrait 2, et l'écart ne
-# survit pas aux frais. Une promesse se tient sur une preuve, pas sur une
-# amélioration : l'onglet se regagnera quand la mesure sera significative
-# ET rentable, pas avant.
-# LE RÉSULTAT LE MIEUX ÉTABLI DU PROJET N'AVAIT AUCUNE PLACE À L'ÉCRAN.
-# Il vivait dans le README et dans un message rouge au fond d'un onglet,
-# pendant que la plus grosse tuile affichait un rendement gonflé par le
-# biais du survivant. La hiérarchie visuelle disait donc l'inverse de la
-# force de la preuve. Il passe devant les onglets, avec ce qui le fonde :
-# le nombre de tests et de périodes disjointes, sans quoi ce serait une
-# opinion de plus.
-_constat = st.container(border=True)
-_constat.markdown(
-    f'<div class="tuile-label" style="color:{ENCRE}">Ce que onze ans et '
-    'demi de cotation disent</div>'
-    f'<div style="margin-top:.4rem;line-height:1.55;color:{ENCRE}">'
-    '<b>Un seul effet sur 162 résiste, et il ne paie pas.</b> Sur 162 cases '
-    'balayées et jusqu\'à 151 périodes disjointes, le <b>choc de volume</b> '
-    'à un mois — une valeur qui s\'échange soudain plus que d\'habitude — '
-    'est le seul prédicteur à franchir la correction du test multiple '
-    '(t&nbsp;=&nbsp;+3,8). Exploité à son horizon, il exige 48&nbsp;% de '
-    'rotation douze fois l\'an : +6,2&nbsp;%/an contre +14,8&nbsp;% pour la '
-    'simple détention du même univers. Le momentum, la tendance et la '
-    'liquidité, eux, restent indiscernables du bruit.</div>'
-    f'<div class="tuile-note" style="margin-top:.5rem">C\'est la mesure la '
-    'plus solide de ce tableau de bord. Elle a changé de réponse le jour où '
-    'l\'on a cessé d\'écarter les valeurs qui ne cotent pas tous les jours : '
-    'sur l\'univers tronqué, c\'était le retournement à un mois qui '
-    'ressortait. Tout rendement positif affiché plus bas repose, lui, sur un '
-    'univers sans les sociétés radiées.</div>',
-    unsafe_allow_html=True)
 st.write("")
 
-# LES ONGLETS TIENNENT LEUR RANG, ET C'EST DEUX CORRECTIONS EN UNE.
-#
-# Sans `key`, des onglets ne mémorisent rien : toute interaction qui
-# relance le script — le bouton « Actualiser », une puce de secteur, un
-# curseur — les ramenait au premier. On lisait le backtest, on actualisait,
-# on se retrouvait sur le marché.
-#
-# Sans `on_change="rerun"`, Streamlit exécute LE CORPS DES CINQ ONGLETS à
-# chaque relance, y compris les quatre qu'on ne regarde pas. Le classement
-# entraîne un modèle, le backtest rejoue onze ans et demi : le premier
-# rendu demandait 187 secondes pour afficher une page qui n'en montre
-# qu'un cinquième. `.open` laisse sauter ce qui est caché, et l'attente
-# d'ouverture tombe à 2,7 s.
-_LIBELLES = ["Marché", "Valeur", "Classement", "Backtest", "Données"]
+# --- Onglets --------------------------------------------------------------
+# `key` garde l'onglet ouvert d'une relance à l'autre ; `on_change="rerun"`
+# permet de ne calculer que l'onglet visible. L'onglet voyage aussi dans
+# l'URL (`?onglet=action`), pour survivre à un rechargement de la page.
+ONGLETS = {"aujourdhui": "🏠 Aujourd'hui", "action": "🔎 Une action",
+           "dividendes": "💰 Dividendes", "comprendre": "🎓 Comprendre"}
+PAR_LIBELLE = {v: k for k, v in ONGLETS.items()}
 
-# Le rang survit aussi au rechargement du navigateur, qui vide la session :
-# il est écrit dans l'URL, ce qui rend au passage chaque onglet partageable.
 _demande = st.query_params.get("onglet")
-if "onglet" not in st.session_state and _demande in _LIBELLES:
-    st.session_state["onglet"] = _demande
+if "onglet" not in st.session_state and _demande in ONGLETS:
+    st.session_state["onglet"] = ONGLETS[_demande]
 
-onglets = st.tabs(_LIBELLES, key="onglet", on_change="rerun")
+onglets = st.tabs(list(ONGLETS.values()), key="onglet", on_change="rerun")
 
-if st.query_params.get("onglet") != st.session_state["onglet"]:
-    st.query_params["onglet"] = st.session_state["onglet"]
+_actuel = PAR_LIBELLE.get(st.session_state["onglet"], "aujourdhui")
+if st.query_params.get("onglet") != _actuel:
+    st.query_params["onglet"] = _actuel
+
+noms = referentiel.set_index("ticker")["nom"]
+secteurs_par_valeur = referentiel.set_index("ticker")["secteur"]
 
 
-def _variations(table: pd.DataFrame) -> pd.DataFrame:
+def _seance(table: pd.DataFrame) -> pd.DataFrame:
     """Dernière séance, avec la variation face à la précédente."""
     jour = table[table["date"] == derniere].copy()
-    if len(dates_triees) >= 2:
-        veille = table[table["date"] == dates_triees[-2]].set_index("ticker")["cloture"]
+    if len(dates) >= 2:
+        veille = (table[table["date"] == dates[-2]]
+                  .set_index("ticker")["cloture"])
         jour["variation"] = jour["cloture"] / jour["ticker"].map(veille) - 1
     else:
-        jour["variation"] = pd.NA
-    return jour.merge(referentiel[["ticker", "nom", "secteur"]], on="ticker",
-                      how="left")
+        jour["variation"] = float("nan")
+    jour["nom"] = jour["ticker"].map(noms)
+    jour["secteur"] = jour["ticker"].map(secteurs_par_valeur)
+    return jour
 
 
-# --- Marché ---------------------------------------------------------------
+def _palmares(lignes: pd.DataFrame, couleur: str) -> str:
+    """Cinq valeurs, chacune avec sa pastille et une jauge qui pousse."""
+    plafond = max(lignes["variation"].abs().max(), 1e-9)
+    morceaux = []
+    for i, ligne in enumerate(lignes.itertuples(), start=1):
+        part = abs(ligne.variation) / plafond
+        morceaux.append(
+            f'<div class="ligne anime d{i}">'
+            f'<div class="rang" style="background:linear-gradient(135deg,'
+            f'{couleur},{_rgba(couleur, .6)})">{i}</div>'
+            f'<div class="nom"><b>{html.escape(str(ligne.ticker))}</b>'
+            f'<small>{html.escape(str(ligne.nom or ""))}</small>'
+            f'<div class="jauge" style="margin-top:.35rem"><div style="'
+            f'width:{max(part, .04):.0%};background:linear-gradient(90deg,'
+            f'{_rgba(couleur, .5)},{couleur});animation-delay:{.1 * i:.1f}s">'
+            f'</div></div></div>{_pastille(ligne.variation)}</div>')
+    return "".join(morceaux)
+
+
+# --- 🏠 Aujourd'hui ---------------------------------------------------------
 if onglets[0].open:
     with onglets[0]:
-        # L'ONGLET D'ACCUEIL N'AVAIT AUCUNE INTRODUCTION. C'est le premier
-        # écran que voit quelqu'un qui découvre l'application, et il tombait
-        # directement sur un chiffre de capitalisation échangée sans savoir
-        # ce qu'il regarde ni sur quoi porte la page.
-        st.caption(
-            "L'état du marché à la dernière séance de cotation : qui monte, "
-            "qui baisse, et combien d'argent a changé de mains. **Rien ici "
-            "n'est une prévision** — c'est ce qui s'est passé, pas ce qui va "
-            "se passer."
-        )
-        jour = _variations(cours_filtre)
-        connues = jour["variation"].dropna()
+        jour = _seance(cours)
+        connues = jour.dropna(subset=["variation"])
+        hausses = int((connues["variation"] > 0).sum())
+        baisses = int((connues["variation"] < 0).sum())
+        stables = len(connues) - hausses - baisses
+        echange = float(jour["volume_fcfa"].sum(skipna=True))
+        mediane = connues["variation"].median() if not connues.empty else None
 
-        # LE HÉROS : un seul chiffre par vue, celui qui résume la séance. Ici
-        # la capitalisation échangée — c'est la mesure d'activité du marché,
-        # et la seule qui se lise sans contexte.
-        echange = jour["volume_fcfa"].sum(skipna=True)
-        heros_1, heros_2 = st.columns([2, 3])
-        with heros_1:
-            recentes = (cours_filtre.groupby("date")["volume_fcfa"].sum()
-                        .tail(12).tolist())
-            st.markdown(
-                f'<div class="tuile-label">Échangé le {pedagogie.jour(derniere)}'
-                f'</div><div class="heros">{pedagogie.montant(echange)}</div>'
-                f'<div class="tuile-note">12 dernières séances</div>'
-                + _etincelle(recentes, largeur=180, hauteur=34),
-                unsafe_allow_html=True)
-        with heros_2:
-            if not connues.empty:
-                hausses = int((connues > 0).sum())
-                baisses = int((connues < 0).sum())
-                stables = len(connues) - hausses - baisses
-                # La largeur du marché en une barre : une médiane positive
-                # portée par trois valeurs ne dit pas la même chose qu'une
-                # hausse partagée, et un empilement le montre sans le dire.
-                total = max(1, len(connues))
-                segments = [(hausses, HAUSSE, "en hausse"),
-                            (stables, MUET, "stables"),
-                            (baisses, BAISSE, "en baisse")]
-                # `flex` ET NON `width` : dans une rangée flex, une largeur en
-                # pourcentage n'est qu'une base que le conteneur réajuste, et
-                # les segments s'affichaient à des proportions fausses — 17,
-                # 2 et 28 valeurs rendues comme 45 %, 5 % et 48 % au lieu de
-                # 36 %, 4 % et 60 %. Une barre de répartition qui ment sur la
-                # répartition est pire qu'une absence de barre.
-                barre = "".join(
-                    f'<div style="flex:{n} 0 0;background:{c};height:12px;'
-                    f'border-radius:3px" title="{n} {m}"></div>'
-                    for n, c, m in segments if n
-                )
-                st.markdown(
-                    '<div class="tuile-label">Largeur du marché</div>'
-                    # Le trou de 2 px à la couleur du plan sépare les segments :
-                    # c'est le vide qui distingue, jamais un contour.
-                    f'<div style="display:flex;gap:2px;margin-top:.55rem">{barre}</div>'
-                    f'<div class="tuile-note">{hausses} en hausse · '
-                    f'{stables} stables · {baisses} en baisse, '
-                    f'sur {len(connues)} valeurs</div>',
-                    unsafe_allow_html=True)
-
-        st.write("")
-        tuiles = st.columns(4)
-        _tuile(tuiles[0], "Séance", pedagogie.jour(derniere),
-               note=f"{seances} séances en archive", teinte=SERIE_1)
-        mediane = None if connues.empty else connues.median()
-        _tuile(tuiles[1], "Variation médiane", pedagogie.pourcentage(mediane),
-               sens=0 if mediane is None else (1 if mediane > 0 else -1),
-               note="sur les valeurs ayant coté")
-        # Douze séances de contexte derrière le chiffre du jour : une valeur
-        # seule ne dit pas si elle sort de l'ordinaire.
-        plus_traitee = jour.loc[jour["volume_fcfa"].idxmax()] \
-            if jour["volume_fcfa"].notna().any() else None
-        # La teinte suit l'intensité : plus une valeur pèse dans la séance,
-        # plus sa tuile est foncée. Une grandeur, donc la rampe.
-        _tuile(tuiles[2], "Plus échangée",
-               "—" if plus_traitee is None else str(plus_traitee["ticker"]),
-               note=("aucun échange"
-                     if plus_traitee is None else
-                     f"{pedagogie.montant(plus_traitee['volume_fcfa'])} · "
-                     f"{(plus_traitee['volume_fcfa'] / echange):.0%} du marché"),
-               teinte=(SERIE_1 if plus_traitee is None
-                       else _teinte(float(plus_traitee["volume_fcfa"]) / echange * 3)))
-        _tuile(tuiles[3], "Valeurs suivies", f"{jour['ticker'].nunique()}",
-               teinte=SERIE_1,
-               note=("toutes les sociétés cotées"
-                     if len(retenus) == len(referentiel)
-                     else f"{len(referentiel) - len(retenus)} écartées "
-                          "par le filtre"))
-
-        # --- Les secteurs, avant le détail ------------------------------------
-        if not connues.empty and jour["secteur"].notna().any():
-            st.markdown("## Par secteur")
-            par_secteur = (
-                jour.dropna(subset=["variation", "secteur"])
-                .groupby("secteur")
-                .agg(variation=("variation", "median"),
-                     valeurs=("ticker", "size"),
-                     hausses=("variation", lambda v: float((v > 0).mean())))
-                .sort_values("variation", ascending=False)
-                .reset_index()
-            )
-            # Les sept secteurs de la BRVM tiennent sur une rangée ; au-delà,
-            # ce serait une grille et le rang cesserait de se lire.
-            cartes = st.columns(max(1, len(par_secteur)))
-            for colonne, ligne in zip(cartes, par_secteur.itertuples()):
-                _carte_secteur(colonne, ligne.secteur, ligne.variation,
-                               int(ligne.valeurs), float(ligne.hausses))
-            st.write("")
-
-        # Les tuiles disent la même chose, mais il faut les lire ensemble pour
-        # l'entendre. La phrase le fait à la place du lecteur.
+        # La météo du marché : une image que tout le monde comprend.
         if connues.empty:
-            st.markdown(
-                f"À la séance du **{pedagogie.jour(derniere)}**, "
-                f"{jour['ticker'].nunique()} valeurs sont cotées et il s'est "
-                f"échangé {pedagogie.montant(echange)}. Aucune variation n'est "
-                "calculable : il n'y a qu'une séance en archive, donc rien à "
-                "quoi comparer. La deuxième suffira."
-            )
+            meteo = ("🌤️", "Une seule séance en archive",
+                     "Les variations apparaîtront dès la deuxième.")
+        elif hausses > 1.5 * max(baisses, 1) and (mediane or 0) >= 0:
+            meteo = ("☀️", "Belle journée sur le marché",
+                     f"La majorité des actions a monté : {hausses} en hausse "
+                     f"contre {baisses} en baisse.")
+        elif baisses > 1.5 * max(hausses, 1) and (mediane or 0) <= 0:
+            meteo = ("🌧️", "Journée difficile sur le marché",
+                     f"La majorité des actions a baissé : {baisses} en baisse "
+                     f"contre {hausses} en hausse.")
         else:
-            hausses, baisses = int((connues > 0).sum()), int((connues < 0).sum())
-            stables = len(connues) - hausses - baisses
-            st.markdown(
-                f"À la séance du **{pedagogie.jour(derniere)}**, sur "
-                f"{len(connues)} valeurs : **{hausses} montent**, "
-                f"**{baisses} baissent**, "
-                + (f"{stables} sont inchangées" if stables != 1
-                   else "1 est inchangée")
-                + f". Il s'est échangé {pedagogie.montant(echange)} en tout."
-            )
+            meteo = ("⛅", "Journée partagée",
+                     f"{hausses} actions montent, {baisses} baissent, "
+                     f"{stables} ne bougent pas.")
+        _html(f'<div class="carte meteo anime"><span class="emoji">{meteo[0]}'
+              f'</span><div><h3>{meteo[1]}</h3><p>{meteo[2]}</p></div></div>')
+        st.write("")
+
+        c = st.columns(4)
+        _stat(c[0], "Séance", pedagogie.jour(derniere),
+              f"{len(dates)} séances en archive", (BLEU, CYAN), "📅", 1)
+        _stat(c[1], "Montent", "", "actions en hausse",
+              ("#059669", "#34d399"), "🚀", 2, nombre=hausses)
+        _stat(c[2], "Baissent", "", "actions en baisse",
+              ("#e11d48", "#fb7185"), "📉", 3, nombre=baisses)
+        _stat(c[3], "Argent échangé", pedagogie.montant(echange),
+              "sur toute la séance", (VIOLET, ROSE), "💸", 4)
 
         if not connues.empty:
-            classees = jour.dropna(subset=["variation"]).sort_values("variation")
-            # TÊTE ET QUEUE PLUTÔT QUE TOUT. Quarante-sept lignes à 22 px font
-            # plus de mille pixels : le graphique n'était jamais vu en entier,
-            # et son milieu — les valeurs qui n'ont presque pas bougé — est
-            # justement ce qu'on ne regarde pas. Les extrêmes tiennent dans un
-            # écran ; le reste s'ouvre au clic, et le tableau plus bas porte
-            # toujours les 47.
-            tout_montrer = st.toggle(
-                f"Afficher les {len(classees)} valeurs", value=False,
-                key="marche_tout",
-                help="Par défaut, les dix plus fortes hausses et les dix plus "
-                     "fortes baisses.")
-            if tout_montrer or len(classees) <= 20:
-                visibles, note = classees, f"{len(classees)} valeurs"
-            else:
-                visibles = pd.concat([classees.head(10), classees.tail(10)])
-                note = (f"dix plus fortes baisses et dix plus fortes hausses, "
-                        f"sur {len(classees)} valeurs")
-            panneau = _panneau(
-                f"Variation de la séance du {pedagogie.jour(derniere)}", note)
-            panneau.altair_chart(
-                alt.Chart(visibles)
-                .mark_bar(cornerRadiusEnd=4, height=14)
-                .encode(
-                    # Axe en haut : le graphique fait plusieurs écrans, une
-                    # échelle en bas obligerait à l'aller-retour.
-                    x=alt.X("variation:Q", title="variation",
-                            axis=alt.Axis(format="+.1%", orient="top")),
-                    # labelOverlap=False : sinon Vega masque un libellé sur deux
-                    # et la moitié des barres devient inidentifiable.
-                    y=alt.Y("ticker:N", sort=alt.SortField("variation", "descending"),
-                            title=None, axis=alt.Axis(labelOverlap=False)),
-                    color=alt.condition(alt.datum.variation >= 0,
-                                        alt.value(HAUSSE), alt.value(BAISSE)),
-                    tooltip=[
-                        alt.Tooltip("ticker:N", title="Symbole"),
-                        alt.Tooltip("nom:N", title="Société"),
-                        alt.Tooltip("cloture:Q", title="Clôture", format=",.0f"),
-                        alt.Tooltip("variation:Q", title="Variation", format="+.2%"),
-                        alt.Tooltip("secteur:N", title="Secteur"),
-                    ],
-                )
-                .properties(height=max(240, 22 * len(visibles))),
-                width="stretch",
-            )
-        colonnes = ["ticker", "nom", "secteur", "cloture"]
-        if not connues.empty:
-            colonnes.append("variation")
-        colonnes += ["volume_titres", "volume_fcfa"]
+            total = max(len(connues), 1)
+            _html(
+                '<div class="carte anime d5" style="margin-top:1rem">'
+                f'<div style="display:flex;justify-content:space-between;'
+                f'font-weight:700;color:{ENCRE};margin-bottom:.5rem">'
+                f'<span style="color:{HAUSSE}">▲ {hausses} en hausse</span>'
+                f'<span style="color:{DOUX}">● {stables} stables</span>'
+                f'<span style="color:{BAISSE}">▼ {baisses} en baisse</span></div>'
+                '<div class="jauge" style="height:16px;gap:3px;background:none">'
+                f'<div style="flex:{hausses / total} 0 0;background:{HAUSSE};'
+                'border-radius:999px"></div>'
+                f'<div style="flex:{stables / total} 0 0;background:{STABLE};'
+                'border-radius:999px;animation-delay:.15s"></div>'
+                f'<div style="flex:{baisses / total} 0 0;background:{BAISSE};'
+                'border-radius:999px;animation-delay:.3s"></div></div></div>')
 
-        tableau = jour[colonnes].sort_values("ticker").copy()
-        # Trente séances de contexte DANS le tableau : sans elles, chaque ligne
-        # est un instantané et rien ne dit si la valeur du jour est ordinaire.
-        # C'est aussi ce qui distingue une grille d'un terminal.
-        fenetre = cours_filtre[cours_filtre["date"] > dates_triees[-30]] \
-            if len(dates_triees) > 30 else cours_filtre
-        trente = (fenetre.sort_values("date").groupby("ticker")["cloture"]
-                  .apply(list).to_dict())
-        tableau["tendance"] = tableau["ticker"].map(trente)
-        ordre = ["ticker", "nom", "secteur", "tendance", "cloture"]
-        ordre += [c for c in colonnes if c not in ordre]
+            gauche, droite = st.columns(2)
+            with gauche:
+                _titre("🚀 Les plus fortes hausses")
+                montee = connues[connues["variation"] > 0].nlargest(5, "variation")
+                _html('<div class="carte anime">'
+                      + (_palmares(montee, HAUSSE) if not montee.empty
+                         else f'<p style="color:{DOUX}">Aucune hausse.</p>')
+                      + '</div>')
+            with droite:
+                _titre("📉 Les plus fortes baisses")
+                descente = connues[connues["variation"] < 0].nsmallest(5, "variation")
+                _html('<div class="carte anime">'
+                      + (_palmares(descente, BAISSE) if not descente.empty
+                         else f'<p style="color:{DOUX}">Aucune baisse.</p>')
+                      + '</div>')
 
-        # LE TABLEAU CESSE D'ÊTRE GRIS. La variation prend un fond divergent,
-        # le volume un fond séquentiel : on lit la structure de la séance en
-        # balayant la grille, sans comparer quarante-sept nombres de tête.
-        # L'opacité plafonne à 22 % — au-delà, le texte de la cellule perdrait
-        # son contraste, et c'est le confort de lecture qui décide, pas
-        # l'envie de couleur.
-        peint = tableau[ordre].style
-        if "variation" in ordre:
-            peint = peint.map(_fond_divergent, subset=["variation"])
-        plafond_volume = float(tableau["volume_fcfa"].max() or 0)
-        peint = peint.map(lambda v: _fond_sequentiel(v, plafond_volume),
-                          subset=["volume_fcfa"])
+            if connues["secteur"].notna().any():
+                _titre("🧭 Les secteurs",
+                       "La variation typique (médiane) des actions de chaque "
+                       "famille de métiers.")
+                par_secteur = (connues.dropna(subset=["secteur"])
+                               .groupby("secteur")["variation"].median()
+                               .sort_values(ascending=False))
+                cartes = st.columns(len(par_secteur))
+                for i, (colonne, (nom, var)) in enumerate(
+                        zip(cartes, par_secteur.items()), start=1):
+                    emo, teinte = _secteur(nom)
+                    colonne.markdown(
+                        f'<div class="carte secteur anime d{min(i, 7)}" '
+                        f'style="border-top-color:{teinte};background:'
+                        f'linear-gradient(180deg,{_rgba(teinte, .14)},{SURFACE} 70%)">'
+                        f'<div class="emo">{emo}</div>'
+                        f'<div class="nomsec">{html.escape(nom)}</div>'
+                        f'{_pastille(var)}</div>', unsafe_allow_html=True)
+
+        _titre("📋 Toutes les actions de la séance")
+        tableau = jour[["ticker", "nom", "secteur", "cloture", "variation",
+                        "volume_fcfa"]].sort_values("variation", ascending=False)
         st.dataframe(
-            peint, width="stretch", hide_index=True,
+            tableau.style.map(
+                lambda v: f"color:{_couleur(v)};font-weight:700",
+                subset=["variation"]),
+            width="stretch", hide_index=True, height=420,
             column_config={
                 "ticker": st.column_config.TextColumn("Symbole"),
                 "nom": st.column_config.TextColumn("Société"),
                 "secteur": st.column_config.TextColumn("Secteur"),
-                "tendance": st.column_config.LineChartColumn(
-                    "30 séances", width="small",
-                    help="Clôtures des trente dernières séances. Sans axe : "
-                         "c'est une texture, pas un graphique."),
-                # `format="percent"` et non « %+.2f%% » : le format printf ne
-                # multiplie pas par cent, et affichait « -0,02 % » là où la
-                # valeur baissait de 2 %. Cent fois trop petit, sans rien qui
-                # le signale — le graphique juste au-dessus disait autre chose.
-                "cloture": st.column_config.NumberColumn("Clôture",
-                                                         format="localized"),
-                "variation": st.column_config.NumberColumn("Var.",
-                                                           format="percent"),
-                # « localized » suit la locale du lecteur : un francophone lit
-                # « 1 042 625 » et non « 1,042,625 ».
-                "volume_titres": st.column_config.NumberColumn("Titres",
-                                                               format="localized"),
-                # Nombre et non barre : la cellule porte déjà un fond dont
-                # la densité dit le poids, et superposer les deux ferait
-                # encoder la même grandeur deux fois.
+                "cloture": st.column_config.NumberColumn(
+                    "Prix (FCFA)", format="localized"),
+                "variation": st.column_config.NumberColumn(
+                    "Variation", format="percent"),
                 "volume_fcfa": st.column_config.NumberColumn(
                     "Échangé (FCFA)", format="localized"),
-            },
-        )
-        # L'export garde les colonnes chiffrées : une liste de clôtures ne se
-        # met pas dans un CSV.
-        _telecharger(jour[colonnes], f"brvm_{derniere}.csv", "dl_marche")
-        _glossaire("fixing", "limite", "liquidite")
+            })
 
 
-# --- Valeur ---------------------------------------------------------------
+# --- 🔎 Une action ----------------------------------------------------------
 if onglets[1].open:
     with onglets[1]:
-        noms = referentiel.set_index("ticker")["nom"]
-
-        # LA SOCIÉTÉ CHOISIE VA DANS L'URL, comme le rang de l'onglet. Sans
-        # cela, recharger la page ramenait à la première valeur de la liste :
-        # l'onglet était bien retrouvé, mais pas ce qu'on y regardait. Une
-        # fiche se partage désormais par son lien, `?onglet=Valeur&valeur=SNTS`.
-        #
-        # ÉCRIT À LA MAIN, ET NON PAR `bind="query-params"`. Le liage natif
-        # apparie sur le LIBELLÉ mis en forme : l'URL porterait
-        # « ?valeur=SNTS — SONATEL », qui cesserait de désigner quoi que ce
-        # soit au premier renommage au référentiel. Le symbole seul est
-        # l'identifiant stable de ce marché, et c'est lui qui doit voyager.
-        cotees = sorted(cours_filtre["ticker"].unique())
+        cotees = sorted(cours["ticker"].unique())
+        # La société choisie va dans l'URL : une fiche se partage par son
+        # lien, `?onglet=action&valeur=SNTS`.
         _demandee = st.query_params.get("valeur")
         if "valeur" not in st.session_state and _demandee in cotees:
             st.session_state["valeur"] = _demandee
-
-        # `persist_state` garde le choix quand on passe par un autre onglet,
-        # où ce sélecteur n'est plus rendu. Un symbole que le filtre de
-        # secteur vient d'écarter n'est pas une erreur : Streamlit retombe
-        # alors sur la première valeur de la liste.
         choix = st.selectbox(
-            "Valeur", cotees,
+            "Choisissez une société (tapez son nom pour la chercher)", cotees,
             format_func=lambda t: f"{t} — {noms.get(t, '')}",
-            key="valeur", persist_state="session",
-        )
+            key="valeur", persist_state="session")
         if st.query_params.get("valeur") != choix:
             st.query_params["valeur"] = choix
 
-        serie = cours_filtre[cours_filtre["ticker"] == choix].sort_values("date")
-        fiche = referentiel[referentiel["ticker"] == choix]
+        serie = cours[cours["ticker"] == choix].sort_values("date")
         dernier = serie.iloc[-1]
-
-        div_valeur = (dividendes[dividendes["ticker"] == choix]
-                      if not dividendes.empty else pd.DataFrame())
-
-        # Le secteur est un libellé, pas une mesure : dans une tuile il se fait
-        # tronquer — « Consommation Dis… » ne distingue plus les deux secteurs
-        # de consommation. Il passe donc en légende, où il tient en entier.
-        st.caption(
-            f"**{fiche['nom'].iloc[0] if not fiche.empty else choix}** · "
-            f"{fiche['secteur'].iloc[0] if not fiche.empty else 'secteur inconnu'}"
-        )
-
-        faits = st.columns(3)
-        variation = (dernier["cloture"] / serie["cloture"].iloc[-2] - 1
+        prix = float(dernier["cloture"])
+        variation = (prix / serie["cloture"].iloc[-2] - 1
                      if len(serie) >= 2 else None)
-        # Douze séances de contexte : un cours seul ne dit pas s'il sort de
-        # l'ordinaire.
-        _tuile(faits[0], "Clôture", pedagogie.montant(dernier["cloture"]),
-               delta=pedagogie.pourcentage(variation) + " sur la séance"
-                     if variation is not None else "",
-               sens=0 if variation is None else (1 if variation > 0 else -1),
-               etincelle=_etincelle(serie["cloture"].tail(12).tolist()))
-        # Même arrondi que la phrase juste en dessous : deux écritures du même
-        # montant à trois lignes d'écart donnent à croire à deux montants.
-        _tuile(faits[1], "Volume échangé",
-               pedagogie.montant(dernier["volume_fcfa"]),
-               note="sur la dernière séance")
-        _tuile(faits[2], "Dividendes connus", f"{len(div_valeur)}",
-               note="détachements datés en archive")
+        emo, teinte = _secteur(secteurs_par_valeur.get(choix))
+        nom = str(noms.get(choix, choix))
 
-        # La même information en toutes lettres. Trois tuiles se lisent vite
-        # quand on sait quoi y chercher ; sinon ce sont trois nombres nus.
-        morceaux = [
-            f"**{fiche['nom'].iloc[0] if not fiche.empty else choix}** vaut "
-            f"{pedagogie.montant(dernier['cloture'])} à la clôture du "
-            f"{pedagogie.jour(derniere)}"
-        ]
-        if len(serie) >= 2:
-            veille = serie["cloture"].iloc[-2]
-            if pd.notna(veille) and veille > 0:
-                morceaux.append(
-                    "soit "
-                    + pedagogie.pourcentage(dernier["cloture"] / veille - 1)
-                    + " sur la séance"
-                )
-        # Reculs en séances : un mois, un trimestre, un an de cotation.
-        for pas, mot in [(21, "un mois"), (63, "trois mois"), (250, "un an")]:
-            if len(serie) > pas:
-                passe = serie["cloture"].iloc[-1 - pas]
-                if pd.notna(passe) and passe > 0:
-                    morceaux.append(
-                        pedagogie.pourcentage(dernier["cloture"] / passe - 1)
-                        + f" sur {mot}"
-                    )
-        volume = dernier["volume_fcfa"]
-        morceaux.append(
-            "aucun échange lors de cette séance" if pd.isna(volume) or volume == 0
-            else f"{pedagogie.montant(volume)} échangés dans la séance"
-        )
-        st.markdown(", ".join(morceaux) + ".")
+        _html(
+            f'<div class="carte anime" style="margin-top:.6rem;border-left:8px '
+            f'solid {teinte};background:linear-gradient(120deg,'
+            f'{_rgba(teinte, .16)},{SURFACE} 65%)">'
+            '<div style="display:flex;flex-wrap:wrap;gap:1rem;'
+            'align-items:center;justify-content:space-between">'
+            f'<div><div style="font-size:2.4rem">{emo}</div>'
+            f'<div style="font-size:1.6rem;font-weight:800;color:{ENCRE}">'
+            f'{html.escape(nom)}</div>'
+            f'<div style="color:{DOUX};font-weight:600">{choix} · '
+            f'{html.escape(str(secteurs_par_valeur.get(choix) or "secteur inconnu"))}'
+            '</div></div>'
+            '<div style="text-align:right">'
+            f'<div style="color:{DOUX};font-size:.85rem;font-weight:700">'
+            f'PRIX D\'UNE ACTION</div>'
+            f'<div style="font-size:2.6rem;font-weight:800;color:{ENCRE};'
+            f'line-height:1.1">{pedagogie.montant(prix)}</div>'
+            + (_pastille(variation) + f' <span style="color:{DOUX}">'
+               'sur la séance</span>' if variation is not None else "")
+            + '</div></div></div>')
+
+        # Ce qu'aurait fait 100 000 FCFA placés il y a 1 mois, 1 an, 5 ans.
+        reculs = [(21, "1 mois", (BLEU, CYAN), "🗓️"),
+                  (250, "1 an", (VIOLET, ROSE), "📆"),
+                  (1250, "5 ans", (ORANGE, AMBRE), "⏳")]
+        c = st.columns(3)
+        for i, (pas, mot, couleurs, icone) in enumerate(reculs):
+            if len(serie) > pas and serie["cloture"].iloc[-1 - pas] > 0:
+                evol = prix / float(serie["cloture"].iloc[-1 - pas]) - 1
+                _stat(c[i], f"Sur {mot}", f"{_fleche(evol)} "
+                      f"{pedagogie.pourcentage(evol)}",
+                      f"100 000 FCFA seraient devenus "
+                      f"{pedagogie.montant(100_000 * (1 + evol))}",
+                      couleurs, icone, i + 1)
+            else:
+                _stat(c[i], f"Sur {mot}", "—", "pas assez d'historique",
+                      couleurs, icone, i + 1)
+        st.caption("Hors dividendes et hors frais : c'est l'évolution du prix "
+                   "seul.")
 
         if len(serie) >= 2:
-            # LE CURSEUR EST LE POINT, PAS L'ORNEMENT. Sur 2 876 séances, un
-            # point fait moins d'un demi-pixel de large : viser une infobulle
-            # est impossible, et une courbe sans lecture ponctuelle n'est
-            # qu'une silhouette. La sélection porte sur l'abscisse la plus
-            # proche du curseur, quelle que soit la hauteur de la souris.
+            _titre("📈 L'évolution du prix")
+            periodes = {"1 mois": 21, "6 mois": 125, "1 an": 250,
+                        "5 ans": 1250, "Tout": None}
+            periode = st.segmented_control(
+                "Période", list(periodes), default="1 an",
+                key="periode", label_visibility="collapsed") or "1 an"
+            n = periodes[periode]
+            vue = serie.tail(n) if n else serie
+            couleur = (HAUSSE if vue["cloture"].iloc[-1] >= vue["cloture"].iloc[0]
+                       else BAISSE)
+            vue = vue.assign(jour=pd.to_datetime(vue["date"]))
             survol = alt.selection_point(nearest=True, on="pointermove",
-                                         fields=["date"], empty=False)
-            base_cours = alt.Chart(serie).encode(
-                x=alt.X("date:T", title=None,
-                        axis=alt.Axis(format="%d/%m/%y", tickCount=8)),
-                # Format SI (« 22k ») : « 22,000 » est une convention
-                # anglaise, et l'app affiche « 14 229 » juste au-dessus.
-                y=alt.Y("cloture:Q", title="clôture (FCFA)",
-                        scale=alt.Scale(zero=False),
-                        axis=alt.Axis(format="~s")),
-            )
-            infobulle = [
-                alt.Tooltip("date:T", title="Séance", format="%d/%m/%Y"),
-                alt.Tooltip("cloture:Q", title="Clôture", format=",.0f"),
-                alt.Tooltip("volume_titres:Q", title="Titres", format=",.0f"),
-            ]
-            # La zone de capture est transparente et couvre toute la hauteur :
-            # une cible de survol doit être plus grande que la marque.
-            capteur = (base_cours.mark_rule(strokeWidth=24, opacity=0)
-                       .encode(tooltip=infobulle).add_params(survol))
-            trait = (base_cours.mark_rule(color=MUET, strokeWidth=1)
-                     .transform_filter(survol))
-            point = (base_cours.mark_point(size=80, filled=True, color=SERIE_1,
-                                           stroke=SURFACE, strokeWidth=2)
-                     .transform_filter(survol))
-            # Le lavis sous la courbe : la teinte de la série à faible
-            # opacité, jamais un aplat saturé. Il donne du corps à une ligne
-            # de 2 px sans rien ajouter à ce qu'elle dit.
-            aire = base_cours.mark_area(
-                line=False,
+                                         fields=["jour"], empty=False)
+            base = alt.Chart(vue).encode(
+                x=alt.X("jour:T", title=None),
+                y=alt.Y("cloture:Q", title="prix (FCFA)",
+                        scale=alt.Scale(zero=False), axis=alt.Axis(format="~s")))
+            aire = base.mark_area(
+                line={"color": couleur, "strokeWidth": 3},
+                interpolate="monotone",
                 color=alt.Gradient(
-                    gradient="linear", x1=0, x2=0, y1=1, y2=0,
-                    stops=[alt.GradientStop(color=_lavis(SERIE_1, 0.0), offset=0),
-                           alt.GradientStop(color=_lavis(SERIE_1, 0.28), offset=1)]))
-            _panneau(f"{choix} — cours de clôture",
-                     f"{len(serie)} séances, {serie['date'].iloc[0]} → "
-                     f"{serie['date'].iloc[-1]}").altair_chart(
-                (aire + base_cours.mark_line(strokeWidth=2, color=SERIE_1)
-                 + capteur + trait + point)
-                # Une série de plusieurs années ne se lit pas d'un bloc.
-                .properties(height=320),
-                width="stretch",
-            )
-            st.caption("Survolez la courbe pour lire une séance.")
+                    gradient="linear", x1=1, x2=1, y1=1, y2=0,
+                    stops=[alt.GradientStop(color=_rgba(couleur, 0), offset=0),
+                           alt.GradientStop(color=_rgba(couleur, .45), offset=1)]))
+            capteur = base.mark_rule(strokeWidth=20, opacity=0).encode(
+                tooltip=[alt.Tooltip("jour:T", title="Date", format="%d/%m/%Y"),
+                         alt.Tooltip("cloture:Q", title="Prix", format=",.0f")]
+            ).add_params(survol)
+            point = base.mark_point(size=120, filled=True, color=couleur,
+                                    stroke="white", strokeWidth=2
+                                    ).transform_filter(survol)
+            st.altair_chart((aire + capteur + point).properties(height=340),
+                            width="stretch")
+
+        par_an = fondamentaux[(fondamentaux["ticker"] == choix)
+                              & (fondamentaux["indicateur"] == "dividende")]
+        if not par_an.empty:
+            _titre("💰 Les dividendes versés",
+                   "Ce que la société a versé à ses actionnaires, pour une "
+                   "action, chaque année.")
+            par_an = par_an.assign(annee=par_an["date"].str[:4])
+            st.altair_chart(
+                alt.Chart(par_an).mark_bar(cornerRadiusTopLeft=10,
+                                           cornerRadiusTopRight=10, size=46)
+                .encode(
+                    x=alt.X("annee:N", title=None, axis=alt.Axis(labelAngle=0)),
+                    y=alt.Y("valeur:Q", title="FCFA par action"),
+                    color=alt.Color("annee:N", legend=None, scale=alt.Scale(
+                        range=[VIOLET, BLEU, CYAN, HAUSSE, AMBRE, ORANGE, ROSE])),
+                    tooltip=[alt.Tooltip("annee:N", title="Exercice"),
+                             alt.Tooltip("valeur:Q", title="Dividende (FCFA)",
+                                         format=",.0f")])
+                .properties(height=260), width="stretch")
+            dernier_div = float(par_an.sort_values("date")["valeur"].iloc[-1])
+            if prix > 0:
+                st.info(f"💡 Au prix actuel, le dernier dividende "
+                        f"({pedagogie.montant(dernier_div)} par action) "
+                        f"représente **{pedagogie.pourcentage(dernier_div / prix, signe=False)}** "
+                        "du prix de l'action. C'est son **rendement**.")
         else:
-            st.info(f"Une seule séance en base pour {choix} : pas d'historique à "
-                    "tracer. Le graphique apparaîtra dès la deuxième.")
-
-        mesures = fondamentaux[fondamentaux["ticker"] == choix] \
-            if not fondamentaux.empty else pd.DataFrame()
-        if not mesures.empty:
-            st.subheader("Dividendes par exercice")
-            large = (mesures.pivot_table(index="date", columns="indicateur",
-                                         values="valeur", aggfunc="first")
-                     .reset_index().sort_values("date", ascending=False))
-            large["date"] = large["date"].str[:4]
-            st.dataframe(
-                large, width="stretch", hide_index=True,
-                column_config={
-                    "date": st.column_config.TextColumn("Exercice"),
-                    "dividende": st.column_config.NumberColumn(
-                        "Dividende net", format="%.2f", help="Par action, en FCFA."),
-                    "rendement": st.column_config.NumberColumn(
-                        "Rendement", format="%.2f %%"),
-                },
-            )
-            st.caption(
-                "Un exercice absent du tableau est un exercice sans versement "
-                "publié — pas un dividende nul : « n'a pas versé » et « on ne "
-                "sait pas » ne sont pas la même chose."
-            )
-
-        if not div_valeur.empty:
-            st.subheader("Détachements à venir")
-            st.dataframe(div_valeur.sort_values("date_detachement", ascending=False),
-                         width="stretch", hide_index=True)
-
-        _telecharger(serie, f"{choix}.csv", "dl_valeur")
-        _glossaire("dividende", "rendement", "liquidite", "sgi")
+            st.info("Aucun dividende connu pour cette société dans l'archive.")
 
 
-# --- Classement -----------------------------------------------------------
+# --- 💰 Dividendes ----------------------------------------------------------
 if onglets[2].open:
     with onglets[2]:
-        st.caption(
-            "Les valeurs ordonnées de la mieux notée à la moins bien notée. "
-            "La note récompense celles qui montent depuis un an, pénalise "
-            "celles qui bougent brutalement, et écarte celles qui "
-            "s'échangent trop peu pour qu'on puisse en ressortir. "
-            "**Les poids de cette note n'ont été calibrés sur rien** : c'est "
-            "une liste de valeurs à examiner, pas un ordre d'achat. "
-            "Techniquement : momentum « 12-1 », filtre de liquidité, "
-            "neutralisation sectorielle."
-        )
-        # Repliés : six curseurs en tête d'onglet, c'est un pupitre dont un
-        # lecteur qui découvre le sujet ne peut pas connaître les bons réglages,
-        # et qui modifient silencieusement le classement affiché en dessous. Les
-        # valeurs par défaut sont celles de la configuration du projet.
-        #
-        # `persist_state` : un onglet caché n'est plus exécuté, et Streamlit
-        # oublie les réglages des widgets qu'il ne voit pas. Sans cela, un
-        # aller-retour par l'onglet Marché remettait les six curseurs à leur
-        # valeur d'usine — sans rien dire, alors que le classement affiché en
-        # dessous, lui, changeait.
-        with st.expander("Réglages avancés"):
-            reg_1, reg_2 = st.columns([1, 2])
-            with reg_1:
-                seuil = st.number_input(
-                    "Volume médian minimal (FCFA)", min_value=0, step=100_000,
-                    value=int(DEFAUTS["analyse"]["volume_median_min_fcfa"]),
-                    key="cl_seuil", persist_state="session",
-                    help="Une valeur qui ne s'échange pas ne se vend pas non plus.",
-                )
-                # Le maximum suit le référentiel : une introduction en bourse
-                # de plus, et un plafond écrit en dur rendrait la dernière
-                # valeur inatteignable sans que rien ne le signale.
-                plafond = max(5, len(referentiel))
-                combien = st.slider("Lignes affichées", 5, plafond,
-                                    min(15, plafond),
-                                    key="cl_lignes", persist_state="session")
-            with reg_2:
-                poids = {
-                    "momentum":
-                        st.slider("Poids du momentum", -1.0, 1.0, 0.5, 0.05,
-                                  key="cl_momentum", persist_state="session"),
-                    "tendance":
-                        st.slider("Poids de la tendance", -1.0, 1.0, 0.3, 0.05,
-                                  key="cl_tendance", persist_state="session"),
-                    "volatilite":
-                        st.slider("Poids de la volatilité", -1.0, 1.0, -0.2,
-                                  0.05, key="cl_volatilite",
-                                  persist_state="session"),
-                }
+        _html(
+            '<div class="lecon anime"><b>💡 Le secret de la BRVM : '
+            'les dividendes.</b><br>Chaque année, les sociétés cotées reversent '
+            'une partie de leurs bénéfices à leurs actionnaires. Sur ce marché, '
+            'c\'est la partie <b>la plus régulière</b> du gain : 7 à 10 % par an '
+            'en moyenne ces dernières années, alors que les prix, eux, montent '
+            'et descendent sans prévenir.</div>')
 
-        reglages = {"analyse": {**DEFAUTS["analyse"],
-                                "volume_median_min_fcfa": seuil},
-                    "ponderations": poids}
-        classement = calculer_classement(cours_filtre, referentiel_filtre,
-                                         ARCHIVE, UNIVERS, reglages)
-
-        requis = reglages["analyse"]["fenetre_momentum"] + 1
-        if classement.empty and seances < requis:
-            _attente(
-                "Classement",
-                seances, requis,
-                "Le momentum se mesure sur un an de cotation. Calculé sur moins, "
-                "il aurait toutes les apparences d'un momentum sans rien "
-                "mesurer — d'où le refus plutôt qu'une approximation. "
-                "L'archive gagne une séance par jour ouvré.",
-            )
-        elif classement.empty:
-            # L'ARCHIVE EST SUFFISANTE : C'EST LE FILTRE QUI A TOUT ÉCARTÉ. Le
-            # compteur d'attente affichait ici « 2 996 sur 251 séances
-            # nécessaires », jauge pleine, tableau absent — il accusait
-            # l'historique d'un vide que l'utilisateur venait de créer lui-même
-            # en montant le seuil. Un refus doit nommer sa vraie cause, sinon
-            # il se lit comme une panne.
-            st.warning(
-                f"**Aucune valeur ne passe le filtre de liquidité.** Le seuil "
-                f"est réglé à {pedagogie.montant(seuil)} de volume médian "
-                f"quotidien ; aucune des {len(referentiel_filtre)} sociétés "
-                f"suivies n'échange autant. Abaissez-le dans « Réglages "
-                f"avancés » — le défaut du projet est "
-                f"{pedagogie.montant(DEFAUTS['analyse']['volume_median_min_fcfa'])}."
-            )
-        else:
-            # Le rang est ce qui se comprend sans rien savoir ; le score n'a pas
-            # d'unité et ne se compare pas d'un jour à l'autre. `scoring` le
-            # calcule déjà — il suffit de le mettre en tête de tableau.
-            classement = classement[
-                ["rang"] + [c for c in classement.columns if c != "rang"]
-            ]
-            tete = classement.head(combien)
-            total = len(classement)
-            st.markdown(
-                f"{total} valeurs passent le filtre de liquidité et sont "
-                f"classées. En tête : "
-                + ", ".join(
-                    f"**{ligne.ticker}** ({pedagogie.ordinal(ligne.rang)})"
-                    for ligne in tete.head(3).itertuples()
-                )
-                + f" sur {total}. Le score n'a pas d'unité — seul l'ordre compte."
-            )
-            # POINTS ET NON BARRES. Une barre part obligatoirement de zéro, et
-            # sur des scores compris entre 90 et 111 les quinze barres
-            # paraissent identiques. Tronquer l'axe pour « voir la
-            # différence » exagérerait des écarts que le score ne prétend pas
-            # porter — il n'a pas d'unité, seul son ordre compte. Le point,
-            # lui, ne réclame pas de ligne de base : il situe sans quantifier.
-            base_score = alt.Chart(tete).encode(
-                y=alt.Y("ticker:N", sort="-x", title=None,
-                        axis=alt.Axis(labelOverlap=False)),
-                x=alt.X("score:Q", title="score (sans unité)",
-                        scale=alt.Scale(zero=False, nice=True)),
-            )
-            _panneau("Score composite",
-                     f"{len(tete)} premières sur {total} classées · "
-                     "aucun des traits qui le composent ne bat le hasard").altair_chart(
-                (base_score.mark_rule(color=GRILLE, strokeWidth=1)
-                 .encode(x2=alt.X2("minimum:Q"))
-                 .transform_calculate(minimum=str(float(tete["score"].min())))
-                 + base_score
-                # Le score est une grandeur continue : la rampe d'une seule
-                # teinte est faite pour cela, et elle dit « combien » sans
-                # jamais prétendre dire « lequel ».
-                .mark_point(size=130, filled=True, stroke=SURFACE, strokeWidth=2)
-                .encode(
-                    color=alt.Color("score:Q", legend=None,
-                                    scale=alt.Scale(range=RAMPE)),
-                    tooltip=[
-                        alt.Tooltip("rang:Q", title="Rang"),
-                        alt.Tooltip("ticker:N", title="Symbole"),
-                        alt.Tooltip("nom:N", title="Société"),
-                        alt.Tooltip("score:Q", title="Score", format=".1f"),
-                        alt.Tooltip("momentum:Q", title="Momentum", format="+.1%"),
-                        alt.Tooltip("secteur:N", title="Secteur"),
-                    ],
-                )).properties(height=max(240, 26 * len(tete))),
-                width="stretch",
-            )
-            # Le tableau reprend la rampe du graphique au-dessus : même
-            # grandeur, même encodage. Les voir se contredire coûterait plus
-            # cher que de ne pas colorer du tout.
-            peint_rang = tete.style.map(
-                lambda v: _fond_sequentiel(v - float(tete["score"].min()),
-                                           float(tete["score"].max()
-                                                 - tete["score"].min()) or 1),
-                subset=["score"])
-            for trait in ("momentum", "tendance"):
-                if trait in tete.columns:
-                    peint_rang = peint_rang.map(
-                        lambda v: _fond_divergent(v, plafond=1.5), subset=[trait])
-            st.dataframe(
-                peint_rang, width="stretch", hide_index=True,
-                column_config={
-                    "rang": st.column_config.NumberColumn(
-                        "Rang", format="%d", help=f"Sur {total} valeurs classées."),
-                    "ticker": st.column_config.TextColumn("Symbole"),
-                    "nom": st.column_config.TextColumn("Société"),
-                    "secteur": st.column_config.TextColumn("Secteur"),
-                    "cloture": st.column_config.NumberColumn(
-                        "Clôture", format="%.0f", help="En FCFA."),
-                    # Les traits sont des proportions : les afficher en 0,5733
-                    # oblige le lecteur à faire la conversion de tête.
-                    "momentum": st.column_config.NumberColumn(
-                        "Momentum", format="percent",
-                        help="Hausse accumulée sur l'année, dernier mois exclu."),
-                    "tendance": st.column_config.NumberColumn(
-                        "Tendance", format="percent",
-                        help="Écart entre moyenne courte et moyenne longue."),
-                    "volatilite": st.column_config.NumberColumn(
-                        "Volatilité", format="percent",
-                        help="Ampleur habituelle des écarts, en rythme annuel."),
-                    "liquidite": st.column_config.NumberColumn(
-                        "Liquidité", format="localized",
-                        help="Montant médian échangé par séance, en FCFA."),
-                    "score": st.column_config.NumberColumn(
-                        "Score", format="%.1f",
-                        help="Sans unité : seul l'ordre qu'il produit compte."),
-                },
-            )
-            _telecharger(classement, "classement.csv", "dl_classement")
-
-        # LE RENDEMENT PASSE DEVANT, ET C'EST LA DONNÉE QUI L'A DÉCIDÉ. Sur
-        # les quatre exercices connus, le dividende médian vaut 7 à 10 % par
-        # an, tous les ans ; le cours, lui, va de -1,6 % à +61,4 %. Le
-        # classement par momentum ordonne le quart bruyant du rendement, et
-        # aucun trait de prix ne bat le hasard sur 11,5 ans.
-        st.subheader("Rendement du dividende")
         rendements = fondamentaux[fondamentaux["indicateur"] == "rendement"]
         if rendements.empty:
-            st.info(
-                "Aucun rendement en archive. `brvm dividendes` lit les "
-                "calendriers de brvm.org et de sikafinance, et le tableau "
-                "pluriannuel de ce dernier."
-            )
+            st.info("Aucun rendement de dividende en archive pour l'instant.")
         else:
-            dernier_exercice = rendements["date"].max()
-            recent = (rendements[rendements["date"] == dernier_exercice]
-                      .merge(referentiel_filtre[["ticker", "nom", "secteur"]],
-                             on="ticker", how="inner")
+            # Le rendement typique, exercice par exercice.
+            typique = (rendements.groupby("date")["valeur"].median()
+                       .reset_index())
+            typique["annee"] = typique["date"].str[:4]
+            _titre("📊 Le rendement typique, année après année",
+                   "La moitié des sociétés font mieux, l'autre moitié moins bien.")
+            c = st.columns(len(typique))
+            palette = [(BLEU, CYAN), (VIOLET, ROSE), (ORANGE, AMBRE),
+                       ("#059669", "#34d399"), ("#e11d48", "#fb7185")]
+            for i, (colonne, ligne) in enumerate(zip(c, typique.itertuples())):
+                _stat(colonne, f"Exercice {ligne.annee}",
+                      pedagogie.pourcentage(ligne.valeur / 100, signe=False),
+                      "de rendement médian", palette[i % len(palette)], "💰",
+                      min(i + 1, 7))
+
+            exercice = rendements["date"].max()
+            recent = (rendements[rendements["date"] == exercice]
+                      .assign(nom=lambda t: t["ticker"].map(noms),
+                              secteur=lambda t: t["ticker"].map(secteurs_par_valeur))
                       .sort_values("valeur", ascending=False))
-            st.markdown(
-                f"Exercice **{dernier_exercice[:4]}**, {len(recent)} sociétés. "
-                "Rendement médian **"
-                + pedagogie.pourcentage(recent["valeur"].median() / 100,
-                                        signe=False)
-                + "** — "
-                "à comparer aux 2,8 % l'an que rapporte le cours seul sur onze "
-                "ans. **Sur ce marché, le dividende est l'essentiel du "
-                "rendement**, et le classement ci-dessus n'en tient aucun compte."
-            )
-            if not recent.empty:
-                tete = recent.head(15)
-                _panneau(f"Rendement du dividende — exercice {dernier_exercice[:4]}",
-                         "la part du rendement qui existe réellement sur ce "
-                         "marché").altair_chart(
-                    alt.Chart(tete)
-                    .mark_bar(cornerRadiusEnd=4, height=16)
-                    .encode(
-                        x=alt.X("valeur:Q", title="rendement du dividende (%)"),
-                        # Rampe orange : c'est la seconde grandeur continue
-                        # affichée en même temps que le score, et deux rampes
-                        # simultanées prennent chacune leur propre teinte.
-                        color=alt.Color(
-                            "valeur:Q", legend=None,
-                            scale=alt.Scale(range=["#f7c9b4", "#eb6834", "#a83c17"]
-                                            if not SOMBRE else
-                                            ["#7a3016", "#d95926", "#f0a883"])),
-                        y=alt.Y("ticker:N", sort="-x", title=None,
-                                axis=alt.Axis(labelOverlap=False)),
-                        tooltip=[
-                            alt.Tooltip("ticker:N", title="Symbole"),
-                            alt.Tooltip("nom:N", title="Société"),
-                            alt.Tooltip("valeur:Q", title="Rendement",
-                                        format=".2f"),
-                            alt.Tooltip("secteur:N", title="Secteur"),
-                        ],
-                    )
-                    .properties(height=max(220, 24 * len(tete))),
-                    width="stretch",
-                )
-                st.dataframe(
-                    recent[["ticker", "nom", "secteur", "valeur"]],
-                    width="stretch", hide_index=True,
-                    column_config={
-                        "ticker": st.column_config.TextColumn("Symbole"),
-                        "nom": st.column_config.TextColumn("Société"),
-                        "secteur": st.column_config.TextColumn("Secteur"),
-                        "valeur": st.column_config.NumberColumn(
-                            "Rendement", format="%.2f %%",
-                            help="Dividende de l'exercice rapporté au cours."),
-                    },
-                )
-                _telecharger(recent, "rendements.csv", "dl_rendements")
-            st.caption(
-                "Quatre exercices seulement sont publiés : c'est assez pour "
-                "voir que le dividende domine, beaucoup trop peu pour mesurer "
-                "s'il prédit quoi que ce soit — quatre dates ne font pas une "
-                "validation."
-            )
+            _titre(f"🏆 Les plus généreuses — exercice {exercice[:4]}",
+                   "Dividende de l'année divisé par le prix de l'action.")
+            tete = recent.head(15)
+            st.altair_chart(
+                alt.Chart(tete).mark_bar(cornerRadiusEnd=8, height=20).encode(
+                    x=alt.X("valeur:Q", title="rendement du dividende (%)"),
+                    y=alt.Y("ticker:N", sort="-x", title=None,
+                            axis=alt.Axis(labelOverlap=False)),
+                    color=alt.Color("valeur:Q", legend=None, scale=alt.Scale(
+                        range=[AMBRE, ORANGE, ROSE, VIOLET])),
+                    tooltip=[alt.Tooltip("ticker:N", title="Symbole"),
+                             alt.Tooltip("nom:N", title="Société"),
+                             alt.Tooltip("valeur:Q", title="Rendement (%)",
+                                         format=".2f"),
+                             alt.Tooltip("secteur:N", title="Secteur")])
+                .properties(height=max(260, 28 * len(tete))), width="stretch")
+            st.caption("⚠️ Un rendement très élevé peut aussi venir d'un prix "
+                       "qui s'est effondré. Regardez toujours la fiche de la "
+                       "société avant de conclure.")
 
-        _glossaire("momentum", "tendance", "volatilite", "liquidite", "score",
-                   "rang", "dividende", "rendement", "frais")
+        # Le calculateur : la question que se pose vraiment un débutant.
+        _titre("🧮 Combien rapporterait mon épargne ?",
+               "Une estimation à partir du dernier dividende connu.")
+        derniers_div = (fondamentaux[fondamentaux["indicateur"] == "dividende"]
+                        .sort_values("date").groupby("ticker")["valeur"].last())
+        prix_jour = (cours[cours["date"] == derniere]
+                     .set_index("ticker")["cloture"])
+        candidates = sorted(set(derniers_div.index) & set(prix_jour.index))
+        if candidates:
+            with st.container(border=True):
+                g, d = st.columns(2)
+                societe = g.selectbox(
+                    "Société", candidates,
+                    format_func=lambda t: f"{t} — {noms.get(t, '')}",
+                    key="calc_societe")
+                somme = d.number_input("Somme investie (FCFA)", 10_000,
+                                       100_000_000, 500_000, 50_000,
+                                       key="calc_somme")
+                p = float(prix_jour[societe])
+                div = float(derniers_div[societe])
+                actions = int(somme // p) if p > 0 else 0
+                gain = actions * div
+                r = st.columns(3)
+                _stat(r[0], "Actions achetées", f"{actions:,}".replace(",", " "),
+                      f"à {pedagogie.montant(p)} l'une", (BLEU, CYAN), "🧾", 1)
+                _stat(r[1], "Dividende par an", pedagogie.montant(gain),
+                      f"{pedagogie.montant(div)} par action", ("#059669", "#34d399"),
+                      "💵", 2)
+                _stat(r[2], "Rendement", pedagogie.pourcentage(
+                      gain / somme if somme else 0, signe=False),
+                      "de la somme investie", (VIOLET, ROSE), "📈", 3)
+                st.caption("Estimation brute : avant impôts et frais de courtage "
+                           "(2,5 à 3,5 % pour un achat puis une revente), et rien "
+                           "ne garantit que le dividende sera le même l'an "
+                           "prochain.")
 
 
-# --- Conseil --------------------------------------------------------------
-# LA SECTION QUI RÉPOND À LA QUESTION QU'ON SE POSE VRAIMENT. Le classement
-# dit qui est devant ; il ne dit pas s'il faut vendre ce qu'on détient pour
-# l'acheter. Cette réponse dépend de trois choses que le classement ignore :
-# ce que vous avez, ce que l'arbitrage rapporterait, et ce qu'il coûte chez
-# VOTRE intermédiaire — lequel change d'un pays de l'UEMOA à l'autre.
-#
-# Elle passe AVANT la prédiction : c'est la sortie actionnable, et la
-# hiérarchie de la page doit dire ce qui sert.
-if onglets[2].open:
-    with onglets[2]:
-        st.divider()
-        st.subheader("Que faire, concrètement")
-        st.caption(
-            "Savoir quelle valeur est première ne dit pas s'il faut vendre "
-            "celle qu'on a pour l'acheter. **Vendre puis racheter coûte des "
-            "frais deux fois**, et il faut que le changement rapporte plus "
-            "que ces deux passages. Dites ce que vous détenez et ce que "
-            "votre intermédiaire vous facture ; le calcul est fait pour vous."
-        )
-        saisie = st.columns([3, 1, 1])
-        detenu = saisie[0].multiselect(
-            "Ce que vous détenez", options=list(classement["ticker"])
-            if not classement.empty else [],
-            key="cs_detenu", persist_state="session",
-            help="Laissez vide pour savoir quoi acheter en partant de zéro.")
-        frais_cs = saisie[1].number_input(
-            "Frais par sens (%)", 0.0, 5.0, 1.0, 0.05, key="cs_frais",
-            persist_state="session",
-            help="Ce que votre SGI facture à l'achat comme à la vente. Il "
-                 "varie fortement d'un intermédiaire et d'un pays à l'autre.")
-        impact_cs = saisie[2].number_input(
-            "Impact (%)", 0.0, 5.0, 0.5, 0.05, key="cs_impact",
-            persist_state="session",
-            help="Écart entre le cours affiché et le cours obtenu, sur des "
-                 "lignes qui ne s'échangent pas tous les jours.")
-
-        if classement.empty:
-            st.info("Aucune valeur classée : il faut un an de cotation avant "
-                    "que la première soit classable.")
-        else:
-            prudence = not st.toggle(
-                "Employer l'IC ponctuel plutôt que sa borne basse",
-                value=False, key="cs_ponctuel", persist_state="session",
-                help="Par défaut, le gain attendu est calculé sur la borne "
-                     "basse de l'intervalle de confiance de l'IC : c'est ce "
-                     "qu'on peut défendre face à un coût certain. L'IC "
-                     "ponctuel fait recommander des arbitrages que la preuve "
-                     "ne soutient pas.")
-            validation_cs = valider_modele(cours_filtre, referentiel_filtre,
-                                           ARCHIVE, UNIVERS)
-            echantillon_cs = echantillon_prediction(
-                cours_filtre, referentiel_filtre, ARCHIVE, UNIVERS)
-            # LE CLASSEMENT JUGÉ ET LES MESURES QUI LE JUGENT SORTENT
-            # ENSEMBLE. Cette section appariait le classement du composite
-            # avec l'IC du modèle appris, deux fois et demie meilleur : le
-            # gain attendu d'un arbitrage s'en trouvait surestimé d'autant.
-            # LE MODÈLE EST APPLIQUÉ UNE FOIS, PAS DEUX. La section
-            # Prédiction, plus bas, affiche les mêmes probabilités ; son
-            # appel mémoïsé est fait ici pour que les deux sections
-            # partagent le calcul au lieu de ré-entraîner le sac de
-            # régressions chacune de son côté.
-            probable_cs = appliquer_modele(cours_filtre, referentiel_filtre,
-                                           ARCHIVE, UNIVERS, validation_cs)
-            production = classement_de_production(
-                cours_filtre, referentiel_filtre, ARCHIVE, UNIVERS,
-                validation_cs, classement,
-                ordre_composite=tuple(classement["ticker"]),
-                _appris=probable_cs)
-            classement_avis = production["classement"]
-            avis = calculer_conseil(
-                cours_filtre, classement_avis, production["mesure"],
-                conseil.dispersion(echantillon_cs), ARCHIVE, UNIVERS,
-                tuple(detenu), frais_cs, impact_cs,
-                int(DEFAUTS["backtest"]["positions"]), prudence,
-                _avantage=production["avantage"], source=production["source"])
-
-            # LES DEUX NOMBRES QUI DÉCIDENT, DANS LA MÊME UNITÉ, EN
-            # PREMIER. « Écart de score requis : 3,06 » ne veut rien dire
-            # pour qui découvre l'app — et c'était la tuile de gauche. Ce
-            # qu'il faut lire, c'est ce que ça coûte et ce que ça rapporte,
-            # en pourcents, côte à côte. Le vocabulaire vient après, en
-            # légende, pour qui veut savoir d'où ça sort.
-            gain_cs = avis.get("gain_meilleur", float("nan"))
-            tuiles = st.columns(3)
-            _tuile(tuiles[0], "Changer une ligne coûte",
-                   f"{2 * avis['cout']:.2%}",
-                   note="vos frais, à la vente puis à l'achat")
-            _tuile(tuiles[1], "Le meilleur changement rapporte",
-                   "rien de mesurable" if gain_cs != gain_cs
-                   else f"{gain_cs:+.2%}",
-                   sens=1 if (gain_cs == gain_cs
-                              and gain_cs > 2 * avis["cout"]) else -1,
-                   note="en moyenne, si le classement vaut ce qu'on a mesuré")
-            _tuile(tuiles[2], "Verdict",
-                   "Ne rien faire" if avis["arbitrages"] == 0
-                   else f"{avis['arbitrages']} changement(s)",
-                   sens=1 if avis["arbitrages"] else 0,
-                   note="ce que dit la comparaison ci-contre")
-
-            # CE QUE LE HAUT DE LISTE A RAPPORTÉ, ET POURQUOI C'EST ICI.
-            # Les deux tuiles précédentes passent par une chaîne
-            # d'estimations ; celle-ci est un rendement constaté sur des
-            # périodes que le calcul n'avait pas vues. Quand les deux se
-            # contredisent, il faut que le lecteur le voie.
-            mesure_haut = avis.get("avantage_mesure", float("nan"))
-            if avis.get("haut_mesure") and mesure_haut == mesure_haut:
-                plancher_haut = avis.get("gain_haut", float("nan"))
-                positions_haut = avis.get("positions", 10)
-                garantie = ("son pire cas reste négatif, donc rien n'est "
-                            "garanti" if not (plancher_haut > 0)
-                            else f"et au pire {plancher_haut:+.2%}")
-                st.caption(
-                    f"**Vérification indépendante.** Suivre les "
-                    f"{positions_haut} premières lignes de ce classement a "
-                    f"rapporté **{mesure_haut:+.2%}** de plus que d'acheter "
-                    f"tout le marché en parts égales, sur des périodes que le "
-                    f"calcul n'avait jamais vues — {garantie}. À comparer aux "
-                    f"{2 * avis['cout']:.2%} que coûte un changement : c'est "
-                    f"la même question posée sans passer par aucune formule."
-                )
-
-            if avis["arbitrages"] == 0:
-                st.success(
-                    "**Ne rien faire.** Ce n'est pas une absence de réponse. "
-                    "Le classement distingue bien les valeurs entre elles, "
-                    "mais l'écart qu'il mesure est plus petit que ce que "
-                    "coûte le fait d'y réagir. Ici, changer une ligne coûte "
-                    "quelques **pourcents** — sur les grandes places ce "
-                    "serait quelques centièmes de pourcent — et l'immobilité "
-                    "est donc le plus souvent la bonne décision."
-                )
-            else:
-                st.warning(
-                    f"**{avis['arbitrages']} changement(s) rapportent plus "
-                    "qu'ils ne coûtent.** Chaque changement est une paire : "
-                    "on vend l'une, on achète l'autre. Les deux lignes du "
-                    "tableau affichent donc le même résultat, celui de "
-                    "l'opération entière — et non la moitié chacune."
-                )
-
-            if not avis["lignes"].empty:
-                st.dataframe(
-                    avis["lignes"].style.map(
-                        lambda v: _fond_divergent(v, plafond=0.02),
-                        subset=["net"]),
-                    width="stretch", hide_index=True,
-                    column_config={
-                        "ticker": st.column_config.TextColumn("Symbole"),
-                        "nom": st.column_config.TextColumn("Société"),
-                        "detenu": st.column_config.CheckboxColumn("Détenu"),
-                        "rang": st.column_config.NumberColumn("Rang",
-                                                              format="%d"),
-                        "action": st.column_config.TextColumn("Action"),
-                        "paire": st.column_config.TextColumn("Échangée avec"),
-                        "gain_attendu": st.column_config.NumberColumn(
-                            "Gain attendu", format="percent",
-                            help="IC × dispersion transversale × écart de "
-                                 "score. Pour un échange, le gain de la paire."),
-                        "cout": st.column_config.NumberColumn(
-                            "Frais", format="percent"),
-                        "net": st.column_config.NumberColumn(
-                            "Net", format="percent"),
-                        "motif": st.column_config.TextColumn("Motif"),
-                    })
-                _telecharger(avis["lignes"], "conseil.csv", "dl_conseil")
-
-            # DANS QUOI TOMBENT LES RECOMMANDATIONS. Dix lignes dont quatre
-            # sont des banques ne font pas un portefeuille réparti, et aucune
-            # autre tuile de cet onglet ne le disait. Le repère est l'univers
-            # coté lui-même : c'est lui qu'on achèterait sans classement.
-            conc = conseil.concentration_secteur(
-                classement_avis, referentiel_filtre, avis.get("positions", 10))
-            if conc["premier"]:
-                parts = pd.DataFrame(
-                    [{"secteur": nom, "part du haut de liste": part,
-                      "écart à l'univers": conc["ecart"].get(nom, 0.0)}
-                     for nom, part in sorted(conc["part"].items(),
-                                             key=lambda kv: -kv[1]) if part > 0])
-                titre = (f"Dans quoi tombent les {conc['positions']} "
-                         f"premières")
-                _panneau(titre, "un pari sectoriel se choisit, il ne "
-                                "s'hérite pas").dataframe(
-                    parts.style.format({"part du haut de liste": "{:.0%}",
-                                        "écart à l'univers": "{:+.0%}"}).map(
-                        lambda v: _fond_divergent(v, plafond=0.15),
-                        subset=["écart à l'univers"]),
-                    width="stretch", hide_index=True)
-                st.caption(
-                    f"La valeur la plus représentée vient du secteur "
-                    f"**{conc['premier']}**, qui pèse "
-                    f"{conc['part_premier']:.0%} des lignes conseillées. "
-                    f"L'indice de concentration vaut "
-                    f"{conc['herfindahl']:.3f} là où l'univers coté vaut "
-                    f"{conc['herfindahl_univers']:.3f} : plus il est haut, "
-                    f"plus tout dépend du sort d'un seul secteur."
-                )
-
-            st.error("**Ce que ceci n'est pas.** "
-                     + " ; ".join(avis["avertissements"]) + ".")
-        _glossaire("arbitrage", "aller_retour", "gain_attendu", "prudence",
-                   "dispersion", "univers", "significatif", "score", "rang",
-                   "frais", "ic", "avantage_haut", "concentration", "secteur")
-
-
-# --- Prédiction -----------------------------------------------------------
-# Deuxième entrée dans l'onglet du classement : la section s'y ajoute à
-# la suite, sans réindenter deux cents lignes pour un changement de rang.
-if onglets[2].open:
-    with onglets[2]:
-        st.divider()
-        st.subheader("Et si on apprenait le classement ?")
-        # L'HORIZON VIENT DES RÉGLAGES. Il était écrit « trois mois » en
-        # dur ; le jour où il est passé à vingt séances, la phrase est devenue
-        # fausse sans que rien ne le signale.
-        _seances_h = int(DEFAUTS["prediction"]["horizon"])
-        st.caption(
-            f"Probabilité de **surperformer le marché sur {_seances_h} séances"
-            f"** (environ {max(1, round(_seances_h / 21))} mois de cotation) — "
-            "pas de prévoir un cours. La BRVM cote par fixing, avec une limite "
-            "de ±7,5 % : un modèle entraîné sur le lendemain apprendrait "
-            "« demain ≈ aujourd'hui » et produirait un backtest inexécutable."
-        )
-        validation = valider_modele(cours_filtre, referentiel_filtre,
-                                    ARCHIVE, UNIVERS)
-
-        if validation.get("motif"):
-            # L'apprentissage manque : une source sur trois, pas l'onglet.
-            # On le dit sans dramatiser, parce que le classement tient.
-            st.info(validation["motif"])
-
-        if validation["periodes"].empty:
-            _attente(
-                "Prédiction",
-                validation["lignes"], validation["lignes_minimum"],
-                "Une observation, c'est une valeur à une date, avec son sort "
-                f"connu {int(DEFAUTS['prediction']['horizon'])} séances plus "
-                "tard. Chaque séance en apporte une "
-                "quarantaine — mais il faut d'abord un an de cotation avant que "
-                "la première soit calculable.",
-                unite="observation",
-            )
-        else:
-            # L'IC se cite de mémoire, son incertitude non : la tuile porte
-            # donc l'intervalle en légende, là où le chiffre ne peut pas
-            # partir sans lui.
-            m, c = validation["mesure"], validation["mesure_composite"]
-            stab = validation["stabilite"]
-            # L'intervalle passe en note et non en écart : Streamlit dessine
-            # une flèche devant un delta, et une incertitude n'a pas de sens
-            # de variation — « ↑ ± 0,117 » se lit comme une hausse.
-            mesures = st.columns(3)
-            _tuile(mesures[0], "IC de la combinaison",
-                   f"{validation['ic']:+.3f}",
-                   note=f"± {2 * m['erreur_type']:.3f} · t = {m['t']:+.1f} · "
-                        + ("significatif" if m["significatif"]
-                           else "indiscernable du hasard"))
-            _tuile(mesures[1], "IC du composite",
-                   f"{validation['ic_composite']:+.3f}",
-                   note=f"± {2 * c['erreur_type']:.3f} · t = {c['t']:+.1f} · "
-                        + ("significatif" if c["significatif"]
-                           else "indiscernable du hasard"))
-            _tuile(mesures[2], "Écart", f"{validation['ecart']:+.3f}",
-                   sens=1 if validation["ecart"] > 0 else -1,
-                   note="la combinaison moins le composite")
-
-            # L'AUTRE CHIFFRE, ET IL N'EST PAS DÉCORATIF. Les trois tuiles
-            # ci-dessus notent l'ordre de TOUTE la cote ; personne n'achète
-            # toute la cote. Mesuré sur cette archive avant la comparaison à
-            # secteur égal, l'IC de la combinaison valait +0,045 pendant que
-            # ses dix premières lignes perdaient 0,57 % contre l'univers : le
-            # tableau de bord affichait alors une amélioration là où
-            # l'utilisateur aurait perdu de l'argent.
-            av = validation.get("avantage") or {}
-            av_tout = validation.get("avantage_tout") or {}
-            if av.get("dates"):
-                haut = st.columns(3)
-                _tuile(haut[0],
-                       f"Ce qu'ont rapporté les {av['positions']} premières",
-                       f"{av['avantage']:+.2%}",
-                       sens=1 if av["avantage"] > 0 else -1,
-                       note=f"parmi les valeurs ACHETABLES, de plus que le "
-                            f"marché en parts égales, par période de "
-                            f"{validation['horizon']} séances · "
-                            f"t = {av['t']:+.1f}")
-                # LE CHIFFRE FLATTEUR, MONTRÉ À CÔTÉ PLUTÔT QUE TU. Compter
-                # les valeurs trop peu échangées double presque l'avantage ;
-                # le cacher donnerait une tuile plus belle et fausse.
-                if av_tout.get("dates"):
-                    _tuile(haut[1], "Si l'on comptait les illiquides",
-                           f"{av_tout['avantage']:+.2%}",
-                           note="valeurs qu'un ordre ne peut pas atteindre "
-                                "comprises — pourquoi le chiffre de gauche "
-                                f"est plus bas · t = {av_tout['t']:+.1f}")
-                _tuile(haut[2], "Ce qui part en production",
-                       prediction.LIBELLES_SOURCES.get(
-                           validation["retenue"], validation["retenue"]),
-                       note=validation.get("motif_retenue")
-                       or "IC positif et haut de liste gagnant hors échantillon")
-                if validation.get("motif_retenue"):
-                    st.warning(
-                        "**Le modèle appris ne part pas en production.** "
-                        f"{validation['motif_retenue']}. C'est le score "
-                        "composite, qui n'estime rien et ne peut donc pas "
-                        "surajuster, qui sert au classement affiché."
-                    )
-                seuil_ach = av.get("liquidite_min")
-                st.caption(
-                    "Ces chiffres existent parce que l'IC ne suffit pas. Un "
-                    "classement peut mieux ordonner le ventre du marché — ce "
-                    "qui lève l'IC — en ordonnant plus mal les quelques "
-                    "valeurs qui sont les seules que quiconque achètera ; les "
-                    "deux ont divergé en signe sur cette archive. "
-                    + (f"« Achetables » veut dire : au moins "
-                       f"{seuil_ach:,.0f} FCFA échangés par séance en médiane, "
-                       "le seuil qu'emploie déjà le classement. Environ deux "
-                       "lignes sur cinq de l'archive ne l'atteignent pas, et "
-                       "l'avantage y paraît deux fois plus grand qu'il ne l'est "
-                       "réellement.".replace(",", " ")
-                       if seuil_ach else "")
-                )
-
-            st.caption(
-                f"L'intervalle couvre deux erreurs-types, calculées sur "
-                f"{m['dates_independantes']} périodes **disjointes** et non sur "
-                f"les {m['dates']} dates de test : avec un horizon de "
-                f"{validation['horizon']} séances, deux dates voisines "
-                "racontent la même histoire. Les compter comme indépendantes "
-                "multiplie la certitude apparente par huit."
-            )
-
-            # CE QUE LA MOYENNE CACHAIT, ET QUI MANQUAIT À CET ONGLET. Un IC
-            # moyen sans sa dispersion laissait croire à une mesure stable là
-            # où les périodes allaient de +0,29 à -0,28.
-            if validation["sources"]:
-                dispersion = pd.DataFrame([
-                    {"source": prediction.LIBELLES_SOURCES.get(nom, nom),
-                     "IC": mes["ic"], "IR": mes["ir"],
-                     "périodes positives": mes["part_positives"],
-                     "pire période": mes["pire"]}
-                    for nom, mes in validation["sources"].items()
-                ])
-                _panneau("Ce que la moyenne cache",
-                         "dispersion d'une période de test à l'autre").dataframe(
-                    dispersion.style.map(
-                        lambda v: _fond_divergent(v, plafond=0.05),
-                        subset=["IC", "pire période"]),
-                    width="stretch", hide_index=True,
-                    column_config={
-                        "source": st.column_config.TextColumn("Source"),
-                        "IC": st.column_config.NumberColumn(format="%+.3f"),
-                        "IR": st.column_config.NumberColumn(
-                            format="%+.2f",
-                            help="IC moyen rapporté à son écart-type entre "
-                                 "périodes. C'est la mesure de fiabilité : "
-                                 "deux sources au même IC ne se valent pas "
-                                 "si l'une le réalise à chaque période et "
-                                 "l'autre une fois sur deux."),
-                        "périodes positives": st.column_config.NumberColumn(
-                            format="percent"),
-                        "pire période": st.column_config.NumberColumn(
-                            format="%+.3f",
-                            help="Ce qu'aurait coûté la pire période de test. "
-                                 "Une source au bon IC moyen mais à la pire "
-                                 "période profonde s'abandonne au creux."),
-                    },
-                )
-                st.caption(
-                    "Le score retenu est celui d'**une seule** source : la "
-                    "régression, ou les poids de fiabilité si scikit-learn "
-                    "manque. Les moyenner a été essayé et mesuré, et fait "
-                    "moins bien sur ce qui décide — l'avantage des dix "
-                    "premières valeurs achetables tombe de +7,7 % à +5,8 % "
-                    "annualisés. Des poids appris par validation imbriquée "
-                    "font moins bien encore : même à cinq séances d'horizon, "
-                    "onze ans ne donnent que cinq cents périodes vraiment "
-                    "indépendantes, trop peu pour apprendre des poids sur "
-                    "une grandeur aussi bruyante."
-                )
-
-            # Le constat le plus important de l'onglet, et il ne tient pas
-            # dans une tuile : sur quoi le classement repose-t-il vraiment ?
-            traits_mesures = validation.get("traits_mesures") or {}
-            poids_fiab = validation.get("poids_fiabilite") or {}
-            if traits_mesures:
-                table = pd.DataFrame([
-                    {"trait": pedagogie.LIBELLES.get(t, t), "IC": mes["ic"],
-                     "± 2 erreurs-types": 2 * mes["erreur_type"],
-                     "t": mes["t"],
-                     "poids retenu": poids_fiab.get(t, float("nan")),
-                     "verdict": "significatif" if mes["significatif"]
-                                else "indiscernable du hasard"}
-                    for t, mes in traits_mesures.items()
-                ])
-                if not table.empty and not table["verdict"].eq("significatif").any():
-                    st.error(
-                        "**Aucun trait ne se distingue du hasard.** Le "
-                        "classement reste une description du marché — qui a "
-                        "monté, qui s'échange — mais rien ici n'autorise à en "
-                        "attendre un rendement."
-                    )
-                with st.expander("Ce que vaut chaque trait, pris séparément"):
-                    st.dataframe(
-                        # Un IC se lit par son signe autant que par sa taille :
-                        # le fond divergent le dit avant le chiffre. Plafond à
-                        # 0,05, la borne haute de la bande exploitable.
-                        table.style.map(lambda v: _fond_divergent(v, plafond=0.05),
-                                        subset=["IC"]),
-                        width="stretch", hide_index=True,
-                        column_config={
-                            "trait": st.column_config.TextColumn("Trait"),
-                            "IC": st.column_config.NumberColumn(format="%+.3f"),
-                            "± 2 erreurs-types":
-                                st.column_config.NumberColumn(format="%.3f"),
-                            "t": st.column_config.NumberColumn(format="%+.1f"),
-                            "poids retenu": st.column_config.NumberColumn(
-                                format="%+.4f",
-                                help="Le poids appris, rétréci par la force de "
-                                     "la preuve : un trait dont l'IC ne se "
-                                     "distingue pas du hasard tombe à zéro, "
-                                     "quelle que soit la taille de cet IC."),
-                            "verdict": st.column_config.TextColumn("Verdict"),
-                        },
-                    )
-                    st.caption(
-                        "Les deux traits qui portent le classement — le choc "
-                        "de volume et le retournement à un mois — ne "
-                        "figuraient pas dans le projet à l'origine. Le "
-                        "momentum et la tendance, qui en étaient le cœur, "
-                        "reçoivent un poids nul."
-                    )
-
-            if validation["retenue"] == "composite":
-                st.warning(
-                    "**La combinaison n'a pas d'IC positif hors échantillon.** "
-                    "C'est le score composite — onglet Classement — qui part "
-                    "en production : il n'estime rien, donc il ne peut pas "
-                    "surajuster."
-                )
-            elif validation["ic"] > 0.30:
-                st.error(
-                    f"**IC de {validation['ic']:.3f} — anormalement élevé.** "
-                    "Un IC exploitable vaut 0,02 à 0,05. Cherchez la fuite."
-                )
-            elif not m["significatif"]:
-                st.warning(
-                    f"**L'IC est positif sans être significatif** "
-                    f"(t = {m['t']:+.1f}, il en faudrait 2). Le signe, la "
-                    f"dispersion et les {stab['periodes_positives']} périodes "
-                    f"positives sur {stab['periodes']} sont une amélioration "
-                    "réelle et mesurable ; rien de tout cela n'autorise à "
-                    "affirmer que l'IC vrai est différent de zéro."
-                )
-
-            colonnes_ic = [c for c in validation["periodes"].columns
-                           if c.startswith("ic_")]
-            st.dataframe(
-                validation["periodes"].style.map(
-                    lambda v: _fond_divergent(v, plafond=0.05),
-                    subset=colonnes_ic),
-                width="stretch", hide_index=True,
-                column_config={
-                    "periode": st.column_config.TextColumn("Période de test"),
-                    "lignes_entrainement": st.column_config.NumberColumn(
-                        "Appris sur", format="localized",
-                        help="Observations servant à l'apprentissage. Les "
-                             "dates trop proches de la période d'examen sont "
-                             "retirées : sinon le modèle connaîtrait déjà une "
-                             "partie de la réponse."),
-                    "lignes_test": st.column_config.NumberColumn(
-                        "Testé sur", format="localized"),
-                    "ic_combinaison": st.column_config.NumberColumn(
-                        "IC combinaison", format="%+.3f"),
-                    "ic_modele": st.column_config.NumberColumn(
-                        "IC régression", format="%+.3f"),
-                    "ic_fiabilite": st.column_config.NumberColumn(
-                        "IC poids appris", format="%+.3f"),
-                    "ic_composite": st.column_config.NumberColumn(
-                        "IC composite", format="%+.3f"),
-                    "precision": st.column_config.NumberColumn(
-                        "Précision", format="percent",
-                        help="Part des paris justes. Trompeuse seule : "
-                             "c'est l'IC qui compte."),
-                },
-            )
-
-            probable = appliquer_modele(cours_filtre, referentiel_filtre,
-                                        ARCHIVE, UNIVERS, validation)
-            if not probable.empty:
-                probable = probable.merge(referentiel[["ticker", "nom", "secteur"]],
-                                          on="ticker", how="left")
-                calibree = bool(probable["calibree"].all())
-                tete = probable.head(15).copy()
-                # La barre d'erreur n'est pas un ornement : sans elle, l'œil
-                # lit un ordre là où le modèle ne distingue presque rien.
-                tete["bas"] = (tete["probabilite"]
-                               - tete["incertitude"].fillna(0)).clip(lower=0)
-                tete["haut"] = (tete["probabilite"]
-                                + tete["incertitude"].fillna(0)).clip(upper=1)
-                titre = ("Probabilité de surperformer le marché" if calibree
-                         else "Rang combiné — PAS une probabilité")
-                barres = (
-                    alt.Chart(tete)
-                    .mark_bar(cornerRadiusEnd=4, height=16, color=SERIE_1)
-                    .encode(
-                        x=alt.X("probabilite:Q",
-                                title="probabilité de surperformer" if calibree
-                                      else "rang combiné",
-                                axis=alt.Axis(format=".0%"),
-                                scale=alt.Scale(zero=not calibree)),
-                        y=alt.Y("ticker:N", sort="-x", title=None,
-                                axis=alt.Axis(labelOverlap=False)),
-                        tooltip=[
-                            alt.Tooltip("ticker:N", title="Symbole"),
-                            alt.Tooltip("nom:N", title="Société"),
-                            alt.Tooltip("probabilite:Q",
-                                        title="Probabilité" if calibree
-                                              else "Rang", format=".1%"),
-                            alt.Tooltip("incertitude:Q", title="± incertitude",
-                                        format=".1%"),
-                            alt.Tooltip("secteur:N", title="Secteur"),
-                        ],
-                    )
-                )
-                intervalle = (
-                    alt.Chart(tete)
-                    .mark_rule(color=ENCRE, opacity=0.55, strokeWidth=1.5)
-                    .encode(x="bas:Q", x2="haut:Q",
-                            y=alt.Y("ticker:N", sort="-x", title=None))
-                )
-                _panneau(titre, f"à {int(DEFAUTS['prediction']['horizon'])} "
-                                "séances, quinze premières").altair_chart(
-                    (barres + intervalle)
-                    .properties(height=max(220, 24 * len(tete))),
-                    width="stretch",
-                )
-                if calibree:
-                    st.caption(
-                        "**L'échelle est resserrée autour de 50 %, et c'est "
-                        "la vérité.** Le calibrage apprend, sur les périodes "
-                        "de test, combien de fois une valeur ainsi classée a "
-                        "réellement battu la médiane. Un rang de 100 % ne "
-                        "vaut pas une certitude : avec un IC de cet ordre, "
-                        "la première du classement bat le marché un peu plus "
-                        "souvent qu'une pièce. Le trait horizontal donne "
-                        "l'incertitude d'estimation — de combien la "
-                        "probabilité bougerait si l'historique avait été un "
-                        "autre tirage de périodes."
-                    )
-                else:
-                    st.warning(
-                        "**Calibrage indisponible : ces nombres sont des "
-                        "rangs, pas des probabilités.** Le premier vaut 100 % "
-                        "parce qu'il est premier, pas parce qu'il est sûr."
-                    )
-                # Jumeau tabulaire : une infobulle ne doit jamais être le seul
-                # accès à une valeur.
-                st.dataframe(
-                    # Une probabilité s'écarte de 0,5 dans un sens ou dans
-                    # l'autre : c'est un encodage divergent centré sur le
-                    # hasard, et le plafond à 0,05 correspond à l'écart au-delà
-                    # duquel le modèle prétend savoir quelque chose.
-                    probable.style.map(
-                        lambda v: _fond_divergent(v - 0.5, plafond=0.05),
-                        subset=["probabilite"]),
-                    width="stretch", hide_index=True,
-                    column_config={
-                        "probabilite": st.column_config.NumberColumn(
-                            "Probabilité" if calibree else "Rang",
-                            format="percent"),
-                        "incertitude": st.column_config.NumberColumn(
-                            "± incertitude", format="percent",
-                            help="Deux écarts-types entre les membres du sac "
-                                 "de régressions. Incertitude d'ESTIMATION, "
-                                 "pas incertitude du marché — laquelle est "
-                                 "infiniment plus grande."),
-                        "rang_combine": st.column_config.NumberColumn(
-                            "Rang combiné", format="percent"),
-                        "rang_modele": st.column_config.NumberColumn(
-                            "Rang régression", format="percent"),
-                        "rang_fiabilite": st.column_config.NumberColumn(
-                            "Rang poids appris", format="percent"),
-                        "rang_composite": st.column_config.NumberColumn(
-                            "Rang composite", format="percent"),
-                    })
-                _telecharger(probable, "prediction.csv", "dl_prediction")
-
-        st.warning("**Ce que ces chiffres ne disent pas.** "
-                   + " ; ".join(validation["avertissements"]) + ".")
-
-        st.subheader("Rendement du dividende")
-        st.caption("Télécoms et services publics : retour à la moyenne du "
-                   "rendement, sans apprentissage. Cinq valeurs ne font pas un "
-                   "échantillon d'apprentissage.")
-        cibles = tuple(referentiel_filtre[
-            referentiel_filtre["secteur"].isin(
-                ["Télécommunications", "Services Publics"])]["ticker"])
-        st.code(dividende.expliquer(
-            signal_dividende(cours_filtre, dividendes, ARCHIVE, UNIVERS,
-                             cibles)), language=None)
-
-        _glossaire("ic", "ir", "calibrage", "surperformer", "dispersion",
-                   "hors_echantillon", "disjointe", "regression", "purge",
-                   "significatif", "choc_volume", "retournement", "frais",
-                   "avantage_haut", "neutralisation", "secteur", "choc_eclair",
-                   "ampleur_choc", "intensite_echange")
-
-
-# --- Backtest -------------------------------------------------------------
+# --- 🎓 Comprendre ----------------------------------------------------------
 if onglets[3].open:
     with onglets[3]:
-        st.caption(
-            "Ce qu'aurait donné le classement s'il avait été suivi dans le "
-            "passé — frais compris. Un bon résultat ici ne promet rien : il dit "
-            "seulement que la règle n'était pas absurde."
-        )
-        with st.expander("Réglages avancés"):
-            bt = st.columns(3)
-            positions = bt[0].slider("Positions en portefeuille", 3, 20, 10,
-                                     key="bt_positions",
-                                     persist_state="session")
-            frais = bt[1].number_input("Frais par passage (%)", 0.0, 5.0, 1.0,
-                                       0.1, key="bt_frais",
-                                       persist_state="session")
-            impact = bt[2].number_input("Impact de marché (%)", 0.0, 5.0, 0.5,
-                                        0.1, key="bt_impact",
-                                        persist_state="session")
+        _titre("🌍 La BRVM, c'est quoi ?")
+        _html(
+            '<div class="carte anime"><p style="font-size:1.05rem;line-height:1.7;'
+            f'color:{ENCRE};margin:0">La <b>Bourse Régionale des Valeurs '
+            'Mobilières</b> est la bourse commune à huit pays d\'Afrique de '
+            'l\'Ouest. Elle est installée à Abidjan. On y achète et on y vend '
+            'des <b>actions</b> : de petits morceaux de grandes entreprises '
+            'comme Sonatel, Orange CI ou la SGBCI.</p>'
+            '<div style="font-size:2rem;margin-top:.8rem;letter-spacing:.3rem">'
+            '🇧🇯 🇧🇫 🇨🇮 🇬🇼 🇲🇱 🇳🇪 🇸🇳 🇹🇬</div></div>')
 
-        resultat = calculer_backtest(cours_filtre, referentiel_filtre,
-                                     fondamentaux, dividendes,
-                                     ARCHIVE, UNIVERS, positions, frais, impact)
+        _titre("📌 Trois règles à connaître")
+        regles = [
+            ("🔔", "Un seul prix par jour",
+             "Les ordres d'achat et de vente sont regroupés : la bourse fixe "
+             "un prix de clôture par séance.", BLEU),
+            ("🚧", "±7,5 % maximum",
+             "Un prix ne peut ni monter ni baisser de plus de 7,5 % en une "
+             "séance.", VIOLET),
+            ("💸", "Des frais à chaque passage",
+             "Acheter puis revendre coûte environ 2,5 à 3,5 %, et passe "
+             "obligatoirement par un intermédiaire agréé (une SGI).", ORANGE),
+        ]
+        c = st.columns(3)
+        for i, (emo, titre, texte, teinte) in enumerate(regles):
+            c[i].markdown(
+                f'<div class="carte mot anime d{i + 1}" style="border-left-color:'
+                f'{teinte};background:linear-gradient(120deg,{_rgba(teinte, .12)},'
+                f'{SURFACE} 70%)"><div style="font-size:2rem">{emo}</div>'
+                f'<h4>{titre}</h4><p>{texte}</p></div>', unsafe_allow_html=True)
 
-        # LE MÊME CALCUL AVEC L'AUTRE SOURCE DE DIVIDENDES. Les deux ne
-        # s'accordent pas sur 43 exercices, parfois d'un facteur 2, et
-        # personne ne sait laquelle a raison — la chute du cours au
-        # détachement ne départage pas. Afficher un nombre seul là où il
-        # existe un intervalle mesuré affirme plus qu'on ne sait.
-        variante = None
-        if dividendes is not None and not dividendes.empty:
-            autre = variante_dividendes(dividendes, fondamentaux, ARCHIVE)
-            if autre is not None:
-                variante = calculer_backtest(
-                    cours_filtre, referentiel_filtre, fondamentaux, autre,
-                    ARCHIVE, UNIVERS, positions, frais, impact,
-                    source="variante")
+        _titre("🧠 Ce que onze ans de données nous apprennent")
+        _html(
+            '<div class="lecon anime" style="background:linear-gradient(120deg,'
+            f'{VIOLET},{BLEU})"><b>Personne ne sait prédire les prix.</b><br>'
+            'Nous avons testé des centaines de méthodes sur l\'historique '
+            'depuis 2015 : aucune ne choisit les actions mieux que le hasard '
+            'une fois les frais payés. Ce qui rapporte de façon régulière, ce '
+            'sont les <b>dividendes</b>. Et changer souvent d\'actions coûte '
+            'plus cher que ce que ça rapporte.</div>')
 
-        if resultat["etapes"].empty:
-            _attente(
-                "Backtest",
-                resultat["seances"], resultat["seances_requises"],
-                "Il faut un an de cotation avant la première décision, puis une "
-                "période à mesurer ensuite. Un backtest plus court ne mesurerait "
-                "que le hasard de sa fenêtre.",
-            )
-        else:
-            m = st.columns(5)
-            ecart_bt = resultat["rendement_total"] - resultat["reference_total"]
-            # L'INTERVALLE, PAS LE POINT. Le second chiffre n'est pas une
-            # marge d'erreur statistique : c'est le même calcul avec l'autre
-            # source de dividendes, et l'écart vaut douze points.
-            note = f"{pedagogie.pourcentage(resultat['rendement_annualise'])} par an"
-            if variante is not None:
-                bornes = sorted([variante["rendement_total"],
-                                 resultat["rendement_total"]])
-                note += (f" — de {pedagogie.pourcentage(bornes[0])} à "
-                         f"{pedagogie.pourcentage(bornes[1])} selon la source "
-                         "des dividendes")
-            # L'ÉCART EN TÊTE, LE NIVEAU ENSUITE. Le niveau ne dit rien : un
-            # marché qui monte de 12 % l'an rend n'importe quelle stratégie
-            # brillante. C'est l'écart à la référence qui dit s'il y a quelque
-            # chose, et il était relégué en troisième position derrière deux
-            # nombres flatteurs.
-            # L'ÉCART SE DIT PAR AN, PAS EN CUMULÉ. Soustraire deux rendements
-            # cumulés sur onze ans et demi donnait « −186,9 % », ce qui est
-            # exact et illisible : ça se lit comme perdre 186 % de sa mise,
-            # une impossibilité. Le rendu de l'app l'a montré ; l'arithmétique
-            # seule ne l'aurait pas dit.
-            ecart_an = (resultat["rendement_annualise"]
-                        - resultat["reference_annualisee"])
-            _tuile(m[0], "Écart au marché",
-                   pedagogie.pourcentage(ecart_an) + " par an",
-                   sens=1 if ecart_an > 0 else -1,
-                   note="c'est le seul chiffre qui dise si la règle apporte "
-                        "quelque chose — "
-                        f"{pedagogie.pourcentage(ecart_bt)} en cumulé")
-            _tuile(m[1], "Stratégie",
-                   pedagogie.pourcentage(resultat["rendement_total"]),
-                   sens=1 if resultat["rendement_total"] > 0 else -1,
-                   note=note)
-            _tuile(m[2], "Référence équipondérée",
-                   pedagogie.pourcentage(resultat["reference_total"]),
-                   sens=1 if resultat["reference_total"] > 0 else -1,
-                   note=f"{pedagogie.pourcentage(resultat['reference_annualisee'])} "
-                        "par an — c'est elle qu'il faut battre")
-            _tuile(m[3], "Perte maximale",
-                   pedagogie.pourcentage(resultat["perte_max"], signe=False),
-                   note="plus forte baisse depuis un sommet", teinte=BAISSE)
-            _tuile(m[4], "Coût cumulé",
-                   pedagogie.pourcentage(resultat["cout_cumule"], signe=False),
-                   sens=-1,
-                   note=f"{resultat['rotation_moyenne']:.0%} de rotation moyenne")
+        _titre("📖 Le petit lexique")
+        lexique = [
+            ("Action", "Un petit morceau d'une entreprise. En posséder, c'est "
+             "en être un peu propriétaire.", BLEU),
+            ("Séance", "Une journée de bourse — environ 250 par an, ni "
+             "week-ends ni jours fériés.", CYAN),
+            ("Prix de clôture", "Le prix de l'action à la fin de la séance.",
+             VIOLET),
+            ("Dividende", "La part du bénéfice que la société reverse chaque "
+             "année à ses actionnaires.", HAUSSE),
+            ("Rendement", "Le dividende divisé par le prix de l'action. 8 % "
+             "veut dire 8 000 FCFA par an pour 100 000 investis.", AMBRE),
+            ("Détachement", "Le jour où le dividende est versé. Le prix baisse "
+             "d'autant ce jour-là : ce n'est pas une perte.", ORANGE),
+            ("SGI", "Société de Gestion et d'Intermédiation : l'intermédiaire "
+             "par qui il faut passer pour acheter ou vendre.", ROSE),
+            ("Liquidité", "La facilité à acheter ou revendre. Certaines "
+             "actions s'échangent très peu : on peut avoir du mal à en "
+             "sortir.", "#14b8a6"),
+        ]
+        for debut in range(0, len(lexique), 4):
+            c = st.columns(4)
+            for i, (mot, definition, teinte) in enumerate(lexique[debut:debut + 4]):
+                c[i].markdown(
+                    f'<div class="carte mot anime d{i + 1}" '
+                    f'style="border-left-color:{teinte};margin-bottom:1rem">'
+                    f'<h4 style="color:{teinte} !important">{mot}</h4>'
+                    f'<p>{definition}</p></div>', unsafe_allow_html=True)
 
-            # Le verdict en toutes lettres : quatre tuiles ne disent pas d'
-            # elles-mêmes laquelle des deux courbes gagne, et c'est la seule
-            # question que pose cet onglet.
-            etapes = resultat["etapes"]
-            ecart = resultat["rendement_total"] - resultat["reference_total"]
-
-            # Le dividende n'est pas un détail sur ce marché : il vaut deux à
-            # trois fois le rendement du cours. Dire ce qu'il apporte, et sur
-            # quelle part de la période il est connu, doit précéder le reste.
-            couverture = resultat.get("couverture_dividende")
-            if couverture and couverture["part"] > 0:
-                st.info(
-                    # « des séances » était faux depuis que la couverture se
-                    # compte par couple : en 2015, trois sociétés sur
-                    # trente-cinq ont un dividende retenu, et annoncer une
-                    # part « des séances » laissait croire que toute la cote
-                    # était couverte cette année-là.
-                    "**Dividende compté** sur "
-                    f"{pedagogie.pourcentage(couverture['part'], signe=False)} "
-                    "des couples valeur × séance (exercices "
-                    f"{', '.join(couverture['exercices'])}). "
-                    f"Il apporte {pedagogie.pourcentage(resultat['apport_dividende'])} "
-                    "au total : sans lui, la stratégie rendrait "
-                    f"{pedagogie.pourcentage(resultat['rendement_prix_annualise'])} "
-                    "l'an au lieu de "
-                    + pedagogie.pourcentage(resultat["rendement_annualise"])
-                    + ". "
-                    "Faute de date de détachement publiée, il est réparti sur "
-                    "les séances de son exercice plutôt que crédité le jour "
-                    "même — une correction de niveau, pas de profil."
-                )
-            st.markdown(
-                f"Sur {resultat['rebalancements']} rééquilibrages entre le "
-                f"{pedagogie.jour(etapes['date_entree'].iloc[0])} et le "
-                f"{pedagogie.jour(etapes['date_sortie'].iloc[-1])}, la stratégie "
-                f"rapporte {pedagogie.pourcentage(resultat['rendement_total'])} "
-                f"contre {pedagogie.pourcentage(resultat['reference_total'])} "
-                "pour la référence — "
-                + ("**elle la bat** de " if ecart > 0 else "**elle perd** de ")
-                + f"{pedagogie.pourcentage(abs(ecart), signe=False)}. Les frais "
-                + "ont coûté "
-                + pedagogie.pourcentage(resultat["cout_cumule"], signe=False)
-                + " en cumul."
-            )
-
-            courbes = resultat["etapes"].melt(
-                id_vars="date_sortie", value_vars=["valeur", "valeur_reference"],
-                var_name="serie", value_name="part",
-            ).replace({"valeur": "Stratégie",
-                       "valeur_reference": "Référence équipondérée"})
-
-            couleurs = alt.Color(
-                "serie:N", title=None,
-                scale=alt.Scale(domain=["Stratégie", "Référence équipondérée"],
-                                range=[SERIE_1, SERIE_2]),
-                legend=alt.Legend(orient="bottom", direction="horizontal"),
-            )
-            base = alt.Chart(courbes).encode(
-                x=alt.X("date_sortie:T", title=None,
-                        axis=alt.Axis(format="%d/%m/%y", tickCount=8)),
-                y=alt.Y("part:Q", title="valeur d'une part",
-                        scale=alt.Scale(zero=False)),
-                color=couleurs,
-            )
-            lignes = base.mark_line(strokeWidth=2).encode(
-                tooltip=[
-                    alt.Tooltip("date_sortie:T", title="Date", format="%d/%m/%Y"),
-                    alt.Tooltip("serie:N", title="Série"),
-                    alt.Tooltip("part:Q", title="Valeur", format=".3f"),
-                ],
-            )
-            derniers = courbes.loc[courbes.groupby("serie")["date_sortie"].idxmax()]
-            # LE POINT PORTE LA COULEUR, LE TEXTE PORTE L'ENCRE. Colorer le texte
-            # confierait l'identité à un canal qu'il n'assume pas : une teinte
-            # claire est illisible en texte sur le fond. L'anneau de 2 px à la
-            # couleur du fond détache le point de la courbe.
-            points = (alt.Chart(derniers)
-                      .mark_point(size=90, filled=True, stroke=SURFACE, strokeWidth=2)
-                      .encode(x="date_sortie:T", y="part:Q", color=couleurs))
-            etiquettes = (alt.Chart(derniers)
-                          .mark_text(align="left", dx=12, fontSize=12,
-                                     color=ENCRE_DOUCE)
-                          .encode(x="date_sortie:T", y="part:Q", text="serie:N"))
-
-            _panneau("Valeur d'une part",
-                     "stratégie contre univers éligible équipondéré, "
-                     "frais et dividende compris").altair_chart(
-                (lignes + points + etiquettes).properties(
-                    height=360,
-                    padding={"right": 150, "left": 5, "top": 5, "bottom": 5}),
-                width="stretch",
-            )
-            st.caption("La référence est l'univers éligible équipondéré : c'est "
-                       "elle qu'il faut battre, pas zéro.")
-            st.dataframe(
-                etapes.style
-                .map(lambda v: _fond_divergent(v, plafond=0.15),
-                     subset=["rendement"])
-                .map(lambda v: _fond_sequentiel(v, float(etapes["cout"].max() or 1)),
-                     subset=["cout"]),
-                width="stretch", hide_index=True,
-                column_config={
-                    "date_decision": st.column_config.TextColumn(
-                        "Décidé le",
-                        help="Sur la clôture de cette séance, et rien après."),
-                    "date_entree": st.column_config.TextColumn(
-                        "Acheté le",
-                        help="Une séance plus tard : décider et exécuter au même "
-                             "cours reviendrait à passer un ordre à un prix déjà "
-                             "connu."),
-                    "date_sortie": st.column_config.TextColumn("Revendu le"),
-                    "positions": st.column_config.TextColumn("Lignes détenues"),
-                    "rendement": st.column_config.NumberColumn(
-                        "Cours", format="percent"),
-                    "dividende": st.column_config.NumberColumn(
-                        "Dividende", format="percent",
-                        help="Accru pendant la détention."),
-                    "rotation": st.column_config.NumberColumn(
-                        "Rotation", format="percent",
-                        help="Part du portefeuille remplacée — elle se paie deux "
-                             "fois, à la vente et au rachat."),
-                    "cout": st.column_config.NumberColumn("Coût", format="percent"),
-                    "valeur": st.column_config.NumberColumn(
-                        "Part stratégie", format="%.3f"),
-                    "valeur_reference": st.column_config.NumberColumn(
-                        "Part référence", format="%.3f"),
-                },
-            )
-            _telecharger(resultat["etapes"], "backtest.csv", "dl_backtest")
-
-        st.warning("**Trois biais survivent et ne sont pas corrigeables ici :** "
-                   + " ; ".join(resultat["avertissements"]) + ".")
-        # LE SEUIL, ET IL RÉPOND À LA QUESTION QUE LES CURSEURS POSENT SANS
-        # LE DIRE. On peut baisser les frais à la main et regarder l'écart
-        # changer de signe, mais personne ne le fait : il faut une dizaine
-        # d'essais pour trouver le point de bascule. Le calculer une fois et
-        # l'afficher transforme « ça ne survit pas aux frais » — vrai et
-        # inutilisable — en un nombre qui se compare au devis d'une SGI.
-        st.divider()
-        st.subheader("À partir de quels frais ce classement cesse-t-il de payer ?")
-        signal = st.selectbox(
-            "Signal rejoué", ["composite", *features.TOUS_TRAITS],
-            key="bt_signal", persist_state="session",
-            help="Le composite est le classement de l'onglet Classement. Les "
-                 "autres sont les traits pris un par un — le choc de volume "
-                 "est le seul dont le pouvoir prédictif tienne sur onze ans.")
-        seuil = calculer_seuil_frais(cours_filtre, referentiel_filtre,
-                                     fondamentaux, dividendes,
-                                     ARCHIVE, UNIVERS, positions, signal)
-        if seuil["niveaux"].empty:
-            st.info("Pas encore assez de séances pour un seul rééquilibrage.")
-        else:
-            reel = seuil["reel"] or 0.0
-            tuiles = st.columns(3)
-            _tuile(tuiles[0], "Écart sans frais",
-                   pedagogie.pourcentage(seuil["ecart_sans_frais"]),
-                   sens=1 if seuil["ecart_sans_frais"] > 0 else -1,
-                   note="par an, contre l'univers équipondéré")
-            if seuil["seuil"] == seuil["seuil"]:
-                _tuile(tuiles[1], "Seuil de rentabilité",
-                       f"{seuil['seuil']:.2%}",
-                       note="frais par sens au-delà desquels la détention "
-                            "simple fait mieux")
-                _tuile(tuiles[2], "Frais réels", f"{reel:.2%}",
-                       sens=-1 if reel > seuil["seuil"] else 1,
-                       note=(f"{reel / seuil['seuil']:.1f} fois le seuil"
-                             if seuil["seuil"] > 0 else "par sens"))
-            else:
-                _tuile(tuiles[1], "Seuil de rentabilité", "aucun",
-                       note="l'écart ne change pas de signe sur la plage testée")
-                _tuile(tuiles[2], "Frais réels", f"{reel:.2%}", note="par sens")
-
-            if seuil["ecart_sans_frais"] <= 0:
-                st.error(
-                    "**Ce signal perd contre l'univers équipondéré même à "
-                    "frais nuls.** Ce n'est donc pas le courtier qui le "
-                    "condamne, c'est le signal : aucun seuil de frais ne le "
-                    "sauverait."
-                )
-            elif seuil["seuil"] == seuil["seuil"] and reel > seuil["seuil"]:
-                st.warning(
-                    f"**Le signal gagne avant frais et perd après.** Il "
-                    f"faudrait payer {seuil['seuil']:.2%} par sens ; le marché "
-                    f"en coûte {reel:.2%}, soit "
-                    f"{reel / seuil['seuil']:.1f} fois plus. Il ne manque pas "
-                    "un réglage, il manque un courtier — et réduire la "
-                    "rotation ne comble pas l'écart : aucun réglage de zone "
-                    "tampon n'est positif hors échantillon."
-                )
-
-            barres = seuil["niveaux"].copy()
-            _panneau("Écart contre la référence, selon les frais",
-                     "le trait vertical marque les frais réels").altair_chart(
-                alt.layer(
-                    alt.Chart(barres).mark_bar(cornerRadiusEnd=3, height=18).encode(
-                        x=alt.X("ecart:Q", title="écart annualisé",
-                                axis=alt.Axis(format="+.1%")),
-                        y=alt.Y("frais_par_sens:O", title="frais par sens",
-                                axis=alt.Axis(format=".2%"), sort="ascending"),
-                        color=alt.condition(alt.datum.ecart > 0,
-                                            alt.value(HAUSSE), alt.value(BAISSE)),
-                        tooltip=[
-                            alt.Tooltip("frais_par_sens:Q", title="Frais par sens",
-                                        format=".2%"),
-                            alt.Tooltip("aller_retour:Q", title="Aller-retour",
-                                        format=".1%"),
-                            alt.Tooltip("ecart:Q", title="Écart", format="+.2%"),
-                            alt.Tooltip("rotation_moyenne:Q", title="Rotation",
-                                        format=".0%"),
-                        ],
-                    ),
-                    alt.Chart(pd.DataFrame({"x": [0.0]})).mark_rule(
-                        color=ENCRE, strokeWidth=1).encode(x="x:Q"),
-                ).properties(height=max(200, 26 * len(barres))),
-                width="stretch")
-            st.dataframe(
-                barres.style.map(lambda v: _fond_divergent(v, plafond=0.05),
-                                 subset=["ecart"]),
-                width="stretch", hide_index=True,
-                column_config={
-                    "frais_par_sens": st.column_config.NumberColumn(
-                        "Frais par sens", format="percent"),
-                    "aller_retour": st.column_config.NumberColumn(
-                        "Aller-retour", format="percent"),
-                    "rendement_annualise": st.column_config.NumberColumn(
-                        "Stratégie", format="percent"),
-                    "reference_annualisee": st.column_config.NumberColumn(
-                        "Référence", format="percent"),
-                    "ecart": st.column_config.NumberColumn(
-                        "Écart", format="percent"),
-                    "rotation_moyenne": st.column_config.NumberColumn(
-                        "Rotation", format="percent"),
-                })
-            _telecharger(barres, "seuil_frais.csv", "dl_seuil")
-
-        _glossaire("backtest", "reference", "seuil_frais", "tampon",
-                   "perte_max", "rotation", "frais",
-                   "survivant")
-
-
-# --- Données --------------------------------------------------------------
-if onglets[4].open:
-    with onglets[4]:
-        # CET ONGLET N'AVAIT NI INTRODUCTION NI DÉPLIANT, et il est celui qui
-        # emploie le plus de mots de métier — séance, archive, référentiel —
-        # sans qu'aucun soit défini nulle part.
-        st.caption(
-            "D'où viennent les chiffres de tout le reste de l'application, et "
-            "jusqu'où ils vont. Un tableau de bord qui ne montre pas sa "
-            "matière première demande qu'on lui fasse confiance ; celui-ci "
-            "préfère la montrer."
-        )
-        etat = st.columns(3)
-        _tuile(etat[0], "Séances en archive", f"{seances}", teinte=SERIE_1,
-               note=f"{cours['date'].min()} → {cours['date'].max()}")
-        _tuile(etat[1], "Dividendes",
-               f"{len(dividendes)} + {len(fondamentaux)}", teinte=SERIE_2,
-               note="détachements datés, puis mesures par exercice")
-        _tuile(etat[2], "Sociétés au référentiel", f"{len(referentiel)}",
-               teinte=SERIE_1,
-               note=f"{int(referentiel['secteur'].notna().sum())} avec secteur")
-
-        # Visible sans avoir à ouvrir les journaux de l'hébergeur : un onglet
-        # bridé s'explique ici plutôt que de laisser croire à un bug.
-        st.caption(
-            "Régression logistique : "
-            + ("**disponible** (scikit-learn installé). C'est une des trois "
-               "sources de la prédiction ; les deux autres — poids appris "
-               "par trait, composite de la configuration — ne dépendent "
-               "d'aucune bibliothèque d'apprentissage."
-               if prediction.APPRENTISSAGE_DISPONIBLE else
-               "**indisponible** — scikit-learn absent de l'environnement. "
-               "L'onglet Prédiction continue de fonctionner avec les deux "
-               "autres sources, et le dit ; seul le calibrage des "
-               "probabilités en pourcentage est perdu.")
-        )
-
-        if referentiel_filtre["secteur"].notna().any():
-            comptes = (referentiel_filtre.groupby("secteur").size()
-                       .reset_index(name="sociétés"))
-            _panneau("Répartition sectorielle",
-                     f"{len(referentiel_filtre)} sociétés").altair_chart(
-                alt.Chart(comptes)
-                .mark_bar(cornerRadiusEnd=4, height=20, color=SERIE_1)
-                .encode(
-                    # tickMinStep=1 : un décompte de sociétés n'a pas de
-                    # demi-unité, et un axe qui en affiche invente une précision.
-                    x=alt.X("sociétés:Q", title="sociétés",
-                            axis=alt.Axis(tickMinStep=1, format="d")),
-                    # labelLimit relevé : par défaut Vega tronquait
-                    # « Consommation de Base » et « Consommation Discrétionnaire »
-                    # au même « Consommation d… ».
-                    y=alt.Y("secteur:N", sort="-x", title=None,
-                            axis=alt.Axis(labelLimit=220)),
-                    tooltip=[alt.Tooltip("secteur:N", title="Secteur"),
-                             alt.Tooltip("sociétés:Q", title="Sociétés")],
-                )
-                .properties(height=260),
-                width="stretch",
-            )
-
-        st.subheader("Couverture de l'archive")
-        par_date = cours.groupby("date").size().reset_index(name="lignes")
-        st.dataframe(par_date.tail(30), width="stretch", hide_index=True)
-
-        st.caption(
-            "Source : brvm.org, ingéré par l'action `ingestion.yml` et versionné "
-            "dans `data/cours.csv`. L'app ne lit que ces fichiers — elle n'écrit "
-            "rien et ne conserve aucun état. Dividendes, fondamentaux et séries "
-            "de commodités se chargent par « brvm importer-* »."
-        )
-
-        _glossaire("seance", "archive", "referentiel", "dividende",
-                   "detachement", "survivant", "fixing")
+        st.warning("**Ceci n'est pas un conseil en investissement.** Cette "
+                   "application décrit ce qui s'est passé ; elle ne dit pas ce "
+                   "qui va se passer. Les données viennent de brvm.org et sont "
+                   "archivées chaque soir de séance.")
