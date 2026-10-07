@@ -21,17 +21,41 @@ Rien à installer, tout se passe dans le navigateur.
 | Onglet | À quoi il sert |
 |---|---|
 | 🏠 **Aujourd'hui** | La « météo » du marché : combien d'actions montent, combien baissent, les plus fortes hausses et baisses, les secteurs. |
-| 🔎 **Une action** | La fiche d'une société : son prix, son évolution, ce que seraient devenus 100 000 FCFA, ses dividendes. |
-| 💰 **Dividendes** | Les sociétés qui reversent le plus à leurs actionnaires, et un calculateur : « combien rapporterait mon épargne ? » |
-| 🎓 **Comprendre** | La BRVM en quelques cartes : trois règles à connaître et un petit lexique. |
+| 🔎 **Une action** | Tout savoir avant d'acheter ou de vendre : prix et évolution, une **fiche en six points** (facile à revendre ? prix agité ? pire chute ? dividendes ? frais ?), un **simulateur d'achat** (frais compris, prix pour ne rien perdre) et la prévision du modèle. |
+| 🔮 **Prédictions** | La « boule de cristal honnête » : la météo de la semaine pour chaque action, combien de fois le modèle a eu raison par le passé, et pourquoi les frais mangent son avance. |
+| 💰 **Dividendes** | Les sociétés qui reversent le plus, les derniers versements, et un calculateur : « combien rapporterait mon épargne ? » |
+| 🎓 **Comprendre** | Acheter sa première action en 6 étapes, trois règles à connaître, un glossaire de 24 mots avec recherche, et la signification des couleurs et symboles. |
+
+Chaque onglet se termine par une **🗺️ Légende** qui explique ses couleurs,
+ses icônes et ses chiffres.
+
+## Comment lire la prédiction
+
+Le modèle ne devine pas le prix de demain. Il estime les chances qu'une
+action fasse **mieux que la moitié du marché** pendant la semaine qui vient.
+
+- **Une pièce de monnaie ferait 50 %.** Le modèle donne entre 42 % et 52 %
+  environ : un léger penchant, jamais une certitude.
+- **Il a fait mieux qu'une pièce 9 années sur 10** quand on l'a testé sur
+  des années qu'il n'avait jamais vues — avec environ 52 bonnes réponses
+  sur 100.
+- **Mais les frais l'emportent.** Ses favorites prennent environ 0,3 %
+  d'avance par semaine ; un achat suivi d'une revente coûte environ 3 %.
+  Suivre ses conseils chaque semaine aurait fait **gagner 10 % par an de
+  plus que le marché sans frais, et perdre 36 % par an avec des frais
+  réalistes.**
+
+Conclusion : c'est un indice de plus pour départager deux actions, pas un
+signal d'achat.
 
 ## Les trois choses à retenir
 
-1. **Personne ne sait prédire les prix.** Des centaines de méthodes ont été
-   testées sur onze ans d'historique : aucune ne choisit les actions mieux
-   que le hasard une fois les frais payés.
-2. **Ce qui rapporte régulièrement, ce sont les dividendes** : 7 à 10 % par
-   an en moyenne ces dernières années, alors que les prix font le yo-yo.
+1. **Personne ne sait prédire les prix avec certitude.** Le meilleur modèle
+   testé fait à peine mieux qu'une pièce de monnaie, pas assez pour payer
+   les frais.
+2. **Ce qui rapporte régulièrement, ce sont les dividendes** : en général
+   7 à 10 % du prix par an ces dernières années, alors que les prix font
+   le yo-yo.
 3. **Acheter puis revendre coûte cher** (2,5 à 3,5 % de frais). Changer
    souvent d'actions coûte plus que ce que ça rapporte.
 
@@ -41,9 +65,16 @@ Rien à installer, tout se passe dans le navigateur.
 |---|---|
 | **Action** | Un petit morceau d'une entreprise. |
 | **Séance** | Une journée de bourse (environ 250 par an). |
+| **Prix de clôture** | Le prix en fin de séance : c'est la référence. |
 | **Dividende** | La part du bénéfice que la société reverse chaque année à ses actionnaires. |
 | **Rendement** | Le dividende divisé par le prix. 8 % = 8 000 FCFA par an pour 100 000 investis. |
+| **Détachement** | Le jour où le dividende est versé ; il faut détenir l'action avant. |
 | **SGI** | L'intermédiaire agréé par qui il faut passer pour acheter ou vendre. |
+| **Ordre à cours limité** | Un ordre où vous fixez votre prix maximum (achat) ou minimum (vente). |
+| **Liquidité** | La facilité à revendre : certaines actions s'échangent très peu. |
+| **Limite de ±7,5 %** | Un prix ne peut pas varier de plus de 7,5 % en une séance. |
+
+Le glossaire complet (24 mots) est dans l'onglet 🎓 Comprendre.
 
 ---
 

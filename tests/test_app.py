@@ -15,7 +15,7 @@ Ce qui est testé ici est donc l'ÉTAT, pas le calcul :
 
 1. l'app se rend sans lever, ce qui n'est pas acquis — un `st.tabs` mal
    employé lève au démarrage et emporte toute la page ;
-2. chacun des quatre onglets se rend ;
+2. chacun des cinq onglets se rend, et va au bout de son contenu ;
 3. la séance lue en direct TIENT à travers les relances ;
 4. l'onglet ouvert et la société affichée tiennent aussi, y compris quand
    la session est vidée et que seule l'URL subsiste.
@@ -31,6 +31,7 @@ ne dirait rien du code qu'il prétend vérifier.
 from __future__ import annotations
 
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -134,6 +135,7 @@ def test_l_app_se_rend_sans_lever(lanceur):
 
 @pytest.mark.parametrize("onglet, libelle", [
     ("action", "🔎 Une action"),
+    ("predictions", "🔮 Prédictions"),
     ("dividendes", "💰 Dividendes"),
     ("comprendre", "🎓 Comprendre"),
 ])
@@ -205,3 +207,57 @@ def test_un_symbole_inconnu_dans_l_URL_ne_fait_pas_tomber_l_app(lanceur):
     at.run()
     assert not at.exception, [str(e) for e in at.exception]
     assert at.session_state["valeur"] != "CE_SYMBOLE_N_EXISTE_PAS"
+
+
+def _textes(at: AppTest) -> str:
+    return " ".join(bloc.value for bloc in at.markdown)
+
+
+def test_la_fiche_d_une_action_va_au_bout(lanceur):
+    """La fiche, le simulateur et la prévision sont rendus l'un après
+    l'autre : une erreur dans le premier emporterait les suivants sans
+    que l'onglet entier lève forcément."""
+    at = _app(lanceur)
+    at.query_params["onglet"] = "action"
+    at.query_params["valeur"] = "SNTS"
+    at.run()
+    assert not at.exception, [str(e) for e in at.exception]
+    textes = _textes(at)
+    for attendu in ("Facile à revendre ?", "Pire chute (1 an)",
+                    "Prix pour ne rien perdre", "Et la semaine prochaine ?"):
+        assert attendu in textes, f"« {attendu} » absent de la fiche"
+    assert not re.search(r"\bnan\b", textes, re.IGNORECASE), \
+        "une valeur manquante s'affiche « nan »"
+
+
+def test_aucune_valeur_manquante_ne_s_affiche_nan_sur_l_accueil(lanceur):
+    at = _app(lanceur).run()
+    assert not re.search(r"\bnan\b", _textes(at), re.IGNORECASE)
+
+
+def test_l_onglet_predictions_montre_le_bilan_et_les_frais(lanceur):
+    """La prévision ne se montre jamais sans son bilan passé ni sans le
+    coût des frais : c'est ce qui la garde réaliste."""
+    at = _app(lanceur)
+    at.query_params["onglet"] = "predictions"
+    at.run()
+    assert not at.exception, [str(e) for e in at.exception]
+    textes = _textes(at)
+    for attendu in ("Bonnes réponses", "pile ou face", "Le piège des frais",
+                    "Plutôt favorable", "Plutôt défavorable"):
+        assert attendu in textes, f"« {attendu} » absent de l'onglet Prédictions"
+    colonnes = [set(d.value.columns) for d in at.dataframe]
+    assert any({"ticker", "probabilite", "incertitude"} <= c for c in colonnes), \
+        "le détail des probabilités, avec leur incertitude, est absent"
+
+
+def test_le_glossaire_se_filtre(lanceur):
+    """Chercher un mot ne garde que les définitions qui le contiennent."""
+    at = _app(lanceur)
+    at.query_params["onglet"] = "comprendre"
+    at.run()
+    at.text_input(key="glossaire").set_value("dividende").run()
+    assert not at.exception, [str(e) for e in at.exception]
+    textes = _textes(at)
+    assert "Dividende</h4>" in textes
+    assert "Volatilité</h4>" not in textes

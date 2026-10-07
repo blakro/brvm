@@ -2,8 +2,10 @@
 
 > 📌 Documentation technique détaillée. Pour une présentation simple du
 > projet, voir le [README](../README.md). La section « L'application »
-> ci-dessous décrit l'ancienne interface à cinq onglets ; l'interface
-> actuelle, simplifiée, en a quatre.
+> ci-dessous décrit l'ancienne interface (Marché, Valeur, Classement,
+> Backtest, Données) ; l'interface actuelle, pensée pour les débutants, a
+> pour onglets Aujourd'hui, Une action, Prédictions, Dividendes et
+> Comprendre.
 
 Les cours de la **Bourse Régionale des Valeurs Mobilières** — la bourse
 commune à huit pays d'Afrique de l'Ouest — collectés chaque jour, archivés
