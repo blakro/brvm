@@ -221,7 +221,7 @@ l'app tient en quinze secondes.
 
 LA MOYENNE MOBILE, ELLE, VA PLUS LOIN — ET TOMBE AU CONTRÔLE QUE PASSE LE
 MODÈLE LIVRÉ. Tout ce qui suit est jugé sur le COURS SEUL, comme la section
-« Le modèle de prix » du README : ni frais, ni dividende, ni rejeu.
+« Le modèle de prix » de docs/technique.md : ni frais, ni dividende, ni rejeu.
 
 1. LE TEST MULTIPLE. Ajoutée à la grille de `recherche.py` (390 cases),
    « cours rapporté à sa moyenne de 20 séances » en devient la case la
@@ -255,7 +255,7 @@ MODÈLE LIVRÉ. Tout ce qui suit est jugé sur le COURS SEUL, comme la section
    partout, mais décroît avec le cours (+0,037, +0,028, +0,015) : il est le
    plus fort là où un pas de cotation pèse le plus.
 
-3. L'ENTRÉE DÉCALÉE — le contrôle dont le README dit qu'« un effet de
+3. L'ENTRÉE DÉCALÉE — le contrôle dont docs/technique.md dit qu'« un effet de
    rebond de fourchette se serait effondré dès la première » séance. Même
    méthode que son tableau : pour chaque délai k, le modèle est RÉENTRAÎNÉ
    sur le rendement de t+k à t+k+5.

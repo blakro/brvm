@@ -1,18 +1,9 @@
-# brvm
+# brvm — documentation technique
 
-> 📌 Documentation technique détaillée. Pour une présentation simple du
-> projet, voir le [README](../README.md). La section « L'application »
-> ci-dessous décrit l'ancienne interface (Marché, Valeur, Classement,
-> Backtest, Données) ; l'interface actuelle, pensée pour les débutants, a
-> pour onglets Aujourd'hui, Une action, Prédictions, Dividendes et
-> Comprendre.
-
-Les cours de la **Bourse Régionale des Valeurs Mobilières** — la bourse
-commune à huit pays d'Afrique de l'Ouest — collectés chaque jour, archivés
-depuis 2015, et analysés.
-
-**➜ [Ouvrir l'application](https://brvm227.streamlit.app)** — rien à
-installer, ça marche dans le navigateur.
+Le fonctionnement détaillé du projet : ce que les données disent, la ligne
+de commande, la collecte et le stockage. Pour une présentation simple, voir
+le [README](../README.md) ; pour s'en servir, **[ouvrir
+l'application](https://brvm227.streamlit.app)**.
 
 > **Ce n'est pas un conseil en investissement.** Cet outil décrit ce qui
 > s'est passé. Il ne dit pas ce qui va se passer, et il est construit pour
@@ -22,8 +13,6 @@ installer, ça marche dans le navigateur.
 
 ## Sommaire
 
-- [C'est quoi, en deux minutes](#cest-quoi-en-deux-minutes)
-- [Le petit lexique](#le-petit-lexique)
 - [Ce que les données disent](#ce-que-les-données-disent)
 - [Ce qu'il y a dans le dépôt](#ce-quil-y-a-dans-le-dépôt)
 - [L'application](#lapplication)
@@ -33,70 +22,6 @@ installer, ça marche dans le navigateur.
 - [Les pièges de brvm.org](#les-pièges-de-brvmorg)
 - [Ce qui reste à faire](#ce-qui-reste-à-faire)
 - [Tests, configuration, licence](#tests-configuration-licence)
-
----
-
-## C'est quoi, en deux minutes
-
-La BRVM est la bourse de l'UEMOA : **47 sociétés cotées**, réparties sur
-huit pays (Bénin, Burkina Faso, Côte d'Ivoire, Guinée-Bissau, Mali, Niger,
-Sénégal, Togo). C'est un marché **étroit** : peu de sociétés, peu
-d'échanges certains jours, et des informations dispersées.
-
-Ce projet fait trois choses :
-
-1. **Il collecte.** Chaque soir, un robot lit la cote publiée sur
-   brvm.org et enregistre les cours du jour.
-2. **Il archive.** Tout est conservé dans des fichiers texte versionnés
-   dans ce dépôt Git, mis à jour chaque jour de séance — à ce jour
-   **112 913 lignes, 3 000 séances, du 2 janvier 2015 au 31 juillet
-   2026**, plus **309 versements de dividendes** sur 41 sociétés.
-3. **Il analyse.** Une application web affiche le marché, la fiche de
-   chaque valeur, un classement, et les résultats des tests statistiques.
-
-Et il en tire une conclusion, mesurée sur onze ans et demi de cotation :
-
-> **Aucune méthode de sélection basée sur les prix ne bat le hasard sur ce
-> marché.** Ce qui rapporte, ce sont les dividendes.
-
-Le reste de ce document explique comment on le sait.
-
----
-
-## Le petit lexique
-
-Cinq mots reviennent partout. Si vous les connaissez déjà, sautez cette
-section.
-
-| Mot | Ce que ça veut dire |
-|---|---|
-| **Séance** | Une journée de bourse. Il y en a environ 250 par an — ni week-ends, ni jours fériés. |
-| **Cours de clôture** | Le prix de l'action à la fin de la journée. |
-| **Dividende** | La part du bénéfice qu'une société verse à ses actionnaires, en général une fois par an. |
-| **Détachement** | Le jour où le dividende est versé. Le cours baisse mécaniquement du montant versé : ce n'est pas une perte, l'argent est passé de l'action à votre poche. |
-| **Backtest** | Rejouer une stratégie sur le passé pour voir ce qu'elle aurait donné. Utile pour éliminer les mauvaises idées, **jamais** pour prouver qu'une idée est bonne. |
-
-Deux mots de plus, qui apparaissent dans les résultats :
-
-- **IC** (*information coefficient*) — une note entre −1 et +1 qui mesure
-  si un classement prédit vraiment l'avenir. À 0, le classement ne vaut
-  pas mieux qu'un tirage au sort. Sur ce marché, tout ce qui est mesuré
-  reste très proche de 0.
-- **Liquidité** — la facilité à acheter ou revendre. Une action peu
-  liquide peut afficher un beau prix sans que personne ne puisse
-  réellement l'acheter à ce prix.
-- **Avantage du haut de liste** — ce qu'ont rapporté les dix premières
-  valeurs du classement, comparé au fait d'acheter tout le marché en parts
-  égales. Contrairement à l'IC, c'est un **pourcentage de rendement**,
-  donc il se compare directement aux frais du courtier. C'est le chiffre à
-  regarder avant de passer un ordre.
-- **Achetable** — une valeur dont il s'échange assez chaque séance pour
-  qu'un ordre passe vraiment. Deux lignes sur cinq de l'archive ne le sont
-  pas, et les compter double presque les résultats affichés — c'est pourquoi
-  les chiffres du haut de liste les écartent.
-- **Secteur** — la famille de métiers d'une société : banque, télécoms,
-  énergie. Il sert à deux choses ici : comparer ce qui est comparable, et
-  vérifier que les valeurs conseillées ne sont pas toutes les mêmes.
 
 ---
 
@@ -223,9 +148,9 @@ L'absence de preuve n'est pas une preuve d'absence.
 
 ### 4. Ce que l'apprentissage ajoute, et ce qu'il n'ajoute pas
 
-L'onglet Classement porte une section « modèle appris » qui, pour chaque
-valeur, estime sa probabilité de **surperformer le marché sur trois
-mois**. Mesurée sous un protocole unique — dix périodes de test
+Le modèle appris de `prediction.py` — celui de l'onglet 🔮 Prédictions —
+estime, pour chaque valeur, sa probabilité de **surperformer le marché**.
+Mesurée ici à trois mois, sous un protocole unique — dix périodes de test
 successives, entraînement toujours antérieur, étiquettes qui débordent
 purgées :
 
@@ -524,7 +449,7 @@ le classement, 1 million de FCFA par séance. La raison est brutale :
 **Deux lignes sur cinq de l'archive n'atteignent pas le seuil**, et l'avantage
 y paraît plus du double de ce qu'il est réellement. Un tableau de bord qui
 compte des valeurs qu'aucun ordre ne peut atteindre annonce un gain que
-personne ne touchera. L'onglet affiche les deux, côte à côte, et la porte de
+personne ne touchera. La validation rend les deux, côte à côte, et la porte de
 production se ferme sur le chiffre **achetable**.
 
 C'est aussi ce qui réconcilie la mesure avec le backtest, qui donnait moins
@@ -605,8 +530,8 @@ Deux conséquences, toutes deux dans le code :
 - `apprentissage.avantage_par_date` mesure l'écart des `positions`
   premières contre la moyenne de la séance, hors échantillon. C'est un
   **rendement**, donc le seul chiffre du projet qui se compare aux frais
-  sans passer par la relation de Grinold, et l'onglet l'affiche à côté de
-  l'IC.
+  sans passer par la relation de Grinold, et l'onglet 🔮 Prédictions
+  l'affiche (« avance de ses 10 favorites »).
 - **La porte de production a une seconde condition.** Un IC positif ne
   suffit plus : si le haut de liste a perdu hors échantillon, c'est le
   composite qui part en production. La règle est vérifiée par un test, et
@@ -668,7 +593,7 @@ stratégie cesse de battre la simple détention du même univers** :
 
 Deux lectures, opposées :
 
-- Le **composite** — le classement que l'application affiche — perd contre
+- Le **composite** — le classement de `brvm noter` — perd contre
   l'univers équipondéré **même à frais nuls**. Ce n'est pas le courtier qui
   le condamne, c'est le signal. Aucun seuil ne le sauverait.
 - Le **choc de volume** gagne réellement avant frais. Son seuil vaut 0,69 %
@@ -749,7 +674,7 @@ détachements **complet** et un cours qui les **reflète**. Le jour où
 section sera à refaire — et c'est le seul endroit du projet où il reste un
 gain probable à prendre.
 
-### 7. Ce que l'application vous dit de faire
+### 7. Que faire : la commande `conseiller`
 
 Tout ce qui précède mesure. Cette section-ci décide — parce qu'un classement
 ne répond pas à la question qu'on se pose vraiment : *dois-je vendre ce que
@@ -772,8 +697,8 @@ un relevé, et les voir ensemble dit s'il faut croire l'arithmétique.
 L'IC vient de la validation, la dispersion de l'archive, les frais de **votre
 SGI** — et c'est le seul paramètre qui vous appartient. Il varie fortement
 d'un intermédiaire et d'un pays de l'UEMOA à l'autre, donc la réponse n'est
-pas la même pour tout le monde. L'application vous demande vos frais plutôt
-que de supposer les siens.
+pas la même pour tout le monde. La commande vous demande vos frais
+(`--frais`, `--impact`) plutôt que de supposer les siens.
 
 **Le nombre le plus utile** est l'écart de score qu'un arbitrage doit
 franchir pour se payer : `2 × frais / (IC × dispersion)`. Sur 44 valeurs
@@ -798,9 +723,9 @@ cette place, l'inaction est la décision la plus souvent correcte.
 **Le défaut emploie la borne basse de l'intervalle de l'IC**, pas son
 estimation ponctuelle. Un arbitrage se décide contre un coût *certain* :
 parier sur +0,045 quand l'intervalle à 95 % contient zéro revient à engager
-une dépense sûre contre un gain non établi. Vous pouvez basculer sur
-l'estimation ponctuelle — l'application le propose — et elle vous
-recommandera alors des arbitrages que la preuve ne soutient pas.
+une dépense sûre contre un gain non établi. L'option `--ponctuel` bascule
+sur l'estimation ponctuelle — et la commande recommande alors des
+arbitrages que la preuve ne soutient pas.
 
 Deux actions ne dépendent pas de cette arithmétique :
 
@@ -812,59 +737,50 @@ Deux actions ne dépendent pas de cette arithmétique :
   de ne plus pouvoir en sortir.
 
 Et ce que ce n'est pas : une arithmétique d'arbitrage, pas un conseil
-d'investissement. L'application ne connaît ni votre fiscalité, ni votre
+d'investissement. La commande ne connaît ni votre fiscalité, ni votre
 horizon, ni votre tolérance au risque, ni la part que ces titres
 représentent chez vous.
 
 ### 8. Lisible par quelqu'un qui ne connaît rien
 
-Une contrainte, pas une finition : **chaque onglet et chaque terme de
-l'application doit se comprendre sans rien savoir de la bourse.** Un tableau
-de bord que personne ne peut lire ne protège personne — et celui-ci a
-justement pour but d'empêcher de confondre un classement avec un conseil.
+Une contrainte, pas une finition : **chaque écran de l'application doit se
+comprendre sans rien savoir de la bourse.** Un tableau de bord que personne
+ne peut lire ne protège personne.
 
-Trois règles, tenues par des tests :
-
-- **Chacun des cinq onglets porte son dépliant** (« Les mots de cet
-  onglet »), avec son propre vocabulaire et lui seul. Un glossaire relégué
-  dans une page à part n'est ouvert par personne.
-- **Aucune définition n'emploie le jargon qu'elle remplace.** La définition
-  est le bout de la chaîne : c'est là que le lecteur doit pouvoir s'arrêter.
-  Trois définitions violaient cette règle — celle de l'IR renvoyait à l'IC —
-  et rien ne le signalait.
-- **Aucune formule dans une définition.** Une formule est exacte et
-  illisible ; sa place est dans les docstrings des modules de calcul.
-
-Et une règle de rédaction : **les deux nombres qui décident viennent en
-premier, dans la même unité.** La section « que faire » affichait « écart de
-score requis : 3,06 », qui ne veut rien dire pour qui découvre l'app. Elle
-affiche maintenant *changer une ligne coûte 3,00 %* et *le meilleur
-changement rapporte −1,07 %* — la décision se lit à vue d'œil, et le
-vocabulaire vient après pour qui veut savoir d'où ça sort.
-
-Le glossaire compte 40 entrées. Chacune tient en une phrase, sans jargon et
-sans formule.
+- **Chaque onglet finit par sa légende** : ce que veulent dire ses
+  couleurs, ses icônes et ses chiffres.
+- **Un glossaire de 24 mots**, avec recherche, dans l'onglet 🎓 Comprendre,
+  à côté d'un guide « acheter sa première action en 6 étapes ».
+- **La couleur ne porte jamais seule une information** : vert ▲ et
+  rouge ▼, ✅ 🟡 ⚠️ dans la fiche d'une action, ☀️ ⛅ 🌧️ pour la météo.
+- **La prédiction ne se montre jamais sans son bilan ni sans les frais** :
+  comparée à une pièce de monnaie, avec le nombre d'années où elle a eu
+  raison, et le calcul qui montre que 3 % de frais effacent son avance.
 
 ### Ce que ça change pour vous
 
 Sur un marché où toute stratégie qui tourne plus de quelques fois par an
 est mangée par les frais, la conclusion raisonnable est **la détention
-longue et diversifiée**, pas la sélection active. L'application affiche
-un classement — mais elle affiche aussi, en permanence et avant tout le
-reste, que ce classement ne prédit rien.
+longue et diversifiée**, pas la sélection active. L'application en tire
+les conséquences : elle ne propose pas de classement à suivre, montre la
+prédiction avec son bilan et le coût des frais, et met les dividendes en
+avant.
 
 ---
 
 ## Ce qu'il y a dans le dépôt
 
 ```
+README.md                 la présentation pour tous
+docs/technique.md         ce document
 streamlit_app.py          l'application web (point d'entrée)
 config.exemple.toml       configuration commentée, à copier si besoin
 pyproject.toml            dépendances et métadonnées du paquet
+requirements.txt          dépendances lues par Streamlit Community Cloud
 
 data/                     L'ARCHIVE — c'est la base de données du projet
-  cours.csv                 112 913 séances-valeurs depuis 2015
-  referentiel.csv           les 47 sociétés : ticker, nom, secteur
+  cours.csv                 un cours par société et par séance, depuis 2015
+  referentiel.csv           les sociétés : ticker, nom, secteur
   dividendes.csv            309 détachements datés
   fondamentaux.csv          indicateurs par société
   exogenes.csv              séries externes (commodités), à charger à la main
@@ -884,13 +800,13 @@ src/brvm/
   dividende.py              détachements, et si le cours les reflète
   exogene.py                séries externes
   qualite.py                détection des anomalies d'archive
-  pedagogie.py              le glossaire et les mises en mots
+  pedagogie.py              montants, dates et pourcentages en français
   ingestion/
     brvm_org.py               la cote du jour
     sikafinance.py            l'historique
     dividendes.py             les calendriers de dividendes
 
-tests/                    330 tests, tous hors ligne
+tests/                    les tests, tous hors ligne
   donnees/                  captures réelles de pages web, servant de témoins
 
 .github/workflows/
@@ -912,57 +828,45 @@ se reconstruit à partir des CSV. Voir
 Elle tourne sur **Streamlit Community Cloud**, gratuitement, et se met à
 jour toute seule à chaque nouvelle donnée versée dans le dépôt.
 
-**Cinq onglets**, tous cadrés par un même rang de filtres placé au-dessus
-(secteurs, recherche) — vous n'avez jamais à vous demander quel réglage
-s'applique où :
+**Cinq onglets**, pensés pour qu'un débutant ait le maximum d'informations
+avant d'acheter ou de vendre :
 
 | Onglet | Ce qu'on y voit |
 |---|---|
-| **Marché** | L'état du jour : qui monte, qui baisse, quels volumes. |
-| **Valeur** | La fiche d'une société : son cours dans le temps, ses dividendes. |
-| **Classement** | Les valeurs ordonnées, ce que vaut cet ordre, et **quoi faire** : saisissez ce que vous détenez et vos frais, l'application dit acheter, conserver ou vendre. La section « modèle appris » y est incluse. |
-| **Backtest** | Ce qu'aurait donné le classement s'il avait été suivi. |
-| **Données** | La couverture de l'archive et le journal de collecte. |
+| 🏠 **Aujourd'hui** | La météo du marché, les plus fortes hausses et baisses, les secteurs, toutes les actions de la séance. |
+| 🔎 **Une action** | Le prix et son évolution ; une fiche en six points (revente, agitation, pire chute, position sur l'année, dividendes, frais) ; un simulateur d'achat ; les dividendes ; la prévision du modèle. |
+| 🔮 **Prédictions** | Le modèle de `prediction.py` : météo de la semaine, bilan hors échantillon contre une pièce de monnaie, et le piège des frais. |
+| 💰 **Dividendes** | Rendements médians par exercice, les plus généreuses, les derniers détachements, un calculateur d'épargne. |
+| 🎓 **Comprendre** | Guide pour débuter, règles du marché, glossaire avec recherche, couleurs et symboles. |
 
-Le résultat le mieux établi du projet — trente-trois effets sur 360 résistent, et
-il coûte plus de frais qu'il ne rapporte — s'affiche **avant** les
-onglets, pas au fond de l'un d'eux : la hiérarchie visuelle doit dire la
-force de la preuve.
+Les dividendes viennent de deux sources qui ne suivent pas la même
+convention : le dividende **net** de sikafinance (`fondamentaux.csv`), qui
+sert aux rendements et aux calculs, et le montant annoncé au détachement
+par brvm.org (`dividendes.csv`). L'app étiquette chacun et ne les mélange
+pas — voir `qualite.desaccords`.
 
-Chaque tableau s'exporte en CSV, et chaque graphique a son jumeau
-tabulaire. Une infobulle ne doit jamais être le seul accès à un chiffre.
+Les chiffres « +10,3 % / −36,1 % par an » du piège des frais sont ceux du
+tableau de `config.py` (rejeu du modèle à la semaine, prix seul) ; tout le
+reste de l'app est recalculé sur l'archive du jour.
 
 ### L'onglet ouvert reste ouvert
 
-Streamlit rejoue tout le script à chaque clic. Deux conséquences, toutes
-deux corrigées :
+Streamlit rejoue tout le script à chaque clic :
 
-- **L'onglet ne se perd plus.** Il est retenu d'une relance à l'autre, et
-  écrit dans l'URL — donc il survit aussi au rechargement de la page, et
-  `?onglet=Backtest` se partage tel quel. La société ouverte dans l'onglet
-  **Valeur** y est écrite de même, ce qui rend chaque fiche partageable
-  par son lien : `?onglet=Valeur&valeur=SNTS`. Les réglages avancés d'un
-  onglet survivent de leur côté à un aller-retour par un autre.
-- **Seul l'onglet visible se calcule.** Les quatre autres étaient
-  entièrement recalculés à chaque interaction : 176 secondes entre deux
-  rendus, pour un affichage qui n'en montre qu'un cinquième. Les résultats
-  sont en outre gardés en mémoire tant que l'archive ne change pas.
-
-Ouvrir l'app demande aujourd'hui **2,7 secondes**, et une interaction
-**deux à cinq dixièmes**. Seule la première ouverture du classement coûte
-une dizaine de secondes — c'est la validation glissante du modèle appris,
-annoncée par son message d'attente et gardée ensuite.
+- **L'onglet et la société ne se perdent pas.** Ils sont retenus d'une
+  relance à l'autre et écrits dans l'URL : `?onglet=predictions`, ou
+  `?onglet=action&valeur=SNTS` pour partager une fiche.
+- **Seul l'onglet visible se calcule**, et les calculs lourds sont gardés
+  en mémoire tant que l'archive ne change pas. La première prévision prend
+  une quinzaine de secondes (la validation glissante du modèle), annoncée
+  par un message d'attente ; les suivantes sont immédiates.
 
 ### Les couleurs
 
-Le mode sombre est une palette **choisie**, pas un inversement
-automatique : l'app lit le thème actif et sélectionne le jeu
-correspondant, chacun validé contre son propre fond.
-
-Hausse et baisse suivent une paire **bleu ↔ rouge**, pas le vert/rouge
-boursier habituel — la confusion vert-rouge est le déficit visuel le plus
-répandu. Et le signe reste toujours écrit dans les tableaux : la couleur
-ne porte jamais seule une information.
+Hausse en vert, baisse en rouge — mais **toujours avec une flèche ▲ ▼**,
+pour qu'un lecteur qui confond les deux couleurs lise quand même le sens.
+Le mode sombre a sa propre palette, et les animations se coupent quand le
+système demande « moins de mouvement ».
 
 ### Redéployer l'application
 
@@ -1223,7 +1127,7 @@ versement suivant — la bonne séance du jour refusée avec lui.
 La séance republiée mérite son nom : le 6 août 2026, rattrapé par
 rapatriement, est revenu avec les 47 cours et les 47 volumes du 7 — la
 même séance sous une autre date. Versée, elle a mis toutes les variations
-de l'onglet **Marché** à 0 %, et c'est un lecteur qui l'a vu. Le critère
+de l'app à 0 %, et c'est un lecteur qui l'a vu. Le critère
 vient de `sikafinance.seances_repetees`, mesuré sur ce marché : « deux
 échanges égaux au franc près n'existent pas, c'est la même transaction
 republiée ». Les volumes nuls, eux, se répètent normalement et ne
@@ -1413,7 +1317,7 @@ forme d'origine, et elle n'aurait rien pu montrer.
 pytest -q                     # ou : python tests/test_brvm_org.py
 ```
 
-**330 tests, tous hors ligne.** Un test qui dépend du réseau échoue pour
+**Tous les tests tournent hors ligne.** Un test qui dépend du réseau échoue pour
 des raisons étrangères au code qu'il vérifie.
 
 `test_brvm_org.py` travaille sur les captures réelles de `tests/donnees/`,

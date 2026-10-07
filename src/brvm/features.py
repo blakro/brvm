@@ -325,7 +325,7 @@ DEFAUTS_FENETRES = {
 
 # Traits de NOTATION : ceux que `scoring` combine en un classement, et dont
 # les pondérations vivent dans la configuration. La liste est inchangée —
-# y ajouter un trait changerait le classement de l'onglet Classement, ce
+# y ajouter un trait changerait le classement de `brvm noter`, ce
 # qui n'est pas ce qu'on cherche ici.
 TRAITS = ["momentum", "tendance", "volatilite", "liquidite"]
 

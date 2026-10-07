@@ -742,8 +742,8 @@ if onglets[0].open:
         _legende(
             "**Météo** ☀️ / ⛅ / 🌧️ : plus d'actions en hausse, autant des deux, "
             "ou plus d'actions en baisse.",
-            f"**Vert ▲** = le prix a monté depuis la séance précédente, "
-            f"**rouge ▼** = il a baissé, **gris ●** = il n'a pas bougé.",
+            "**Vert ▲** = le prix a monté depuis la séance précédente, "
+            "**rouge ▼** = il a baissé, **gris ●** = il n'a pas bougé.",
             "**Barre tricolore** : la part des actions qui montent, ne bougent "
             "pas, ou baissent.",
             "**Jauges des palmarès** : plus la barre est longue, plus la "
