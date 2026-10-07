@@ -1,16 +1,10 @@
-# Aucune base imposée : l'app suit le thème du navigateur et sélectionne la
-# palette correspondante (st.context.theme). Les deux jeux de couleurs ont
-# été validés séparément contre leur propre fond — ce qui est autre chose
-# qu'inverser les couleurs du mode clair.
-#
-# Seule la couleur d'accent de l'interface est fixée, par mode, pour que les
-# puces de filtre et les onglets s'accordent aux graphiques au lieu du rouge
-# par défaut de Streamlit — qui, ici, se lirait comme une baisse.
+# L'app suit le thème clair ou sombre du navigateur. La couleur d'accent
+# (curseurs, cases, sélection) est le violet du bandeau d'accueil.
 [theme.light]
-primaryColor = "#2a78d6"
+primaryColor = "#7c3aed"
 
 [theme.dark]
-primaryColor = "#3987e5"
+primaryColor = "#8b5cf6"
 
 [server]
 headless = true

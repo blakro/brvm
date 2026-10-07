@@ -507,7 +507,7 @@ jobs:
           if [ -z "${COURRIEL}" ]; then
             echo "::error::La variable de dépôt COURRIEL_VERSEMENT est vide."
             echo "Renseignez une adresse VÉRIFIÉE du compte, sans quoi la"
-            echo "signature ne sera pas reconnue. Voir README."
+            echo "signature ne sera pas reconnue. Voir docs/technique.md."
             exit 1
           fi
 
@@ -571,7 +571,7 @@ jobs:
             exit 0
           fi
           echo "Aucun versement automatique : reprise à la main depuis ce"
-          echo "journal. Voir README, « Verser une séance à la main »."
+          echo "journal. Voir docs/technique.md, « Verser une séance à la main »."
           for f in increment referentiel; do
             [ -s "$f.csv" ] || continue
             echo "--- $f sha256 $(sha256sum "$f.csv" | cut -c1-16) \
