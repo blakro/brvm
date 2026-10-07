@@ -5,17 +5,13 @@ pandas>=2.0
 numpy>=1.24
 requests>=2.28
 beautifulsoup4>=4.11
-# 1.61 et non 1.49 : c'est la version qui donne aux onglets un `key`, un
+# 1.61 au moins : c'est la version qui donne aux onglets un `key`, un
 # `on_change` et un `.open`. Sans eux, l'app ne peut ni retenir l'onglet
-# ouvert d'une relance à l'autre, ni sauter le calcul des quatre onglets
-# cachés — et `persist_state` des widgets, qui garde les réglages d'un
-# onglet qu'on quitte, vient du même palier.
+# ouvert d'une relance à l'autre, ni sauter le calcul des onglets cachés.
 streamlit>=1.61
 altair>=5.5
-# Ne sert qu'à UNE des trois sources de la prédiction — la régression
-# logistique — et au calibrage des probabilités. Les deux autres sources
-# sont du pandas : sans scikit-learn la section rend encore un classement,
-# et le dit. Chargée en import optionnel, pour qu'un environnement
-# incomplet ne fasse pas tomber les cinq onglets.
+# Sert à la régression logistique de la prédiction et au calibrage des
+# probabilités. Chargée en import optionnel : sans elle, l'onglet
+# Prédictions affiche des rangs au lieu de probabilités, et le dit.
 scikit-learn>=1.3
 -e .

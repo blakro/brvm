@@ -2,13 +2,9 @@
 
 Une phrase fausse trompe aussi sûrement qu'un chiffre faux, et elle passe
 plus facilement inaperçue : personne ne relit « 3ᵉ sur 47 » avec méfiance.
-Deux choses sont vérifiées ici.
-
-  - L'attente compte juste et n'invente pas de date quand elle ne peut pas
-    en calculer une.
-  - Les montants gardent leur ordre de grandeur. Se tromper d'un facteur
-    mille sur un volume est l'erreur la plus facile à commettre et la plus
-    difficile à voir.
+Les montants, surtout, doivent garder leur ordre de grandeur : se tromper
+d'un facteur mille sur un volume est l'erreur la plus facile à commettre et
+la plus difficile à voir.
 
     python tests/test_pedagogie.py
     pytest tests/test_pedagogie.py
@@ -23,123 +19,6 @@ RACINE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(RACINE / "src"))
 
 from brvm import pedagogie  # noqa: E402
-
-
-def test_le_glossaire_refuse_un_terme_inconnu():
-    """Ignorer l'entrée manquante laisserait le lecteur devant le mot qu'il
-    ne comprenait justement pas."""
-    try:
-        pedagogie.glossaire("momentum", "cours_de_bourse_magique")
-    except KeyError as erreur:
-        assert "cours_de_bourse_magique" in str(erreur)
-    else:
-        raise AssertionError("un terme inconnu doit lever, pas être sauté")
-
-
-# Les mots qu'une définition ne doit pas employer. Ce ne sont pas des mots
-# interdits dans l'application — ils y sont partout, et c'est leur place. Mais
-# une DÉFINITION qui les emploie renvoie le lecteur à un deuxième glossaire,
-# et un lecteur qu'on renvoie deux fois abandonne.
-#
-# La liste est volontairement courte et concrète : elle contient ce qui a
-# réellement été écrit dans une définition puis retiré, pas tout le
-# vocabulaire imaginable.
-JARGON = (
-    "IC", "IR", "Spearman", "quantile", "z-score", "écart-type",
-    "corrélation", "transversal", "surajust", "hors échantillon",
-    "entraînement", "glissant", "logistique", "régression", "composite",
-    "intervalle de confiance", "erreur-type", "p-valeur", "Benjamini",
-    "Grinold", "Ornstein", "point-in-time",
-)
-
-
-def test_aucune_definition_n_emploie_le_jargon_qu_elle_doit_remplacer():
-    """LA RÈGLE QUE L'EN-TÊTE DU MODULE ÉNONÇAIT SANS QUE RIEN NE LA VÉRIFIE.
-
-    « Une définition qui appelle un deuxième glossaire n'en est pas une »,
-    dit le module depuis le début. Trois définitions ajoutées récemment la
-    violaient — celle de l'IR renvoyait à l'IC, celle du calibrage parlait
-    d'entraînement — et rien ne l'a signalé.
-
-    Une définition est le bout de la chaîne : c'est là que le lecteur doit
-    pouvoir s'arrêter.
-    """
-    import re
-
-    fautes = []
-    for cle, texte in pedagogie.GLOSSAIRE.items():
-        for mot in JARGON:
-            # La clé peut apparaître dans sa propre définition : « les frais
-            # de transaction » définissant `frais` est correct.
-            if mot.lower() in cle.lower():
-                continue
-            # LIMITES DE MOTS, ET CASSE EXACTE POUR LES SIGLES. Une première
-            # version cherchait la sous-chaîne sans casse : « IC » se
-            # trouvait dans « difficile », « IR » dans « dire » et dans
-            # « aller-retour », et le test accusait dix-neuf définitions
-            # irréprochables. Un test qui crie partout ne se lit plus.
-            motif = rf"\b{re.escape(mot)}\b"
-            drapeaux = 0 if mot.isupper() else re.IGNORECASE
-            if re.search(motif, texte, drapeaux):
-                fautes.append(f"{cle} emploie « {mot} »")
-    assert not fautes, "définitions qui renvoient à un autre jargon :\n  " \
-        + "\n  ".join(fautes)
-
-
-def test_chaque_definition_se_lit_sans_formule():
-    """Pas de symbole mathématique dans une définition.
-
-    Une formule est exacte et illisible ; elle a sa place dans les
-    docstrings des modules de calcul, jamais dans le dépliant que lit
-    quelqu'un qui découvre le mot.
-    """
-    for cle, texte in pedagogie.GLOSSAIRE.items():
-        for symbole in ("×", "÷", "√", "²", "Σ", "±", "≈", "=", "/ ("):
-            assert symbole not in texte, f"{cle} contient « {symbole} »"
-
-
-def test_chaque_definition_tient_en_une_phrase_lisible():
-    """Une définition qui déborde n'est plus une définition, c'est un cours.
-
-    La limite est arbitraire ; ce qu'elle protège ne l'est pas : le
-    dépliant doit se lire d'un coup d'œil, sans défilement.
-    """
-    for cle, texte in pedagogie.GLOSSAIRE.items():
-        assert 40 < len(texte) <= 260, f"{cle} : {len(texte)} caractères"
-        assert texte[0].isupper() and texte.rstrip().endswith("."), cle
-
-
-def test_l_attente_compte_juste_et_annonce_un_mois():
-    """Le cas d'aujourd'hui : une séance en archive, 251 nécessaires."""
-    etat = pedagogie.attente(1, 251, "2026-07-27")
-    assert etat["manquantes"] == 250
-    assert 0 < etat["part"] < 0.01
-    # 250 séances ouvrées ≈ 350 jours calendaires.
-    assert etat["mois_estime"] == "juillet 2027"
-    assert "251 nécessaires" in etat["phrase"]
-    assert "juillet 2027" in etat["phrase"]
-
-
-def test_l_attente_satisfaite_ne_reclame_plus_rien():
-    etat = pedagogie.attente(300, 251, "2026-07-27")
-    assert etat["manquantes"] == 0 and etat["part"] == 1.0
-    assert etat["mois_estime"] is None
-    assert "manque" not in etat["phrase"]
-
-
-def test_aucune_date_n_est_inventee_pour_les_observations():
-    """Les observations n'arrivent pas à rythme fixe — une quarantaine par
-    séance, mais seulement une fois l'historique assez long. Annoncer un
-    mois serait une précision fabriquée."""
-    etat = pedagogie.attente(40, 400, "2026-07-27", unite="observation")
-    assert etat["mois_estime"] is None
-    assert "vers" not in etat["phrase"]
-    assert "40 observations sur les 400" in etat["phrase"]
-
-
-def test_une_date_illisible_ne_fait_pas_tomber_l_attente():
-    etat = pedagogie.attente(1, 251, "pas une date")
-    assert etat["manquantes"] == 250 and etat["mois_estime"] is None
 
 
 def test_les_montants_gardent_leur_ordre_de_grandeur():

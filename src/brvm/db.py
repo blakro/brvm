@@ -448,7 +448,7 @@ def importer(table: str = "cours", chemin: str | Path | None = None) -> int:
 
 
 def resume(chemin: str | Path | None = None) -> dict[str, int]:
-    """Nombre de lignes par table — ce que l'onglet « Données » affiche."""
+    """Nombre de lignes par table — ce que `brvm etat` affiche."""
     cnx = connexion(chemin)
     try:
         return {
