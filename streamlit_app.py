@@ -102,8 +102,8 @@ LIMITE_SEANCE = 0.075
 # ordre par semaine : c'est la cadence que les frais punissent le plus. Aux
 # deux échéances affichées, le modèle tient encore — 52 bonnes réponses sur
 # 100, neuf années sur dix au-dessus de la pièce —, mais l'avance de ses
-# favorites n'est plus démontrée au trimestre, ce que l'onglet dit quand
-# c'est le cas.
+# favorites n'est plus démontrée au trimestre, ce que l'onglet Prédictions
+# et la fiche d'une action disent quand c'est le cas.
 #
 # Les deux rendements du piège des frais sont les seuls chiffres de l'onglet
 # qui ne se recalculent pas : un rejeu coûte plusieurs minutes. Rejeu du
@@ -1156,11 +1156,20 @@ if onglets[1].open:
                     'mieux que la moitié des actions du marché.</p></div></div>'
                     f'{_regle_piece(float(ligne["probabilite"]))}</div>',
                     unsafe_allow_html=True)
+            # La réserve de l'onglet Prédictions vaut aussi ici : sans elle, une
+            # carte ☀️ au trimestre se lirait comme un avis aussi solide que
+            # celui du mois.
+            fragiles = [HORIZONS[h]["un"] for h, devin in devins.items()
+                        if h in avis and devin["avantage"].get("dates")
+                        and not devin["avantage"].get("significatif")]
+            jointes = " et d'".join(fragiles)
+            reserve = (f" À l'échéance d'{jointes}, même l'avance de ses "
+                       "favorites n'est pas démontrée." if fragiles else "")
             st.caption("Une pièce de monnaie ferait 50 %. Le modèle ne s'en "
                        "écarte que de quelques points : c'est un léger "
                        "penchant, pas une certitude. Il est entraîné à part "
                        "pour chaque échéance, d'où deux avis qui peuvent "
-                       "différer. Tous les détails dans l'onglet 🔮 "
+                       f"différer.{reserve} Tous les détails dans l'onglet 🔮 "
                        "Prédictions.")
 
         _legende(
@@ -1428,8 +1437,12 @@ if onglets[2].open:
                 f"{mots['unite']} — sur le prix seul (hors dividendes), en "
                 "moyenne sur plusieurs calendriers, sur l'archive arrêtée au "
                 f"{ARCHIVE_DU_REJEU} (détails et commandes pour le refaire dans "
-                "docs/technique.md). Le reste de la page est recalculé sur les "
-                "données du jour.")
+                "docs/technique.md). L'avance mesurée plus haut compte chaque "
+                "séance, au prix du jour de la décision ; le rejeu, lui, "
+                "achète à la séance suivante et seulement une fois par "
+                f"{mots['unite']}, comme on le ferait vraiment : il en garde "
+                "moins. Le reste de la page est recalculé sur les données du "
+                "jour.")
 
             _titre("🤔 Alors, à quoi sert le devin ?")
             c = st.columns(3)
