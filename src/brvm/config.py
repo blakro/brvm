@@ -146,6 +146,12 @@ DEFAUTS: dict[str, dict] = {
         # À NE PAS CONFONDRE AVEC `pas_rebalancement`, qui dit à quelle
         # fréquence on ACHÈTE et que les frais commandent — voir plus bas.
         # Prévoir à une semaine n'oblige pas à tourner toutes les semaines.
+        #
+        # L'APP N'Y LIT PAS SON ÉCHÉANCE. Sa météo du devin prévoit à vingt
+        # et à soixante séances, le mois et le trimestre qui viennent, et
+        # réentraîne le modèle pour chacune : changer cette valeur change la
+        # ligne de commande, pas l'app — voir `HORIZONS` dans
+        # streamlit_app.py.
         "horizon": 5,
         # Périodes de test successives de la validation glissante.
         #

@@ -18,7 +18,9 @@ Ce qui est testé ici est donc l'ÉTAT, pas le calcul :
 2. chacun des cinq onglets se rend, et va au bout de son contenu ;
 3. la séance lue en direct TIENT à travers les relances ;
 4. l'onglet ouvert et la société affichée tiennent aussi, y compris quand
-   la session est vidée et que seule l'URL subsiste.
+   la session est vidée et que seule l'URL subsiste ;
+5. l'échéance choisie pour la prévision, le mois ou le trimestre, tient
+   d'un onglet à l'autre.
 
 Le réseau n'est jamais touché : `brvm_org.lire_cote` est remplacé par une
 séance fabriquée, comme le reste de la suite travaille sur les captures de
@@ -224,7 +226,9 @@ def test_la_fiche_d_une_action_va_au_bout(lanceur):
     assert not at.exception, [str(e) for e in at.exception]
     textes = _textes(at)
     for attendu in ("Facile à revendre ?", "Pire chute (1 an)",
-                    "Prix pour ne rien perdre", "Et la semaine prochaine ?"):
+                    "Prix pour ne rien perdre", "Et dans les mois qui viennent ?",
+                    "Le mois qui vient · 20 séances",
+                    "Le trimestre qui vient · 60 séances"):
         assert attendu in textes, f"« {attendu} » absent de la fiche"
     assert not re.search(r"\bnan\b", textes, re.IGNORECASE), \
         "une valeur manquante s'affiche « nan »"
@@ -235,20 +239,54 @@ def test_aucune_valeur_manquante_ne_s_affiche_nan_sur_l_accueil(lanceur):
     assert not re.search(r"\bnan\b", _textes(at), re.IGNORECASE)
 
 
-def test_l_onglet_predictions_montre_le_bilan_et_les_frais(lanceur):
+@pytest.mark.parametrize("horizon, echeance, cadence", [
+    (None, "le mois qui vient (20 séances)", "chaque mois"),
+    (60, "le trimestre qui vient (60 séances)", "chaque trimestre"),
+])
+def test_l_onglet_predictions_montre_le_bilan_et_les_frais(
+        lanceur, horizon, echeance, cadence):
     """La prévision ne se montre jamais sans son bilan passé ni sans le
-    coût des frais : c'est ce qui la garde réaliste."""
+    coût des frais : c'est ce qui la garde réaliste.
+
+    Et cela vaut pour CHAQUE échéance. Le bilan, l'avance et les frais
+    d'un mois ne disent rien de ceux d'un trimestre : une page qui
+    changerait la météo sans changer le reste afficherait la prévision de
+    l'une sous la garantie de l'autre.
+    """
     at = _app(lanceur)
     at.query_params["onglet"] = "predictions"
     at.run()
+    if horizon is not None:
+        at.segmented_control(key="horizon").set_value(horizon).run()
     assert not at.exception, [str(e) for e in at.exception]
     textes = _textes(at)
     for attendu in ("Bonnes réponses", "pile ou face", "Le piège des frais",
-                    "Plutôt favorable", "Plutôt défavorable"):
+                    "Plutôt favorable", "Plutôt défavorable",
+                    f"La météo du devin pour {echeance}",
+                    f"en suivant ses favorites {cadence}"):
         assert attendu in textes, f"« {attendu} » absent de l'onglet Prédictions"
+    assert "semaine prochaine" not in textes
     colonnes = [set(d.value.columns) for d in at.dataframe]
     assert any({"ticker", "probabilite", "incertitude"} <= c for c in colonnes), \
         "le détail des probabilités, avec leur incertitude, est absent"
+
+
+def test_l_echeance_choisie_tient_d_un_onglet_a_l_autre(lanceur):
+    """Le corps d'un onglet fermé ne s'exécute pas : sans `persist_state`,
+    le choix du trimestre retombait sur le mois au premier détour par un
+    autre onglet."""
+    at = _app(lanceur)
+    at.query_params["onglet"] = "predictions"
+    at.run()
+    at.segmented_control(key="horizon").set_value(60).run()
+
+    at.session_state["onglet"] = "🎓 Comprendre"
+    at.run()
+    at.session_state["onglet"] = "🔮 Prédictions"
+    at.run()
+    assert not at.exception, [str(e) for e in at.exception]
+    assert at.segmented_control(key="horizon").value == 60
+    assert "le trimestre qui vient (60 séances)" in _textes(at)
 
 
 def test_le_glossaire_se_filtre(lanceur):

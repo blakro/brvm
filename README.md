@@ -21,8 +21,8 @@ Rien à installer, tout se passe dans le navigateur.
 | Onglet | À quoi il sert |
 |---|---|
 | 🏠 **Aujourd'hui** | La « météo » du marché : combien d'actions montent, combien baissent, les plus fortes hausses et baisses, les secteurs. |
-| 🔎 **Une action** | Tout savoir avant d'acheter ou de vendre : prix et évolution, une **fiche en six points** (facile à revendre ? prix agité ? pire chute ? dividendes ? frais ?), un **simulateur d'achat** (frais compris, prix pour ne rien perdre) et la prévision du modèle. |
-| 🔮 **Prédictions** | La « boule de cristal honnête » : la météo de la semaine pour chaque action, combien de fois le modèle a eu raison par le passé, et pourquoi les frais mangent son avance. |
+| 🔎 **Une action** | Tout savoir avant d'acheter ou de vendre : prix et évolution, une **fiche en six points** (facile à revendre ? prix agité ? pire chute ? dividendes ? frais ?), un **simulateur d'achat** (frais compris, prix pour ne rien perdre) et la prévision du modèle pour le mois et le trimestre qui viennent. |
+| 🔮 **Prédictions** | La « boule de cristal honnête » : la météo du mois ou du trimestre qui vient pour chaque action, combien de fois le modèle a eu raison par le passé, et pourquoi les frais mangent son avance. |
 | 💰 **Dividendes** | Les sociétés qui reversent le plus, les derniers versements, et un calculateur : « combien rapporterait mon épargne ? » |
 | 🎓 **Comprendre** | Acheter sa première action en 6 étapes, trois règles à connaître, un glossaire de 24 mots avec recherche, et la signification des couleurs et symboles. |
 
@@ -32,18 +32,27 @@ ses icônes et ses chiffres.
 ## Comment lire la prédiction
 
 Le modèle ne devine pas le prix de demain. Il estime les chances qu'une
-action fasse **mieux que la moitié du marché** pendant la semaine qui vient.
+action fasse **mieux que la moitié du marché** pendant **le mois qui vient**
+(20 séances) ou **le trimestre qui vient** (60 séances). Il est entraîné à
+part pour chaque échéance : les deux avis peuvent différer.
 
-- **Une pièce de monnaie ferait 50 %.** Le modèle donne entre 42 % et 52 %
+- **Une pièce de monnaie ferait 50 %.** Le modèle donne entre 44 % et 54 %
   environ : un léger penchant, jamais une certitude.
-- **Il a fait mieux qu'une pièce 9 années sur 10** quand on l'a testé sur
-  des années qu'il n'avait jamais vues — avec environ 52 bonnes réponses
-  sur 100.
-- **Mais les frais l'emportent.** Ses favorites prennent environ 0,3 %
-  d'avance par semaine ; un achat suivi d'une revente coûte environ 3 %.
-  Suivre ses conseils chaque semaine aurait fait **gagner 10 % par an de
-  plus que le marché sans frais, et perdre 36 % par an avec des frais
-  réalistes.**
+- **Il a fait mieux qu'une pièce 9 années sur 10**, aux deux échéances,
+  quand on l'a testé sur des années qu'il n'avait jamais vues — avec
+  environ 52 bonnes réponses sur 100.
+- **Mais les frais l'emportent.** Un achat suivi d'une revente coûte
+  environ 3 %, bien plus que l'avance de ses favorites :
+
+  | | Le mois qui vient | Le trimestre qui vient |
+  |---|---|---|
+  | Avance de ses 10 favorites | +0,6 % par mois | +0,9 % par trimestre, **pas démontrée** |
+  | Suivre ses favorites, sans frais | +5 % par an | +1 % par an |
+  | … avec des frais réalistes | **−14 % par an** | **−6 % par an** |
+
+Pourquoi pas la semaine prochaine ? C'est là que le modèle classe le mieux,
+mais une météo de la semaine invite à acheter et vendre chaque semaine, et
+c'est ce que les frais punissent le plus : **−36 % par an**.
 
 Conclusion : c'est un indice de plus pour départager deux actions, pas un
 signal d'achat.
