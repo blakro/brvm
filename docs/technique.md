@@ -834,8 +834,8 @@ avant d'acheter ou de vendre :
 | Onglet | Ce qu'on y voit |
 |---|---|
 | 🏠 **Aujourd'hui** | La météo du marché, les plus fortes hausses et baisses, les secteurs, toutes les actions de la séance. |
-| 🔎 **Une action** | Le prix et son évolution ; une fiche en six points (revente, agitation, pire chute, position sur l'année, dividendes, frais) ; un simulateur d'achat ; les dividendes ; la prévision du modèle. |
-| 🔮 **Prédictions** | Le modèle de `prediction.py` : météo de la semaine, bilan hors échantillon contre une pièce de monnaie, et le piège des frais. |
+| 🔎 **Une action** | Le prix et son évolution ; une fiche en six points (revente, agitation, pire chute, position sur l'année, dividendes, frais) ; un simulateur d'achat ; les dividendes ; la prévision du modèle pour le mois et pour le trimestre qui viennent. |
+| 🔮 **Prédictions** | Le modèle de `prediction.py`, au choix pour le mois ou le trimestre qui vient : météo de chaque action, bilan hors échantillon contre une pièce de monnaie, avance de ses favorites (signalée quand elle n'est pas démontrée), et le piège des frais. |
 | 💰 **Dividendes** | Rendements médians par exercice, les plus généreuses, les derniers détachements, un calculateur d'épargne. |
 | 🎓 **Comprendre** | Guide pour débuter, règles du marché, glossaire avec recherche, couleurs et symboles. |
 
@@ -845,9 +845,69 @@ sert aux rendements et aux calculs, et le montant annoncé au détachement
 par brvm.org (`dividendes.csv`). L'app étiquette chacun et ne les mélange
 pas — voir `qualite.desaccords`.
 
-Les chiffres « +10,3 % / −36,1 % par an » du piège des frais sont ceux du
-tableau de `config.py` (rejeu du modèle à la semaine, prix seul) ; tout le
-reste de l'app est recalculé sur l'archive du jour.
+### La météo du devin : le mois et le trimestre, pas la semaine
+
+L'app prévoit pour **le mois qui vient (20 séances)** et **le trimestre qui
+vient (60 séances)**, comptés à partir de la dernière clôture — pas le mois
+du calendrier. Le modèle est celui de `prediction.py`, **réentraîné pour
+chaque échéance** sur le rendement des 20 ou des 60 séances suivantes :
+chacune a son bilan, son avance, son calibrage et sa météo, et une même
+action peut être ☀️ à un mois et 🌧️ à un trimestre. La configuration garde
+cinq séances pour la ligne de commande ; l'app n'y lit pas son échéance
+(voir `HORIZONS` dans `streamlit_app.py`).
+
+**Pourquoi pas la semaine, alors que le modèle y ordonne le mieux la cote ?**
+Parce que l'horizon de `prediction.py` se choisit sur la prévision seule, et
+celui de l'app sur ce que son lecteur en fera. Une météo de la semaine
+invite à passer un ordre par semaine, et c'est la cadence que les frais
+punissent le plus — le second tableau ci-dessous.
+
+Ce que vaut le modèle à chaque échéance, sur l'archive arrêtée au 8 octobre
+2026 (validation glissante, dix années de test ; l'avance est celle des dix
+premières **achetables**, sur la durée de l'échéance) :
+
+| Échéance | Bonnes réponses | Années au-dessus de 50 % | Avance des 10 favorites | t de l'avance |
+|---|---|---|---|---|
+| 5 séances (l'ancienne météo) | 52,4 % | 9 / 10 | +0,32 % par semaine | +5,4 |
+| **20 séances, le mois** | **52,4 %** | **9 / 10** | **+0,63 % par mois** | **+2,9** |
+| **60 séances, le trimestre** | **52,1 %** | **9 / 10** | **+0,89 % par trimestre** | **+1,2** |
+
+La porte de production de `valider` (IC et avance positifs hors
+échantillon) s'ouvre aux trois échéances, et les bonnes réponses ne bougent
+presque pas. C'est l'avance qui se dilue : par an, elle passe de +16 % à
++8 % puis +4 %, et **au trimestre elle n'est plus démontrée** — l'archive ne
+contient que 37 trimestres indépendants pour la juger, et l'écart reste dans
+sa marge d'erreur. L'onglet le dit en clair chaque fois que
+`mesure_avantage` rend `significatif` faux, quelle que soit l'échéance.
+
+Le piège des frais, ensuite : rejeu du modèle **de l'échéance**, ses
+favorites rachetées **à la même cadence**, prix seul, écart annuel contre
+l'univers, en moyenne sur plusieurs calendriers décalés :
+
+| Échéance et cadence | Calendriers | Frais nuls | 1,50 % par sens | Seuil de rentabilité, selon le calendrier |
+|---|---|---|---|---|
+| 5 séances | 5 | +9,9 % | −36,3 % | 0,18 à 0,35 % |
+| **20 séances** | 7 | **+5,2 %** | **−14,5 %** | 0,06 à 0,80 % |
+| **60 séances** | 6 | **+1,3 %** | **−5,7 %** | aucun (2 fois sur 6) à 0,85 % |
+
+Aucune échéance ne paie ses frais ; le verdict de l'onglet est le même aux
+trois, et seulement moins sévère quand on tourne moins. La ligne à cinq
+séances rend sur l'archive du 8 octobre ce que le tableau de `config.py`
+rendait sur celle du 28 septembre (+10,3 % et −36,1 %), au demi-point près.
+
+Ces deux rendements sont les seuls chiffres de l'onglet écrits en dur, dans
+`HORIZONS` : un rejeu coûte de une à six minutes. L'échéance passe par un
+fichier de configuration, la cadence par `--pas` :
+
+```bash
+printf '[prediction]\nhorizon = 20\n' > h20.toml
+BRVM_CONFIG=h20.toml python -m brvm backtester --signal modele --seuil-frais --hors-dividende --pas 20 --calendriers 7
+printf '[prediction]\nhorizon = 60\n' > h60.toml
+BRVM_CONFIG=h60.toml python -m brvm backtester --signal modele --seuil-frais --hors-dividende --pas 60 --calendriers 6
+python -m brvm backtester --signal modele --seuil-frais --hors-dividende --pas 5 --calendriers 5
+```
+
+Tout le reste de l'app est recalculé sur l'archive du jour.
 
 ### L'onglet ouvert reste ouvert
 
@@ -856,10 +916,14 @@ Streamlit rejoue tout le script à chaque clic :
 - **L'onglet et la société ne se perdent pas.** Ils sont retenus d'une
   relance à l'autre et écrits dans l'URL : `?onglet=predictions`, ou
   `?onglet=action&valeur=SNTS` pour partager une fiche.
+- **L'échéance de la prévision tient aussi**, d'un onglet à l'autre : le
+  mois ou le trimestre choisi dans 🔮 Prédictions reste choisi.
 - **Seul l'onglet visible se calcule**, et les calculs lourds sont gardés
-  en mémoire tant que l'archive ne change pas. La première prévision prend
-  une quinzaine de secondes (la validation glissante du modèle), annoncée
-  par un message d'attente ; les suivantes sont immédiates.
+  en mémoire tant que l'archive ne change pas. Une prévision prend une
+  quinzaine de secondes par échéance la première fois (la validation
+  glissante du modèle) — une trentaine pour la fiche d'une action, qui
+  montre les deux —, annoncée par un message d'attente ; les suivantes sont
+  immédiates, pour tous les visiteurs.
 
 ### Les couleurs
 
@@ -918,7 +982,7 @@ Lancez toujours `verifier` avant de compter sur la collecte automatique.
 ```bash
 python -m brvm noter         # classe les valeurs
 python -m brvm rechercher --valeurs   # quel prédicteur marche, et où
-python -m brvm predire       # probabilité de surperformance à 3 mois
+python -m brvm predire       # probabilité de surperformance à cinq séances
 python -m brvm rendement     # retour à la moyenne du rendement du dividende
 python -m brvm rendement --ajustement
                              # le cours reflète-t-il le dividende détaché ?

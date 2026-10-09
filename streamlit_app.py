@@ -11,8 +11,9 @@ avant d'acheter ou de vendre une action :
 2. Une action   — la fiche d'une société, avec une liste de vérifications
                   avant d'acheter ou de vendre et un simulateur de frais ;
 3. Prédictions  — le modèle de `prediction.py`, présenté sans exagération :
-                  ce qu'il prévoit, combien de fois il a eu raison, et
-                  pourquoi les frais mangent son avance ;
+                  ce qu'il prévoit pour le mois et le trimestre qui
+                  viennent, combien de fois il a eu raison, et pourquoi
+                  les frais mangent son avance ;
 4. Dividendes   — ce qui rapporte vraiment sur ce marché ;
 5. Comprendre   — un guide pour débuter, les règles, un glossaire.
 
@@ -29,7 +30,7 @@ import pandas as pd
 import streamlit as st
 
 from brvm import db, pedagogie, prediction
-from brvm.config import DEFAUTS
+from brvm.config import DEFAUTS, charger
 from brvm.ingestion import brvm_org
 
 st.set_page_config(page_title="BRVM — la bourse expliquée simplement",
@@ -88,6 +89,46 @@ FRAIS_PAR_SENS = (float(DEFAUTS["backtest"]["frais_pourcent"])
                   + float(DEFAUTS["backtest"]["impact_pourcent"]))
 SEUIL_LIQUIDITE = float(DEFAUTS["analyse"]["volume_median_min_fcfa"])
 LIMITE_SEANCE = 0.075
+
+# Les deux échéances de la météo du devin, en séances (environ 250 par an).
+# Le modèle est RÉENTRAÎNÉ pour chacune, sur le rendement des 20 ou des 60
+# séances suivantes : rebaptiser « le mois qui vient » sa prévision à cinq
+# séances serait annoncer ce qu'elle ne mesure pas.
+#
+# PAS LA SEMAINE, ALORS QUE C'EST LÀ QUE LE MODÈLE ORDONNE LE MIEUX LA COTE.
+# La configuration garde cinq séances pour la ligne de commande, où la
+# question est « à quel horizon prévoit-il le mieux ? ». L'app s'adresse à
+# quelqu'un qui va acheter, et une météo de la semaine l'invite à passer un
+# ordre par semaine : c'est la cadence que les frais punissent le plus. Aux
+# deux échéances affichées, le modèle tient encore — 52 bonnes réponses sur
+# 100, neuf années sur dix au-dessus de la pièce —, mais l'avance de ses
+# favorites n'est plus démontrée au trimestre, ce que l'onglet dit quand
+# c'est le cas.
+#
+# Les deux rendements du piège des frais sont les seuls chiffres de l'onglet
+# qui ne se recalculent pas : un rejeu coûte plusieurs minutes. Rejeu du
+# modèle de CETTE échéance, ses favorites rachetées à la même cadence, prix
+# seul, écart annuel contre le marché en moyenne sur plusieurs calendriers
+# décalés, sans frais puis à 1,50 % par sens :
+#
+#     échéance          calendriers   sans frais   1,50 % par sens
+#      5 (semaine)           5           +9,9 %        -36,3 %
+#     20 (mois)              7           +5,2 %        -14,5 %
+#     60 (trimestre)         6           +1,3 %         -5,7 %
+#
+# Archive arrêtée au 8 octobre 2026 ; les commandes qui refont chaque ligne
+# sont dans docs/technique.md.
+HORIZONS = {
+    20: {"bouton": "🗓️ Le mois qui vient", "mots": "le mois qui vient",
+         "unite": "mois", "unites": "mois", "un": "un mois",
+         "sans_frais": 0.0516, "avec_frais": -0.1447},
+    60: {"bouton": "🔭 Le trimestre qui vient",
+         "mots": "le trimestre qui vient",
+         "unite": "trimestre", "unites": "trimestres", "un": "un trimestre",
+         "sans_frais": 0.0129, "avec_frais": -0.0574},
+}
+HORIZON_DEFAUT = 20
+ARCHIVE_DU_REJEU = "8 octobre 2026"
 
 
 def _secteur(nom) -> tuple[str, str]:
@@ -258,6 +299,8 @@ html, body, [class*="css"], .stMarkdown, button, input {{
 .meteo h3 {{ margin: 0 !important; padding: 0 !important; color: {ENCRE};
             font-size: 1.5rem !important; font-weight: 800 !important; }}
 .meteo p {{ margin: .2rem 0 0; color: {DOUX}; }}
+.echeance {{ font-size: .78rem; font-weight: 800; text-transform: uppercase;
+            letter-spacing: .06em; color: {DOUX}; margin-bottom: .6rem; }}
 
 .lecon {{ border-radius: 20px; padding: 1.2rem 1.4rem; color: #fff;
          background: linear-gradient(120deg, {ORANGE}, {ROSE});
@@ -439,22 +482,29 @@ def lire_en_direct():
 
 # Les tables passent en `_table` : Streamlit ne les hache pas (cent mille
 # lignes à chaque appel coûteraient une partie de ce qu'on économise). C'est
-# `cle`, l'empreinte de l'archive, qui distingue les entrées du cache.
-@st.cache_data(max_entries=2, show_spinner=(
-    "🔮 Le devin relit onze ans d'historique… (une quinzaine de secondes, "
-    "la première fois seulement)"))
-def prevoir(_cours, _referentiel, cle) -> dict:
-    """La prévision du modèle, et ce qu'on sait de sa fiabilité.
+# `cle`, l'empreinte de l'archive, qui distingue les entrées du cache, avec
+# l'échéance. Quatre entrées : les deux échéances, pour l'archive seule et
+# pour l'archive complétée par la séance lue en direct.
+@st.cache_data(max_entries=4, show_spinner=(
+    "🔮 Le devin relit onze ans d'historique… (une quinzaine de secondes par "
+    "échéance, la première fois seulement)"))
+def prevoir(_cours, _referentiel, cle, horizon: int) -> dict:
+    """La prévision du modèle à `horizon` séances, et sa fiabilité à ce terme.
 
-    Seules les pièces affichées sont gardées : la validation complète porte
-    des matrices et des modèles dont l'app n'a pas l'usage.
+    Le modèle est validé et entraîné pour l'échéance demandée : chacune a
+    son propre bilan, sa propre avance et son propre calibrage, que rien ne
+    permet de transposer de l'une à l'autre. Seules les pièces affichées
+    sont gardées : la validation complète porte des matrices et des modèles
+    dont l'app n'a pas l'usage.
     """
-    validation = prediction.valider(_cours, referentiel=_referentiel)
+    reglages = charger()
+    reglages["prediction"]["horizon"] = int(horizon)
+    validation = prediction.valider(_cours, reglages, referentiel=_referentiel)
     if validation["periodes"].empty:
         return {"pret": False, "horizon": validation.get("horizon"),
                 "lignes": validation.get("lignes", 0),
                 "minimum": validation.get("lignes_minimum", 0)}
-    probas = prediction.predire(_cours, referentiel=_referentiel,
+    probas = prediction.predire(_cours, reglages, referentiel=_referentiel,
                                 validation=validation)
     return {
         "pret": True,
@@ -597,10 +647,10 @@ def _palmares(lignes: pd.DataFrame, couleur: str) -> str:
 
 
 def _horizon_en_mots(horizon: int) -> str:
-    if horizon == 5:
-        return "la semaine prochaine (5 séances)"
-    if horizon % 5 == 0:
-        return f"les {horizon // 5} prochaines semaines ({horizon} séances)"
+    """« le mois qui vient (20 séances) » : glissant, pas le mois du
+    calendrier — la prévision part de la dernière clôture."""
+    if horizon in HORIZONS:
+        return f"{HORIZONS[horizon]['mots']} ({horizon} séances)"
     return f"les {horizon} prochaines séances"
 
 
@@ -1064,39 +1114,54 @@ if onglets[1].open:
             st.info("Aucun dividende connu pour cette société dans l'archive.")
 
         # --- La prévision, en dernier : c'est le calcul le plus long ------
-        _titre("🔮 Et la semaine prochaine ?",
-               "L'avis du modèle de prévision — un indice, pas une promesse.")
-        devin = prevoir(cours, referentiel, CLE)
-        if not devin["pret"]:
+        _titre("🔮 Et dans les mois qui viennent ?",
+               "L'avis du modèle de prévision, à un mois et à un trimestre — "
+               "un indice, pas une promesse.")
+        devins = {h: prevoir(cours, referentiel, CLE, h) for h in HORIZONS}
+        avis = {}
+        for horizon, devin in devins.items():
+            if devin["pret"]:
+                ligne = devin["probas"][devin["probas"]["ticker"] == choix]
+                if not ligne.empty:
+                    avis[horizon] = (ligne.iloc[0], len(devin["probas"]))
+        if not any(devin["pret"] for devin in devins.values()):
             st.info("Pas encore assez d'historique pour une prévision.")
+        elif not avis:
+            st.info(f"Pas de prévision pour {choix} : le modèle ne note que "
+                    "les actions échangées à la dernière séance, et dont "
+                    "l'historique est assez long.")
         else:
-            probas = devin["probas"]
-            ligne = probas[probas["ticker"] == choix]
-            if ligne.empty:
-                st.info(f"Pas de prévision pour {choix} : le modèle ne note que "
-                        "les actions échangées à la dernière séance, et dont "
-                        "l'historique est assez long.")
-            else:
-                ligne = ligne.iloc[0]
+            colonnes = st.columns(len(HORIZONS))
+            for i, (colonne, horizon) in enumerate(zip(colonnes, HORIZONS),
+                                                   start=1):
+                echeance = f'{HORIZONS[horizon]["bouton"]} · {horizon} séances'
+                if horizon not in avis:
+                    colonne.info(f"{echeance} : pas de prévision à cette "
+                                 "échéance.")
+                    continue
+                ligne, notees = avis[horizon]
                 rang = int(ligne.name) + 1
                 symbole, mot_meteo, teinte_m = _meteo_prevision(
                     float(ligne["rang_combine"]))
-                _html(
-                    f'<div class="carte anime" style="border-left:8px solid '
-                    f'{teinte_m};background:linear-gradient(120deg,'
+                colonne.markdown(
+                    f'<div class="carte anime d{i}" style="border-left:8px '
+                    f'solid {teinte_m};background:linear-gradient(120deg,'
                     f'{_rgba(teinte_m, .14)},{SURFACE} 60%)">'
+                    f'<div class="echeance">{echeance}</div>'
                     '<div class="meteo"><span class="emoji">'
                     f'{symbole}</span><div><h3>{mot_meteo}</h3>'
-                    f'<p><b>{pedagogie.ordinal(rang)}</b> sur {len(probas)} au '
-                    f'classement du modèle pour {_horizon_en_mots(devin["horizon"])}'
-                    f'. Il estime à <b>{_pct(ligne["probabilite"])}</b> ses '
-                    'chances de faire mieux que la moitié des actions du '
-                    'marché.</p></div></div>'
-                    f'{_regle_piece(float(ligne["probabilite"]))}</div>')
-                st.caption("Une pièce de monnaie ferait 50 %. Le modèle ne "
-                           "s'en écarte que de quelques points : c'est un "
-                           "léger penchant, pas une certitude. Tous les "
-                           "détails dans l'onglet 🔮 Prédictions.")
+                    f'<p><b>{pedagogie.ordinal(rang)}</b> sur {notees} au '
+                    'classement du modèle. Il estime à '
+                    f'<b>{_pct(ligne["probabilite"])}</b> ses chances de faire '
+                    'mieux que la moitié des actions du marché.</p></div></div>'
+                    f'{_regle_piece(float(ligne["probabilite"]))}</div>',
+                    unsafe_allow_html=True)
+            st.caption("Une pièce de monnaie ferait 50 %. Le modèle ne s'en "
+                       "écarte que de quelques points : c'est un léger "
+                       "penchant, pas une certitude. Il est entraîné à part "
+                       "pour chaque échéance, d'où deux avis qui peuvent "
+                       "différer. Tous les détails dans l'onglet 🔮 "
+                       "Prédictions.")
 
         _legende(
             "**Les 100 000 FCFA** : ce qu'aurait donné un achat il y a 1 mois, "
@@ -1116,13 +1181,24 @@ if onglets[1].open:
             "par le modèle, ⛅ dans le tiers du milieu, 🌧️ dans le dernier "
             "tiers. La règle colorée place l'action entre 40 % et 60 % de "
             "chances, autour du 🪙 50 % d'un pile ou face.",
+            "**Le mois / le trimestre qui vient** : les 20 ou 60 prochaines "
+            "séances de bourse à partir de la dernière clôture, et non le "
+            "mois du calendrier.",
         )
 
 
 # --- 🔮 Prédictions ---------------------------------------------------------
 if onglets[2].open:
     with onglets[2]:
-        devin = prevoir(cours, referentiel, CLE)
+        # Toute la page suit l'échéance choisie : le bilan, la météo, l'avance
+        # et les frais d'un mois ne se lisent pas avec ceux d'un trimestre.
+        choisi = st.segmented_control(
+            "Prévoir pour", list(HORIZONS),
+            format_func=lambda h: HORIZONS[h]["bouton"],
+            default=HORIZON_DEFAUT, required=True, key="horizon",
+            persist_state="session", label_visibility="collapsed")
+        mots = HORIZONS[choisi]
+        devin = prevoir(cours, referentiel, CLE, choisi)
         if not devin["pret"]:
             st.info(
                 "🔮 Le devin a besoin de plus d'historique : "
@@ -1165,10 +1241,12 @@ if onglets[2].open:
             _stat(c[1], "Années au-dessus de 50 %", "",
                   f"sur {len(periodes)} années de test", ("#059669", "#34d399"),
                   "🏆", 2, nombre=annees_gagnees)
+            demontree = bool(avantage.get("significatif"))
             if avantage.get("dates"):
                 _stat(c[2], "Avance de ses 10 favorites",
                       _pct(avantage["avantage"], signe=True),
-                      "de mieux que le marché, par semaine, en moyenne",
+                      f"de mieux que le marché, par {mots['unite']}, en "
+                      "moyenne" + ("" if demontree else " — pas démontrée"),
                       (CYAN, TURQUOISE), "🚀", 3)
             else:
                 _stat(c[2], "Avance de ses favorites", "—",
@@ -1177,17 +1255,37 @@ if onglets[2].open:
             _stat(c[3], "Frais d'un aller-retour", f"≈ {_pct(aller_retour)}",
                   "achat + revente, chez une SGI", ("#e11d48", "#fb7185"), "💸", 4)
 
+            # Plus l'échéance est longue, moins l'archive contient de périodes
+            # indépendantes pour juger : une quarantaine de trimestres en onze
+            # ans. L'avance peut alors rester positive sans sortir de sa marge
+            # d'erreur — c'est le cas au trimestre sur l'archive d'octobre
+            # 2026 —, et l'afficher sans le dire la ferait passer pour acquise.
+            if avantage.get("dates") and not demontree:
+                st.warning(
+                    f"**À l'échéance d'{mots['un']}, l'avance des favorites "
+                    "n'est pas démontrée.** Le bilan ne repose que sur "
+                    f"{avantage.get('blocs', 0)} {mots['unites']} "
+                    "indépendants, et l'écart mesuré "
+                    f"({_pct(avantage['avantage'], signe=True)}) reste dans sa "
+                    "marge d'erreur (± "
+                    f"{_pct(2 * avantage.get('erreur_type', float('nan')))}) : "
+                    "il peut n'être que du hasard.")
+
             precisions = periodes.assign(
                 annee=periodes["periode"].str[-10:-6],
                 juste=periodes["precision"] > 0.5)
             # Les barres partent de la ligne des 50 % : au-dessus, le devin
-            # bat la pièce ; en dessous, il fait moins bien qu'elle.
+            # bat la pièce ; en dessous, il fait moins bien qu'elle. L'axe
+            # s'élargit plutôt que de couper une barre qui en sortirait : au
+            # trimestre, la pire année frôle déjà les 46 %.
+            bas = min(0.46, float(precisions["precision"].min()) - 0.01)
+            haut = max(0.58, float(precisions["precision"].max()) + 0.01)
             barres = alt.Chart(precisions).transform_calculate(
                 piece="0.5").mark_bar(size=34, clip=True).encode(
                 x=alt.X("annee:N", title="année de test",
                         axis=alt.Axis(labelAngle=0)),
                 y=alt.Y("precision:Q", title="bonnes réponses",
-                        scale=alt.Scale(domain=[0.46, 0.58], zero=False),
+                        scale=alt.Scale(domain=[bas, haut], zero=False),
                         axis=alt.Axis(format=".0%", tickCount=6)),
                 y2="piece:Q",
                 color=alt.condition(alt.datum.precision > 0.5,
@@ -1211,7 +1309,7 @@ if onglets[2].open:
                 "bien qu'elle. L'axe est resserré pour que les écarts se "
                 "voient : ils sont petits.")
 
-            # --- La météo de la semaine ---------------------------------
+            # --- La météo de l'échéance choisie -------------------------
             _titre(f"🌦️ La météo du devin pour {_horizon_en_mots(horizon)}",
                    "Les actions échangées à la dernière séance, rangées en "
                    "trois groupes égaux selon l'avis du modèle. C'est un "
@@ -1300,31 +1398,38 @@ if onglets[2].open:
                    "Pourquoi suivre le devin à la lettre ferait perdre de "
                    "l'argent.")
             g, d = st.columns(2)
-            _stat(g, "Sans aucun frais", "+10,3 % / an",
+            _stat(g, "Sans aucun frais",
+                  f"{_pct(mots['sans_frais'], signe=True)} / an",
                   "de mieux que le marché, en suivant ses favorites chaque "
-                  "semaine", ("#059669", "#34d399"), "😃", 1)
+                  f"{mots['unite']}", ("#059669", "#34d399"), "😃", 1)
             _stat(d, "Avec des frais réalistes (1,5 % par opération)",
-                  "−36,1 % / an", "de moins bien que le marché : les frais "
-                  "dévorent l'avance", ("#e11d48", "#fb7185"), "😱", 2)
+                  f"{_pct(mots['avec_frais'], signe=True)} / an",
+                  "de moins bien que le marché : les frais dévorent l'avance",
+                  ("#e11d48", "#fb7185"), "😱", 2)
             if avantage.get("dates") and avantage.get("avantage", 0) > 0:
-                semaines = aller_retour / avantage["avantage"]
+                a_rembourser = max(1, round(aller_retour / avantage["avantage"]))
+                duree = (f"{a_rembourser} "
+                         + (mots["unite"] if a_rembourser == 1
+                            else mots["unites"]))
                 st.write("")
                 _html(
                     '<div class="lecon anime">'
                     '<b>🧮 Le calcul qui tue :</b> ses favorites prennent en '
                     f'moyenne <b>{_pct(avantage["avantage"], signe=True)}</b> '
-                    'd\'avance sur le marché en une semaine. Un achat suivi '
+                    f'd\'avance sur le marché en {mots["un"]}. Un achat suivi '
                     f'd\'une revente coûte environ <b>{_pct(aller_retour)}</b>. '
-                    f'Il faudrait donc environ <b>{semaines:.0f} semaines</b> '
+                    f'Il faudrait donc environ <b>{duree}</b> '
                     'd\'avance pour rembourser les frais d\'une seule '
-                    'opération… alors que la prévision ne vaut que pour une '
-                    'semaine.</div>')
+                    'opération… alors que la prévision ne vaut que pour '
+                    f'{mots["un"]}.</div>')
             st.caption(
                 "Les deux rendements annuels viennent du rejeu de la stratégie "
-                "sur le prix seul (hors dividendes), sur l'archive arrêtée au "
-                "28 septembre 2026 (détails et commande "
-                "pour le refaire dans docs/technique.md). Le reste de la page "
-                "est recalculé sur les données du jour.")
+                "— le modèle de cette échéance, ses favorites rachetées chaque "
+                f"{mots['unite']} — sur le prix seul (hors dividendes), en "
+                "moyenne sur plusieurs calendriers, sur l'archive arrêtée au "
+                f"{ARCHIVE_DU_REJEU} (détails et commandes pour le refaire dans "
+                "docs/technique.md). Le reste de la page est recalculé sur les "
+                "données du jour.")
 
             _titre("🤔 Alors, à quoi sert le devin ?")
             c = st.columns(3)
@@ -1332,9 +1437,9 @@ if onglets[2].open:
                 ("✅", "Un indice de plus", "Pour départager deux actions qui "
                  "vous plaisent pour d'autres raisons (dividende, facilité de "
                  "revente).", HAUSSE),
-                ("🚫", "Pas un signal d'achat", "Acheter et vendre chaque semaine "
-                 "selon ses favorites coûte plus en frais que ça ne rapporte.",
-                 BAISSE),
+                ("🚫", "Pas un signal d'achat", "Acheter et vendre chaque "
+                 f"{mots['unite']} selon ses favorites coûte plus en frais que "
+                 "ça ne rapporte.", BAISSE),
                 ("🧘", "La patience paie mieux", "Sur ce marché, ce qui rapporte "
                  "régulièrement, ce sont les dividendes d'actions gardées "
                  "longtemps.", VIOLET),
@@ -1363,9 +1468,16 @@ if onglets[2].open:
                 "baisse.",
                 "**Avance de ses 10 favorites** : ce que les dix actions les "
                 "mieux classées (parmi celles qui s'échangent assez) ont gagné "
-                "de plus que la moyenne du marché, par semaine.",
+                f"de plus que la moyenne du marché, par {mots['unite']}. "
+                "« Pas démontrée » : l'écart reste dans sa marge d'erreur, il "
+                "peut n'être que du hasard.",
                 "**± incertitude** : de combien l'estimation bougerait si "
                 "l'historique avait été un peu différent.",
+                "**Le mois / le trimestre qui vient** : les 20 ou 60 prochaines "
+                "séances de bourse à partir de la dernière clôture, et non le "
+                "mois du calendrier. Le devin est entraîné à part pour chaque "
+                "échéance : son bilan, sa météo et ses frais changent avec "
+                "elle.",
             )
 
 
@@ -1636,7 +1748,8 @@ if onglets[4].open:
             'certitude.</b><br>Des centaines de méthodes ont été testées sur '
             'l\'historique depuis 2015. La meilleure — le devin de l\'onglet '
             '🔮 Prédictions — fait un peu mieux qu\'une pièce de monnaie, mais '
-            'pas assez pour payer les frais si on la suit chaque semaine. Ce qui '
+            'pas assez pour payer les frais si on la suit, chaque mois comme '
+            'chaque trimestre. Ce qui '
             'rapporte de façon régulière, ce sont les <b>dividendes</b> '
             'd\'actions gardées longtemps.</div>')
 
