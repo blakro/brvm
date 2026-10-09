@@ -148,8 +148,9 @@ L'absence de preuve n'est pas une preuve d'absence.
 
 ### 4. Ce que l'apprentissage ajoute, et ce qu'il n'ajoute pas
 
-Le modèle appris de `prediction.py` — celui de l'onglet 🔮 Prédictions —
-estime, pour chaque valeur, sa probabilité de **surperformer le marché**.
+Le modèle appris de `prediction.py` — celui de l'onglet 🔮 Prédictions, que
+l'app réentraîne au mois et au trimestre (voir [L'application](#lapplication))
+— estime, pour chaque valeur, sa probabilité de **surperformer le marché**.
 Mesurée ici à trois mois, sous un protocole unique — dix périodes de test
 successives, entraînement toujours antérieur, étiquettes qui débordent
 purgées :
@@ -755,7 +756,8 @@ ne peut lire ne protège personne.
   rouge ▼, ✅ 🟡 ⚠️ dans la fiche d'une action, ☀️ ⛅ 🌧️ pour la météo.
 - **La prédiction ne se montre jamais sans son bilan ni sans les frais** :
   comparée à une pièce de monnaie, avec le nombre d'années où elle a eu
-  raison, et le calcul qui montre que 3 % de frais effacent son avance.
+  raison, et le calcul qui montre que 3 % de frais effacent son avance. Et
+  quand cette avance n'est pas démontrée, comme au trimestre, elle le dit.
 
 ### Ce que ça change pour vous
 
@@ -851,10 +853,12 @@ L'app prévoit pour **le mois qui vient (20 séances)** et **le trimestre qui
 vient (60 séances)**, comptés à partir de la dernière clôture — pas le mois
 du calendrier. Le modèle est celui de `prediction.py`, **réentraîné pour
 chaque échéance** sur le rendement des 20 ou des 60 séances suivantes :
-chacune a son bilan, son avance, son calibrage et sa météo, et une même
-action peut être ☀️ à un mois et 🌧️ à un trimestre. La configuration garde
-cinq séances pour la ligne de commande ; l'app n'y lit pas son échéance
-(voir `HORIZONS` dans `streamlit_app.py`).
+chacune a son bilan, son avance, son calibrage et sa météo. Les deux
+classements restent proches : le 8 octobre 2026, leur corrélation de rang
+vaut 0,94, 38 actions sur 46 sont dans la même case météo, et les huit
+autres ne passent qu'à une case voisine — aucune n'est ☀️ d'un côté et 🌧️
+de l'autre. La configuration garde cinq séances pour la ligne de commande ;
+l'app n'y lit pas son échéance (voir `HORIZONS` dans `streamlit_app.py`).
 
 **Pourquoi pas la semaine, alors que le modèle y ordonne le mieux la cote ?**
 Parce que l'horizon de `prediction.py` se choisit sur la prévision seule, et
@@ -877,7 +881,12 @@ La porte de production de `valider` (IC et avance positifs hors
 presque pas. C'est l'avance qui se dilue : par an, elle passe de +16 % à
 +8 % puis +4 %, et **au trimestre elle n'est plus démontrée** — l'archive ne
 contient que 37 trimestres indépendants pour la juger, et l'écart reste dans
-sa marge d'erreur. L'onglet le dit en clair chaque fois que
+sa marge d'erreur. Ce n'est pas un accident de l'archive du jour : arrêtée
+fin 2023, mi-2024, fin 2024, mi-2025, fin 2025 ou fin avril 2026, la
+validation rend au trimestre un t de l'avance entre 0,9 et 1,4, jamais
+significatif, et au mois entre 2,6 et 3,5, toujours significatif ; la porte
+de production s'ouvre aux deux échéances sur les six. L'onglet Prédictions
+et la fiche d'une action le disent en clair chaque fois que
 `mesure_avantage` rend `significatif` faux, quelle que soit l'échéance.
 
 Le piège des frais, ensuite : rejeu du modèle **de l'échéance**, ses
@@ -895,8 +904,16 @@ trois, et seulement moins sévère quand on tourne moins. La ligne à cinq
 séances rend sur l'archive du 8 octobre ce que le tableau de `config.py`
 rendait sur celle du 28 septembre (+10,3 % et −36,1 %), au demi-point près.
 
-Ces deux rendements sont les seuls chiffres de l'onglet écrits en dur, dans
-`HORIZONS` : un rejeu coûte de une à six minutes. L'échéance passe par un
+Les deux tableaux ne se lisent pas l'un avec l'autre sans précaution.
+L'avance du premier compte chaque séance, au prix du jour de la décision ;
+le rejeu du second achète à la séance suivante et seulement une fois par
+échéance, comme on le ferait vraiment. Au mois, +0,63 % par période fait
+environ +8 % l'an, et le rejeu sans frais en garde +5,2 % ; au trimestre,
+environ +3,7 % l'an contre +1,3 %. L'app le rappelle sous le piège des
+frais.
+
+Les rendements du rejeu sont les seuls chiffres de l'onglet écrits en dur,
+dans `HORIZONS` : un rejeu coûte de une à six minutes. L'échéance passe par un
 fichier de configuration, la cadence par `--pas` :
 
 ```bash

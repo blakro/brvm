@@ -20,7 +20,9 @@ Ce qui est testé ici est donc l'ÉTAT, pas le calcul :
 4. l'onglet ouvert et la société affichée tiennent aussi, y compris quand
    la session est vidée et que seule l'URL subsiste ;
 5. l'échéance choisie pour la prévision, le mois ou le trimestre, tient
-   d'un onglet à l'autre.
+   d'un onglet à l'autre ;
+6. une échéance dont l'avance n'est pas démontrée est signalée sur la
+   fiche d'une action comme dans l'onglet Prédictions.
 
 Le réseau n'est jamais touché : `brvm_org.lire_cote` est remplacé par une
 séance fabriquée, comme le reste de la suite travaille sur les captures de
@@ -287,6 +289,39 @@ def test_l_echeance_choisie_tient_d_un_onglet_a_l_autre(lanceur):
     assert not at.exception, [str(e) for e in at.exception]
     assert at.segmented_control(key="horizon").value == 60
     assert "le trimestre qui vient (60 séances)" in _textes(at)
+
+
+def test_la_fiche_et_l_onglet_predictions_font_la_meme_reserve(lanceur):
+    """Une échéance dont l'avance n'est pas démontrée l'est sur les deux
+    onglets, ou sur aucun.
+
+    Le constat dépend des données — sur l'archive d'octobre 2026, le
+    trimestre n'est pas démontré et le mois l'est —, le test ne fige donc
+    pas lequel : il exige que la fiche dise ce que dit l'onglet. Sans
+    quoi une carte ☀️ au trimestre se lirait, dans la fiche, comme un avis
+    aussi solide que celui du mois.
+    """
+    at = _app(lanceur)
+    at.query_params["onglet"] = "action"
+    at.query_params["valeur"] = "SNTS"
+    at.run()
+    assert not at.exception, [str(e) for e in at.exception]
+    legendes = " ".join(c.value for c in at.caption)
+    trouve = re.search(r"À l'échéance d'(.+?), même l'avance", legendes)
+    dans_la_fiche = trouve.group(1) if trouve else ""
+
+    at.session_state["onglet"] = "🔮 Prédictions"
+    at.run()
+    for horizon, duree in ((20, "un mois"), (60, "un trimestre")):
+        at.segmented_control(key="horizon").set_value(horizon).run()
+        assert not at.exception, [str(e) for e in at.exception]
+        alertes = " ".join(w.value for w in at.warning)
+        dans_l_onglet = (f"À l'échéance d'{duree}, l'avance des favorites "
+                         "n'est pas démontrée" in alertes)
+        assert dans_l_onglet == (duree in dans_la_fiche), (
+            f"{duree} : l'onglet Prédictions "
+            f"{'émet' if dans_l_onglet else 'n’émet pas'} la réserve, la "
+            f"fiche {'non' if dans_l_onglet else 'si'}")
 
 
 def test_le_glossaire_se_filtre(lanceur):

@@ -34,7 +34,8 @@ ses icônes et ses chiffres.
 Le modèle ne devine pas le prix de demain. Il estime les chances qu'une
 action fasse **mieux que la moitié du marché** pendant **le mois qui vient**
 (20 séances) ou **le trimestre qui vient** (60 séances). Il est entraîné à
-part pour chaque échéance : les deux avis peuvent différer.
+part pour chaque échéance : les deux avis restent proches, mais peuvent
+différer.
 
 - **Une pièce de monnaie ferait 50 %.** Le modèle donne entre 44 % et 54 %
   environ : un léger penchant, jamais une certitude.
