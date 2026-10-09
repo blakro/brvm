@@ -22,7 +22,9 @@ Ce qui est testé ici est donc l'ÉTAT, pas le calcul :
 5. l'échéance choisie pour la prévision, le mois ou le trimestre, tient
    d'un onglet à l'autre ;
 6. une échéance dont l'avance n'est pas démontrée est signalée sur la
-   fiche d'une action comme dans l'onglet Prédictions.
+   fiche d'une action comme dans l'onglet Prédictions ;
+7. une échéance où le modèle échoue à sa porte de production le dit, sur
+   les deux onglets, au lieu d'afficher le classement de secours.
 
 Le réseau n'est jamais touché : `brvm_org.lire_cote` est remplacé par une
 séance fabriquée, comme le reste de la suite travaille sur les captures de
@@ -67,6 +69,9 @@ SEANCE_AFFICHEE = pedagogie.jour(SEANCE_SIMULEE)
 # Le premier rendu lit 6,7 Mo d'archive et trace plusieurs graphiques ; sur
 # un runner partagé, trois secondes ne suffisent pas.
 DELAI = 120
+
+# Les échéances de la météo du devin, en séances — `HORIZONS` dans l'app.
+HORIZONS_DE_L_APP = (20, 60)
 
 
 # Le lanceur est écrit sur disque plutôt que passé en fonction :
@@ -334,3 +339,83 @@ def test_le_glossaire_se_filtre(lanceur):
     textes = _textes(at)
     assert "Dividende</h4>" in textes
     assert "Volatilité</h4>" not in textes
+
+
+# DERNIERS DU FICHIER, ET CE N'EST PAS UN HASARD. La fixture ci-dessous vide
+# le cache de Streamlit, avant et après : les autres tests y ont rangé la
+# vraie prévision sous la même clé, et un cache plein la servirait sans
+# jamais appeler la validation truquée. Placés plus haut, ces tests
+# forceraient les suivants à tout recalculer ; ici, ils ne coûtent rien.
+
+@pytest.fixture
+def devin_qui_echoue(monkeypatch):
+    """La vraie validation, dont la porte de production se referme.
+
+    `valider` ne rend « composite » que si l'IC ou l'avance de ses favorites
+    est négatif hors échantillon : le faux échec reprend donc la seconde
+    cause, avec une avance négative, pour que la page reste vraisemblable.
+    Tout le reste est la vraie validation, à chaque échéance — allégée à
+    trois découpes et un seul membre du sac : mêmes pièces, quatre fois
+    moins de calcul, et il n'en faut pas plus pour refermer une porte.
+    """
+    from brvm import prediction
+    from brvm.config import charger
+
+    vraie = prediction.valider
+
+    def valider(cours, reglages=None, *args, **kwargs):
+        reglages = reglages or charger()
+        reglages = {**reglages, "prediction": {
+            **reglages.get("prediction", {}), "decoupes": 3, "membres_sac": 1}}
+        validation = vraie(cours, reglages, *args, **kwargs)
+        if validation["periodes"].empty:
+            return validation
+        modele = dict(validation["sources"]["combinaison"])
+        modele["avantage"] = {**modele["avantage"], "avantage": -0.002,
+                              "significatif": False}
+        return {**validation, "retenue": "composite",
+                "sources": {**validation["sources"], "combinaison": modele}}
+
+    monkeypatch.setattr(prediction, "valider", valider)
+    streamlit.cache_data.clear()
+    yield
+    streamlit.cache_data.clear()
+
+
+def test_un_devin_qui_echoue_se_tait(lanceur, devin_qui_echoue):
+    """LE GARDE-FOU. Quand le modèle échoue à sa porte de production,
+    `predire` se rabat sur le composite, et l'app affichait ce classement
+    de secours sous le nom du devin — avec, à côté, le bilan du modèle. La
+    page mêlait deux classements sans le dire, et le second a une avance
+    négative sur l'archive.
+
+    Le devin se tait désormais à l'échéance qui échoue : ni météo, ni
+    favori, ni piège des frais, mais son bilan, qui montre pourquoi. Et la
+    fiche le dit au lieu d'accuser l'action d'avoir été trop peu échangée.
+    """
+    at = _app(lanceur)
+    at.query_params["onglet"] = "action"
+    at.query_params["valeur"] = "SNTS"
+    at.run()
+    assert not at.exception, [str(e) for e in at.exception]
+    # Le titre de la carte, et non la phrase seule : la légende de la fiche
+    # la cite aussi.
+    assert _textes(at).count("<h3>Le devin se tait</h3>") == 2, \
+        "chaque échéance qui échoue doit avoir sa carte « Le devin se tait »"
+    assert not any("ne note que" in i.value for i in at.info), \
+        "la fiche accuse l'action au lieu de dire que le devin se tait"
+
+    at.session_state["onglet"] = "🔮 Prédictions"
+    at.run()
+    for horizon in HORIZONS_DE_L_APP:
+        at.segmented_control(key="horizon").set_value(horizon).run()
+        assert not at.exception, [str(e) for e in at.exception]
+        assert any("le devin se tait" in w.value for w in at.warning), \
+            f"échéance {horizon} : aucun avertissement d'échec"
+        textes = _textes(at)
+        assert "Bonnes réponses" in textes, "le bilan doit rester affiché"
+        for absent in ("La météo du devin", "Le favori du devin",
+                       "Le piège des frais", "Plutôt favorable"):
+            assert absent not in textes, \
+                f"échéance {horizon} : « {absent} » s'affiche alors que le " \
+                "devin a échoué"

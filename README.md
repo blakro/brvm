@@ -55,6 +55,10 @@ Pourquoi pas la semaine prochaine ? C'est là que le modèle classe le mieux,
 mais une météo de la semaine invite à acheter et vendre chaque semaine, et
 c'est ce que les frais punissent le plus : **−36 % par an**.
 
+Et si un jour le modèle ne faisait plus ses preuves à une échéance, l'app
+le dirait : « 🤐 le devin se tait », sans météo, plutôt qu'un avis qu'il ne
+peut pas défendre.
+
 Conclusion : c'est un indice de plus pour départager deux actions, pas un
 signal d'achat.
 
