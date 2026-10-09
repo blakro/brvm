@@ -496,6 +496,16 @@ def prevoir(_cours, _referentiel, cle, horizon: int) -> dict:
     permet de transposer de l'une à l'autre. Seules les pièces affichées
     sont gardées : la validation complète porte des matrices et des modèles
     dont l'app n'a pas l'usage.
+
+    QUAND LE MODÈLE ÉCHOUE À SA PORTE DE PRODUCTION, LE DEVIN SE TAIT.
+    `valider` rend alors « composite », et `predire` se rabat sur ce score
+    sans apprentissage — utile à la ligne de commande, qui doit bien classer
+    quelque chose, mais dont les dix premières ont fait moins bien que le
+    marché sur l'archive, aux deux échéances (-0,12 % par mois, -0,27 % par
+    trimestre en octobre 2026). L'afficher ici sous le nom du devin, à côté
+    du bilan du modèle, mêlerait deux classements sans le dire. `echoue` le
+    signale, les probabilités restent vides, et tout ce qui est rendu —
+    bilan comme avance — est celui du modèle : c'est lui que la page juge.
     """
     reglages = charger()
     reglages["prediction"]["horizon"] = int(horizon)
@@ -504,15 +514,26 @@ def prevoir(_cours, _referentiel, cle, horizon: int) -> dict:
         return {"pret": False, "horizon": validation.get("horizon"),
                 "lignes": validation.get("lignes", 0),
                 "minimum": validation.get("lignes_minimum", 0)}
-    probas = prediction.predire(_cours, reglages, referentiel=_referentiel,
-                                validation=validation)
+    echoue = validation.get("retenue") != "combinaison"
+    probas = (pd.DataFrame(columns=["ticker", "probabilite", "incertitude",
+                                    "rang_combine", "calibree"])
+              if echoue else
+              prediction.predire(_cours, reglages, referentiel=_referentiel,
+                                 validation=validation))
+    stabilite = validation.get("stabilite") or {}
+    # L'avance du MODÈLE, et non celle de ce qui part en production : les
+    # deux sont la même tant que la porte s'ouvre — vérifié —, et quand elle
+    # se ferme, c'est celle du modèle qui explique pourquoi.
+    modele = (validation.get("sources") or {}).get("combinaison") or {}
     return {
         "pret": True,
         "horizon": int(validation["horizon"]),
+        "echoue": echoue,
+        "ic": float(stabilite.get("ic", float("nan"))),
         "probas": probas,
         "periodes": validation["periodes"][["periode", "precision"]].copy(),
-        "avantage": validation.get("avantage") or {},
-        "stabilite": validation.get("stabilite") or {},
+        "avantage": modele.get("avantage") or validation.get("avantage") or {},
+        "stabilite": stabilite,
         "retenue": validation.get("retenue"),
         "motif": validation.get("motif"),
     }
@@ -652,6 +673,30 @@ def _horizon_en_mots(horizon: int) -> str:
     if horizon in HORIZONS:
         return f"{HORIZONS[horizon]['mots']} ({horizon} séances)"
     return f"les {horizon} prochaines séances"
+
+
+def _silence(devin: dict) -> str:
+    """Pourquoi le devin se tait à une échéance, dans les mots du lecteur.
+
+    Les deux causes sont celles de la porte de `prediction.valider` : un IC
+    négatif, ou des favorites qui ont perdu contre le marché. La troisième
+    phrase couvre une avance qu'on n'a pas pu mesurer.
+    """
+    ic = devin.get("ic", float("nan"))
+    ecart = (devin.get("avantage") or {}).get("avantage", float("nan"))
+    if pd.notna(ic) and ic <= 0:
+        return ("son classement n'a pas fait mieux que le hasard sur les "
+                "années qu'il n'avait jamais vues")
+    if pd.notna(ecart) and ecart <= 0:
+        return ("ses dix favorites ont fait moins bien que le marché sur les "
+                "années qu'il n'avait jamais vues")
+    return "il n'a pas fait ses preuves sur les années qu'il n'avait jamais vues"
+
+
+def _phrase(texte: str) -> str:
+    """Une majuscule en tête, sans toucher au reste, contrairement à
+    `str.capitalize`."""
+    return texte[:1].upper() + texte[1:]
 
 
 def _meteo_prevision(rang: float) -> tuple[str, str, str]:
@@ -1118,15 +1163,21 @@ if onglets[1].open:
                "L'avis du modèle de prévision, à un mois et à un trimestre — "
                "un indice, pas une promesse.")
         devins = {h: prevoir(cours, referentiel, CLE, h) for h in HORIZONS}
-        avis = {}
+        # Trois issues par échéance : un avis sur cette action, le silence
+        # d'un devin qui a échoué, ou rien — l'action n'est pas notée.
+        avis, silences = {}, {}
         for horizon, devin in devins.items():
-            if devin["pret"]:
-                ligne = devin["probas"][devin["probas"]["ticker"] == choix]
-                if not ligne.empty:
-                    avis[horizon] = (ligne.iloc[0], len(devin["probas"]))
+            if not devin["pret"]:
+                continue
+            if devin["echoue"]:
+                silences[horizon] = devin
+                continue
+            ligne = devin["probas"][devin["probas"]["ticker"] == choix]
+            if not ligne.empty:
+                avis[horizon] = (ligne.iloc[0], len(devin["probas"]))
         if not any(devin["pret"] for devin in devins.values()):
             st.info("Pas encore assez d'historique pour une prévision.")
-        elif not avis:
+        elif not avis and not silences:
             st.info(f"Pas de prévision pour {choix} : le modèle ne note que "
                     "les actions échangées à la dernière séance, et dont "
                     "l'historique est assez long.")
@@ -1135,6 +1186,19 @@ if onglets[1].open:
             for i, (colonne, horizon) in enumerate(zip(colonnes, HORIZONS),
                                                    start=1):
                 echeance = f'{HORIZONS[horizon]["bouton"]} · {horizon} séances'
+                if horizon in silences:
+                    colonne.markdown(
+                        f'<div class="carte anime d{i}" style="border-left:8px '
+                        f'solid {STABLE};background:linear-gradient(120deg,'
+                        f'{_rgba(STABLE, .14)},{SURFACE} 60%)">'
+                        f'<div class="echeance">{echeance}</div>'
+                        '<div class="meteo"><span class="emoji">🤐</span>'
+                        '<div><h3>Le devin se tait</h3>'
+                        f'<p>{_phrase(_silence(silences[horizon]))} : il ne '
+                        'donne pas d\'avis à cette échéance tant que c\'est '
+                        'le cas.</p></div></div></div>',
+                        unsafe_allow_html=True)
+                    continue
                 if horizon not in avis:
                     colonne.info(f"{echeance} : pas de prévision à cette "
                                  "échéance.")
@@ -1162,15 +1226,20 @@ if onglets[1].open:
             fragiles = [HORIZONS[h]["un"] for h, devin in devins.items()
                         if h in avis and devin["avantage"].get("dates")
                         and not devin["avantage"].get("significatif")]
-            jointes = " et d'".join(fragiles)
-            reserve = (f" À l'échéance d'{jointes}, même l'avance de ses "
-                       "favorites n'est pas démontrée." if fragiles else "")
-            st.caption("Une pièce de monnaie ferait 50 %. Le modèle ne s'en "
-                       "écarte que de quelques points : c'est un léger "
-                       "penchant, pas une certitude. Il est entraîné à part "
-                       "pour chaque échéance, d'où deux avis qui peuvent "
-                       f"différer.{reserve} Tous les détails dans l'onglet 🔮 "
-                       "Prédictions.")
+            phrases = []
+            if avis:
+                phrases.append("Une pièce de monnaie ferait 50 %. Le modèle ne "
+                               "s'en écarte que de quelques points : c'est un "
+                               "léger penchant, pas une certitude.")
+            if len(avis) > 1:
+                phrases.append("Il est entraîné à part pour chaque échéance, "
+                               "d'où deux avis qui peuvent différer.")
+            if fragiles:
+                jointes = " et d'".join(fragiles)
+                phrases.append(f"À l'échéance d'{jointes}, même l'avance de ses "
+                               "favorites n'est pas démontrée.")
+            phrases.append("Tous les détails dans l'onglet 🔮 Prédictions.")
+            st.caption(" ".join(phrases))
 
         _legende(
             "**Les 100 000 FCFA** : ce qu'aurait donné un achat il y a 1 mois, "
@@ -1193,6 +1262,9 @@ if onglets[1].open:
             "**Le mois / le trimestre qui vient** : les 20 ou 60 prochaines "
             "séances de bourse à partir de la dernière clôture, et non le "
             "mois du calendrier.",
+            "**🤐 Le devin se tait** : à une échéance où il n'a pas fait ses "
+            "preuves sur les années qu'il n'avait jamais vues, il ne donne "
+            "pas d'avis plutôt qu'un avis qu'il ne peut pas défendre.",
         )
 
 
@@ -1218,6 +1290,7 @@ if onglets[2].open:
             probas = devin["probas"]
             periodes = devin["periodes"]
             avantage = devin["avantage"]
+            echoue = devin["echoue"]
             precision = float(periodes["precision"].mean())
             annees_gagnees = int((periodes["precision"] > 0.5).sum())
             calibree = bool(probas["calibree"].all()) if not probas.empty else False
@@ -1232,12 +1305,25 @@ if onglets[2].open:
                 f'actions selon leurs chances de <b>faire mieux que la moitié '
                 f'du marché</b> pendant {_horizon_en_mots(horizon)}. '
                 'Prévoir la bourse, c\'est presque jouer à pile ou face — et '
-                'voici exactement de combien il fait mieux qu\'une pièce.</p>'
-                '</div><div><span class="piece">🪙</span></div></div>')
+                + ('voici exactement ce qu\'il vaut face à une pièce.' if echoue
+                   else 'voici exactement de combien il fait mieux qu\'une '
+                   'pièce.')
+                + '</p></div><div><span class="piece">🪙</span></div></div>')
 
+            # LE GARDE-FOU. Quand le modèle échoue à sa porte de production,
+            # `prevoir` ne rend aucune probabilité : la météo, le favori et le
+            # piège des frais disparaissent de cette échéance, et le bilan
+            # reste — c'est lui qui montre pourquoi. Voir `prevoir`.
+            if echoue:
+                st.warning(
+                    f"**À l'échéance d'{mots['un']}, le devin se tait.** "
+                    f"{_phrase(_silence(devin))}. Plutôt que d'afficher un "
+                    "classement qu'il ne peut pas défendre, il ne donne pas de "
+                    "météo à cette échéance tant que c'est le cas ; son bilan "
+                    "ci-dessous montre pourquoi.")
             if devin.get("motif"):
                 st.info(devin["motif"])
-            if not calibree:
+            if not calibree and not echoue:
                 st.warning("Calibrage indisponible : les pourcentages ci-dessous "
                            "sont des rangs, pas des probabilités.")
 
@@ -1252,10 +1338,12 @@ if onglets[2].open:
                   "🏆", 2, nombre=annees_gagnees)
             demontree = bool(avantage.get("significatif"))
             if avantage.get("dates"):
+                sens = ("de mieux que le marché" if avantage["avantage"] >= 0
+                        else "d'écart avec le marché")
                 _stat(c[2], "Avance de ses 10 favorites",
                       _pct(avantage["avantage"], signe=True),
-                      f"de mieux que le marché, par {mots['unite']}, en "
-                      "moyenne" + ("" if demontree else " — pas démontrée"),
+                      f"{sens}, par {mots['unite']}, en moyenne"
+                      + ("" if demontree or echoue else " — pas démontrée"),
                       (CYAN, TURQUOISE), "🚀", 3)
             else:
                 _stat(c[2], "Avance de ses favorites", "—",
@@ -1269,7 +1357,7 @@ if onglets[2].open:
             # ans. L'avance peut alors rester positive sans sortir de sa marge
             # d'erreur — c'est le cas au trimestre sur l'archive d'octobre
             # 2026 —, et l'afficher sans le dire la ferait passer pour acquise.
-            if avantage.get("dates") and not demontree:
+            if avantage.get("dates") and not demontree and not echoue:
                 st.warning(
                     f"**À l'échéance d'{mots['un']}, l'avance des favorites "
                     "n'est pas démontrée.** Le bilan ne repose que sur "
@@ -1318,152 +1406,156 @@ if onglets[2].open:
                 "bien qu'elle. L'axe est resserré pour que les écarts se "
                 "voient : ils sont petits.")
 
-            # --- La météo de l'échéance choisie -------------------------
-            _titre(f"🌦️ La météo du devin pour {_horizon_en_mots(horizon)}",
-                   "Les actions échangées à la dernière séance, rangées en "
-                   "trois groupes égaux selon l'avis du modèle. C'est un "
-                   "classement relatif : même les ☀️ restent autour de 50 %.")
-            colonnes = st.columns(3)
-            groupes = [("☀️", "Plutôt favorable", HAUSSE, lambda r: r >= 2 / 3),
-                       ("⛅", "Neutre", AMBRE, lambda r: 1 / 3 <= r < 2 / 3),
-                       ("🌧️", "Plutôt défavorable", BAISSE, lambda r: r < 1 / 3)]
-            for i, (symbole, mot, teinte_g, regle) in enumerate(groupes):
-                membres = probas[probas["rang_combine"].map(regle)]
-                puces = "".join(
-                    f'<span class="puce-valeur" title="{html.escape(_nom(t))}" '
-                    f'style="background:{_rgba(teinte_g, .14)};color:{teinte_g}">'
-                    f'{html.escape(t)} · {_pct(p)}</span>'
-                    for t, p in zip(membres["ticker"], membres["probabilite"]))
-                colonnes[i].markdown(
-                    f'<div class="carte anime d{i + 1}" style="border-top:6px '
-                    f'solid {teinte_g};background:linear-gradient(180deg,'
-                    f'{_rgba(teinte_g, .12)},{SURFACE} 55%)">'
-                    f'<div style="font-size:2.4rem">{symbole}</div>'
-                    f'<div style="font-weight:800;font-size:1.15rem">{mot}</div>'
-                    f'<div style="color:{DOUX};font-size:.85rem;'
-                    f'margin-bottom:.4rem">{len(membres)} actions</div>'
-                    f'{puces}</div>', unsafe_allow_html=True)
+            # Le devin qui se tait n'a ni météo, ni favori, ni frais à
+            # faire payer : ces sections supposent un classement à suivre.
+            if not echoue:
+                # --- La météo de l'échéance choisie -------------------------
+                _titre(f"🌦️ La météo du devin pour {_horizon_en_mots(horizon)}",
+                       "Les actions échangées à la dernière séance, rangées en "
+                       "trois groupes égaux selon l'avis du modèle. C'est un "
+                       "classement relatif : même les ☀️ restent autour de 50 %.")
+                colonnes = st.columns(3)
+                groupes = [
+                    ("☀️", "Plutôt favorable", HAUSSE, lambda r: r >= 2 / 3),
+                    ("⛅", "Neutre", AMBRE, lambda r: 1 / 3 <= r < 2 / 3),
+                    ("🌧️", "Plutôt défavorable", BAISSE, lambda r: r < 1 / 3)]
+                for i, (symbole, mot, teinte_g, regle) in enumerate(groupes):
+                    membres = probas[probas["rang_combine"].map(regle)]
+                    puces = "".join(
+                        f'<span class="puce-valeur" title="{html.escape(_nom(t))}" '
+                        f'style="background:{_rgba(teinte_g, .14)};color:{teinte_g}">'
+                        f'{html.escape(t)} · {_pct(p)}</span>'
+                        for t, p in zip(membres["ticker"], membres["probabilite"]))
+                    colonnes[i].markdown(
+                        f'<div class="carte anime d{i + 1}" style="border-top:6px '
+                        f'solid {teinte_g};background:linear-gradient(180deg,'
+                        f'{_rgba(teinte_g, .12)},{SURFACE} 55%)">'
+                        f'<div style="font-size:2.4rem">{symbole}</div>'
+                        f'<div style="font-weight:800;font-size:1.15rem">{mot}</div>'
+                        f'<div style="color:{DOUX};font-size:.85rem;'
+                        f'margin-bottom:.4rem">{len(membres)} actions</div>'
+                        f'{puces}</div>', unsafe_allow_html=True)
 
-            if not probas.empty:
-                meilleure = probas.iloc[0]
-                pire = probas.iloc[-1]
-                st.write("")
-                _html(
-                    '<div class="carte anime">'
-                    f'<b>🥇 Le favori du devin : {html.escape(meilleure["ticker"])}'
-                    f'</b> ({html.escape(_nom(meilleure["ticker"]))}), avec '
-                    f'<b>{_pct(meilleure["probabilite"])}</b> de chances. '
-                    f'Le moins bien placé, {html.escape(pire["ticker"])}, en a '
-                    f'<b>{_pct(pire["probabilite"])}</b>. Entre le premier et le '
-                    'dernier, l\'écart tient en quelques points : <b>même le '
-                    'favori perd presque une fois sur deux</b>.'
-                    f'{_regle_piece(float(meilleure["probabilite"]))}</div>')
+                if not probas.empty:
+                    meilleure = probas.iloc[0]
+                    pire = probas.iloc[-1]
+                    st.write("")
+                    _html(
+                        '<div class="carte anime">'
+                        f'<b>🥇 Le favori du devin : {html.escape(meilleure["ticker"])}'
+                        f'</b> ({html.escape(_nom(meilleure["ticker"]))}), avec '
+                        f'<b>{_pct(meilleure["probabilite"])}</b> de chances. '
+                        f'Le moins bien placé, {html.escape(pire["ticker"])}, en a '
+                        f'<b>{_pct(pire["probabilite"])}</b>. Entre le premier et le '
+                        'dernier, l\'écart tient en quelques points : <b>même le '
+                        'favori perd presque une fois sur deux</b>.'
+                        f'{_regle_piece(float(meilleure["probabilite"]))}</div>')
 
-                with st.expander("📊 Le détail, action par action"):
-                    detail = probas.assign(
-                        nom=probas["ticker"].map(_nom),
-                        meteo=probas["rang_combine"].map(
-                            lambda r: " ".join(_meteo_prevision(r)[:2])))
-                    st.altair_chart(
-                        alt.Chart(detail).mark_bar(
-                            cornerRadiusEnd=6, height=12).encode(
-                            x=alt.X("probabilite:Q", title="chances de faire "
-                                    "mieux que la moitié du marché",
-                                    scale=alt.Scale(domain=[0.4, 0.6]),
-                                    axis=alt.Axis(format=".0%")),
-                            y=alt.Y("ticker:N", sort="-x", title=None,
-                                    axis=alt.Axis(labelOverlap=False)),
-                            color=alt.Color("rang_combine:Q", legend=None,
-                                            scale=alt.Scale(range=[
-                                                BAISSE, AMBRE, HAUSSE])),
-                            tooltip=[alt.Tooltip("ticker:N", title="Symbole"),
-                                     alt.Tooltip("nom:N", title="Société"),
-                                     alt.Tooltip("probabilite:Q",
-                                                 title="Chances", format=".1%"),
-                                     alt.Tooltip("meteo:N", title="Météo")])
-                        .properties(height=max(260, 17 * len(detail)))
-                        + alt.Chart(pd.DataFrame({"x": [0.5]})).mark_rule(
-                            color=ENCRE, strokeDash=[6, 4]).encode(x="x:Q"),
-                        width="stretch")
-                    st.dataframe(
-                        detail[["ticker", "nom", "meteo", "probabilite",
-                                "incertitude"]],
-                        width="stretch", hide_index=True,
-                        column_config={
-                            "ticker": st.column_config.TextColumn("Symbole"),
-                            "nom": st.column_config.TextColumn("Société"),
-                            "meteo": st.column_config.TextColumn("Météo"),
-                            "probabilite": st.column_config.NumberColumn(
-                                "Chances", format="percent"),
-                            "incertitude": st.column_config.NumberColumn(
-                                "± incertitude", format="percent",
-                                help="De combien l'estimation bougerait avec "
-                                     "un autre historique. L'incertitude du "
-                                     "marché lui-même est bien plus grande."),
-                        })
+                    with st.expander("📊 Le détail, action par action"):
+                        detail = probas.assign(
+                            nom=probas["ticker"].map(_nom),
+                            meteo=probas["rang_combine"].map(
+                                lambda r: " ".join(_meteo_prevision(r)[:2])))
+                        st.altair_chart(
+                            alt.Chart(detail).mark_bar(
+                                cornerRadiusEnd=6, height=12).encode(
+                                x=alt.X("probabilite:Q", title="chances de faire "
+                                        "mieux que la moitié du marché",
+                                        scale=alt.Scale(domain=[0.4, 0.6]),
+                                        axis=alt.Axis(format=".0%")),
+                                y=alt.Y("ticker:N", sort="-x", title=None,
+                                        axis=alt.Axis(labelOverlap=False)),
+                                color=alt.Color("rang_combine:Q", legend=None,
+                                                scale=alt.Scale(range=[
+                                                    BAISSE, AMBRE, HAUSSE])),
+                                tooltip=[alt.Tooltip("ticker:N", title="Symbole"),
+                                         alt.Tooltip("nom:N", title="Société"),
+                                         alt.Tooltip("probabilite:Q",
+                                                     title="Chances", format=".1%"),
+                                         alt.Tooltip("meteo:N", title="Météo")])
+                            .properties(height=max(260, 17 * len(detail)))
+                            + alt.Chart(pd.DataFrame({"x": [0.5]})).mark_rule(
+                                color=ENCRE, strokeDash=[6, 4]).encode(x="x:Q"),
+                            width="stretch")
+                        st.dataframe(
+                            detail[["ticker", "nom", "meteo", "probabilite",
+                                    "incertitude"]],
+                            width="stretch", hide_index=True,
+                            column_config={
+                                "ticker": st.column_config.TextColumn("Symbole"),
+                                "nom": st.column_config.TextColumn("Société"),
+                                "meteo": st.column_config.TextColumn("Météo"),
+                                "probabilite": st.column_config.NumberColumn(
+                                    "Chances", format="percent"),
+                                "incertitude": st.column_config.NumberColumn(
+                                    "± incertitude", format="percent",
+                                    help="De combien l'estimation bougerait avec "
+                                         "un autre historique. L'incertitude du "
+                                         "marché lui-même est bien plus grande."),
+                            })
 
-            # --- Le piège des frais -------------------------------------
-            _titre("🪤 Le piège des frais",
-                   "Pourquoi suivre le devin à la lettre ferait perdre de "
-                   "l'argent.")
-            g, d = st.columns(2)
-            _stat(g, "Sans aucun frais",
-                  f"{_pct(mots['sans_frais'], signe=True)} / an",
-                  "de mieux que le marché, en suivant ses favorites chaque "
-                  f"{mots['unite']}", ("#059669", "#34d399"), "😃", 1)
-            _stat(d, "Avec des frais réalistes (1,5 % par opération)",
-                  f"{_pct(mots['avec_frais'], signe=True)} / an",
-                  "de moins bien que le marché : les frais dévorent l'avance",
-                  ("#e11d48", "#fb7185"), "😱", 2)
-            if avantage.get("dates") and avantage.get("avantage", 0) > 0:
-                a_rembourser = max(1, round(aller_retour / avantage["avantage"]))
-                duree = (f"{a_rembourser} "
-                         + (mots["unite"] if a_rembourser == 1
-                            else mots["unites"]))
-                st.write("")
-                _html(
-                    '<div class="lecon anime">'
-                    '<b>🧮 Le calcul qui tue :</b> ses favorites prennent en '
-                    f'moyenne <b>{_pct(avantage["avantage"], signe=True)}</b> '
-                    f'd\'avance sur le marché en {mots["un"]}. Un achat suivi '
-                    f'd\'une revente coûte environ <b>{_pct(aller_retour)}</b>. '
-                    f'Il faudrait donc environ <b>{duree}</b> '
-                    'd\'avance pour rembourser les frais d\'une seule '
-                    'opération… alors que la prévision ne vaut que pour '
-                    f'{mots["un"]}.</div>')
-            st.caption(
-                "Les deux rendements annuels viennent du rejeu de la stratégie "
-                "— le modèle de cette échéance, ses favorites rachetées chaque "
-                f"{mots['unite']} — sur le prix seul (hors dividendes), en "
-                "moyenne sur plusieurs calendriers, sur l'archive arrêtée au "
-                f"{ARCHIVE_DU_REJEU} (détails et commandes pour le refaire dans "
-                "docs/technique.md). L'avance mesurée plus haut compte chaque "
-                "séance, au prix du jour de la décision ; le rejeu, lui, "
-                "achète à la séance suivante et seulement une fois par "
-                f"{mots['unite']}, comme on le ferait vraiment : il en garde "
-                "moins. Le reste de la page est recalculé sur les données du "
-                "jour.")
+                # --- Le piège des frais -------------------------------------
+                _titre("🪤 Le piège des frais",
+                       "Pourquoi suivre le devin à la lettre ferait perdre de "
+                       "l'argent.")
+                g, d = st.columns(2)
+                _stat(g, "Sans aucun frais",
+                      f"{_pct(mots['sans_frais'], signe=True)} / an",
+                      "de mieux que le marché, en suivant ses favorites chaque "
+                      f"{mots['unite']}", ("#059669", "#34d399"), "😃", 1)
+                _stat(d, "Avec des frais réalistes (1,5 % par opération)",
+                      f"{_pct(mots['avec_frais'], signe=True)} / an",
+                      "de moins bien que le marché : les frais dévorent l'avance",
+                      ("#e11d48", "#fb7185"), "😱", 2)
+                if avantage.get("dates") and avantage.get("avantage", 0) > 0:
+                    a_rembourser = max(1, round(aller_retour / avantage["avantage"]))
+                    duree = (f"{a_rembourser} "
+                             + (mots["unite"] if a_rembourser == 1
+                                else mots["unites"]))
+                    st.write("")
+                    _html(
+                        '<div class="lecon anime">'
+                        '<b>🧮 Le calcul qui tue :</b> ses favorites prennent en '
+                        f'moyenne <b>{_pct(avantage["avantage"], signe=True)}</b> '
+                        f'd\'avance sur le marché en {mots["un"]}. Un achat suivi '
+                        f'd\'une revente coûte environ <b>{_pct(aller_retour)}</b>. '
+                        f'Il faudrait donc environ <b>{duree}</b> '
+                        'd\'avance pour rembourser les frais d\'une seule '
+                        'opération… alors que la prévision ne vaut que pour '
+                        f'{mots["un"]}.</div>')
+                st.caption(
+                    "Les deux rendements annuels viennent du rejeu de la stratégie "
+                    "— le modèle de cette échéance, ses favorites rachetées chaque "
+                    f"{mots['unite']} — sur le prix seul (hors dividendes), en "
+                    "moyenne sur plusieurs calendriers, sur l'archive arrêtée au "
+                    f"{ARCHIVE_DU_REJEU} (détails et commandes pour le refaire dans "
+                    "docs/technique.md). L'avance mesurée plus haut compte chaque "
+                    "séance, au prix du jour de la décision ; le rejeu, lui, "
+                    "achète à la séance suivante et seulement une fois par "
+                    f"{mots['unite']}, comme on le ferait vraiment : il en garde "
+                    "moins. Le reste de la page est recalculé sur les données du "
+                    "jour.")
 
-            _titre("🤔 Alors, à quoi sert le devin ?")
-            c = st.columns(3)
-            usages = [
-                ("✅", "Un indice de plus", "Pour départager deux actions qui "
-                 "vous plaisent pour d'autres raisons (dividende, facilité de "
-                 "revente).", HAUSSE),
-                ("🚫", "Pas un signal d'achat", "Acheter et vendre chaque "
-                 f"{mots['unite']} selon ses favorites coûte plus en frais que "
-                 "ça ne rapporte.", BAISSE),
-                ("🧘", "La patience paie mieux", "Sur ce marché, ce qui rapporte "
-                 "régulièrement, ce sont les dividendes d'actions gardées "
-                 "longtemps.", VIOLET),
-            ]
-            for i, (emo, quoi, texte, teinte_u) in enumerate(usages):
-                c[i].markdown(
-                    f'<div class="carte mot anime d{i + 1}" style="'
-                    f'border-left-color:{teinte_u};background:linear-gradient('
-                    f'120deg,{_rgba(teinte_u, .12)},{SURFACE} 70%)">'
-                    f'<div style="font-size:2rem">{emo}</div><h4>{quoi}</h4>'
-                    f'<p>{texte}</p></div>', unsafe_allow_html=True)
+                _titre("🤔 Alors, à quoi sert le devin ?")
+                c = st.columns(3)
+                usages = [
+                    ("✅", "Un indice de plus", "Pour départager deux actions qui "
+                     "vous plaisent pour d'autres raisons (dividende, facilité de "
+                     "revente).", HAUSSE),
+                    ("🚫", "Pas un signal d'achat", "Acheter et vendre chaque "
+                     f"{mots['unite']} selon ses favorites coûte plus en frais que "
+                     "ça ne rapporte.", BAISSE),
+                    ("🧘", "La patience paie mieux", "Sur ce marché, ce qui rapporte "
+                     "régulièrement, ce sont les dividendes d'actions gardées "
+                     "longtemps.", VIOLET),
+                ]
+                for i, (emo, quoi, texte, teinte_u) in enumerate(usages):
+                    c[i].markdown(
+                        f'<div class="carte mot anime d{i + 1}" style="'
+                        f'border-left-color:{teinte_u};background:linear-gradient('
+                        f'120deg,{_rgba(teinte_u, .12)},{SURFACE} 70%)">'
+                        f'<div style="font-size:2rem">{emo}</div><h4>{quoi}</h4>'
+                        f'<p>{texte}</p></div>', unsafe_allow_html=True)
 
             _legende(
                 "**Faire mieux que la moitié du marché** : sur la période, "
@@ -1491,6 +1583,10 @@ if onglets[2].open:
                 "mois du calendrier. Le devin est entraîné à part pour chaque "
                 "échéance : son bilan, sa météo et ses frais changent avec "
                 "elle.",
+                "**🤐 Le devin se tait** : à une échéance où il n'a pas fait "
+                "ses preuves sur les années qu'il n'avait jamais vues, il ne "
+                "donne pas de météo plutôt qu'une météo qu'il ne peut pas "
+                "défendre. Son bilan reste affiché : c'est lui qui dit pourquoi.",
             )
 
 

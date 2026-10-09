@@ -757,7 +757,8 @@ ne peut lire ne protège personne.
 - **La prédiction ne se montre jamais sans son bilan ni sans les frais** :
   comparée à une pièce de monnaie, avec le nombre d'années où elle a eu
   raison, et le calcul qui montre que 3 % de frais effacent son avance. Et
-  quand cette avance n'est pas démontrée, comme au trimestre, elle le dit.
+  quand cette avance n'est pas démontrée, comme au trimestre, elle le dit ;
+  quand le modèle échoue à une échéance, elle s'y tait.
 
 ### Ce que ça change pour vous
 
@@ -888,6 +889,19 @@ significatif, et au mois entre 2,6 et 3,5, toujours significatif ; la porte
 de production s'ouvre aux deux échéances sur les six. L'onglet Prédictions
 et la fiche d'une action le disent en clair chaque fois que
 `mesure_avantage` rend `significatif` faux, quelle que soit l'échéance.
+
+**Et si le modèle échoue à une échéance, le devin s'y tait.** La porte de
+`valider` se referme quand l'IC ou l'avance des favorites est négatif hors
+échantillon ; `predire` se rabat alors sur le composite, qui doit bien
+classer quelque chose pour la ligne de commande, mais dont les dix
+premières font moins bien que le marché aux deux échéances (−0,12 % par
+mois, −0,27 % par trimestre en octobre 2026). L'app n'affiche jamais ce
+classement de secours sous le nom du devin. À l'échéance qui échoue,
+l'onglet Prédictions garde le bilan du modèle — c'est lui qui montre
+pourquoi — et retire la météo, le favori et le piège des frais ; la fiche
+d'une action y montre « 🤐 Le devin se tait ». Le cas ne s'est présenté sur
+aucune des six archives ci-dessus ; un test le provoque, en refermant la
+porte d'une vraie validation.
 
 Le piège des frais, ensuite : rejeu du modèle **de l'échéance**, ses
 favorites rachetées **à la même cadence**, prix seul, écart annuel contre
