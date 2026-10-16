@@ -446,7 +446,7 @@ def neutraliser_secteur(rangs: pd.Series, dates: pd.Series,
 
     POURQUOI. Un rang centile calculé sur toute la cote mesure en partie
     « est-ce une banque ». Les Services Financiers pèsent 34,5 % de
-    l'univers coté et 16 des 47 lignes du référentiel ; quand le secteur
+    l'univers coté et 17 des 48 lignes du référentiel ; quand le secteur
     entier monte, ses valeurs montent dans le classement ensemble, sans
     qu'aucune n'ait rien montré. Mesuré hors échantillon sur l'archive : sans
     neutralisation, les dix premiers du classement sont à 41,2 % des Services
