@@ -104,8 +104,8 @@ SELECTEURS = {
         #
         # La cote, elle, porte « Symbole » et « Nom » pour les 47 sociétés,
         # y compris celles qui n'ont pas échangé. C'est donc la source du
-        # couple ticker/nom. Le secteur n'y figure pas et reste vide : voir
-        # `lire_referentiel`, qui documente d'où le tirer le jour venu.
+        # couple ticker/nom. Le secteur n'y figure pas : `lire_secteurs` le
+        # tire des vues filtrées de la cote.
         "url": "https://www.brvm.org/fr/cours-actions/0",
         "tableaux": [
             "#block-system-main table",
@@ -532,25 +532,18 @@ def lire_referentiel(source: str | Path | None = None) -> pd.DataFrame:
     le commentaire de `SELECTEURS['societes']` pour les deux pages
     écartées.
 
-    `secteur` sort donc toujours vide aujourd'hui. Pour le renseigner sans
-    rien inventer, la piste vérifiée est la cote elle-même : son menu
-    filtre par secteur via sept URL libellées, relevées le 27/07/2026 —
-    /fr/cours-actions/194 « Consommation de Base », 195 « Consommation
-    Discrétionnaire », 196 « Energie », 197 « Industriels », 198
-    « Services Financiers », 199 « Services Publics », 200
-    « Télécommunications ». Sept requêtes donnent l'appartenance de chaque
-    ticker. Non implémenté : ces vues n'ont pas encore été observées, et
-    coder à l'aveugle une correspondance ticker → secteur produirait
-    exactement le genre de donnée fausse et plausible que ce module
-    s'attache à refuser.
+    `secteur` sort donc toujours vide ici : la cote ne le porte pas. C'est
+    `lire_secteurs` qui le renseigne, une requête par vue filtrée de la
+    cote — /fr/cours-actions/194 « Consommation de Base » … 200
+    « Télécommunications », voir `SECTEURS` — et `referentiel` qui
+    assemble les deux.
 
-    PIÈGE À CONNAÎTRE AVANT DE L'IMPLÉMENTER : un identifiant de secteur
+    LE PIÈGE QUE `lire_secteurs` DÉJOUE : un identifiant de secteur
     inconnu ne provoque pas de 404, le site sert la cote entière. Vérifié
     le 27/07/2026 sur /fr/cours-actions/$n — 47 lignes, exactement les
     tickers de la cote. Un identifiant périmé ou mal recopié rangerait donc
-    les 47 sociétés dans un seul secteur, sans que rien n'échoue. Toute
-    lecture sectorielle doit se valider sur le nombre de lignes : une vue
-    de secteur en compte nécessairement moins que la cote.
+    toutes les sociétés dans un seul secteur, sans que rien n'échoue. D'où
+    le contrôle du titre de chaque vue, qui doit nommer le secteur demandé.
     """
     morceaux, connus = [], set()
     for html in _pages("societes", source):
@@ -815,8 +808,11 @@ def referentiel_amorce() -> pd.DataFrame:
     """Référentiel de secours, lu dans `data/referentiel_amorce.csv`.
 
     Volontairement lu sur disque et non codé en dur : cette liste a été
-    constituée de mémoire et doit être remplacée par la cote officielle.
-    Un référentiel figé dans le code ne se corrige pas, il se recopie.
+    constituée de mémoire, puis vérifiée le 16/10/2026 contre les sept vues
+    sectorielles de brvm.org — 48 sociétés, Bridge Bank (BBGC, cotée le
+    24/09/2026) ajoutée ce jour-là. Les introductions suivantes ne s'y
+    ajoutent pas d'elles-mêmes. Un référentiel figé dans le code ne se
+    corrige pas, il se recopie.
     """
     fichier = RACINE / "data" / "referentiel_amorce.csv"
     if not fichier.exists():
