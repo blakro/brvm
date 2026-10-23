@@ -1,0 +1,26 @@
+version: 2
+
+# LA CONTREPARTIE DE L'ÉPINGLAGE. Les actions pointent sur un commit
+# exact, et un commit ne bouge pas : c'est ce qui protège la clé de
+# `versement.yml`, mais c'est aussi ce qui priverait le dépôt des
+# correctifs de leurs auteurs. Dependabot propose chaque nouvelle
+# version en pull request — nouveau commit, version en commentaire —,
+# `tests.yml` la joue, et rien n'entre sur main sans être relu.
+#
+# Les actions seulement. Les dépendances Python sont des minimums
+# (`pandas>=2.0`) et non des versions figées : l'installation prend déjà
+# la dernière, il n'y a rien à faire avancer.
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    # Une seule pull request par semaine pour toutes les actions, plutôt
+    # qu'une par action : quatre relectures du même geste n'apprennent
+    # rien de plus qu'une.
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "Actions"
