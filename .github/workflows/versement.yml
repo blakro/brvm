@@ -139,11 +139,30 @@ jobs:
           # L'ingestion passe en premier parce que c'est d'elle, et d'elle
           # seule, qu'on retient le référentiel : le rapatriement lit un
           # historique par valeur et ne rafraîchit pas la liste des cotées.
+          #
+          # SEULES LES EXÉCUTIONS DE CONFIANCE COMPTENT. Le dépôt est public :
+          # une pull request venue d'un fork peut réécrire `ingestion.yml`
+          # pour qu'il tourne sur `pull_request`, et c'est SA version du
+          # fichier que GitHub exécute. L'exécution est rangée sous le même
+          # workflow, réussit, et dépose l'`archive-<run>` de son choix —
+          # que cette étape aurait versée, signée, sur `main`.
+          #
+          # Ne restent donc que les événements qu'un tiers ne peut pas
+          # déclencher : `schedule`, qui tourne sur la branche par défaut,
+          # et `workflow_dispatch`, qui demande un droit d'écriture. Le code
+          # doit en outre venir de CE dépôt, pas d'un fork.
+          FIABLES = {"schedule", "workflow_dispatch"}
           runs = []
           for atelier in ("ingestion.yml", "rapatriement.yml"):
-              runs += [(atelier, r) for r in json.loads(lire(
-                  f"{RACINE}/actions/workflows/{atelier}/runs"
-                  f"?status=success&per_page={combien}"))["workflow_runs"]]
+              for r in json.loads(lire(
+                      f"{RACINE}/actions/workflows/{atelier}/runs"
+                      f"?status=success&per_page={combien}"))["workflow_runs"]:
+                  origine = (r.get("head_repository") or {}).get("full_name")
+                  if r.get("event") in FIABLES and origine == DEPOT:
+                      runs.append((atelier, r))
+                  else:
+                      print(f"  exécution {r['id']} IGNORÉE : événement "
+                            f"{r.get('event')!r}, code de {origine!r}")
 
           nouvelles: dict[tuple[str, str], str] = {}
           for atelier, run in runs:
@@ -270,7 +289,8 @@ jobs:
         id: appliquer
         run: |
           python - <<'PY'
-          import os, shutil
+          import os, re, shutil
+          from datetime import date, datetime, timezone
 
 
           def cle(ligne: str) -> tuple[str, str]:
@@ -300,6 +320,31 @@ jobs:
           quarantaine: dict[str, list[str]] = {}
           if tete != entete:
               refus.append(f"en-têtes différents : {tete!r} vs {entete!r}")
+
+          # LA FORME DE CHAQUE LIGNE, AVANT SON CONTENU. Rien ne vérifiait
+          # qu'une « date » en soit une : tout texte qui se trie après la
+          # dernière séance — « 9999-… », « z… » — passait pour une séance
+          # neuve, et l'app l'aurait affichée comme la dernière, au besoin
+          # en HTML. Une date réelle, au format ISO, pas dans le futur ; un
+          # ticker en majuscules ; autant de champs que l'en-tête.
+          aujourdhui = datetime.now(timezone.utc).date()
+          largeur = len(entete.split(","))
+          malformees = []
+          for ligne in incr:
+              champs = ligne.split(",")
+              try:
+                  jour = date.fromisoformat(champs[0])
+              except ValueError:
+                  jour = None
+              if (len(champs) != largeur
+                      or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", champs[0])
+                      or jour is None or jour > aujourdhui
+                      or not re.fullmatch(r"[A-Z0-9]{2,10}", champs[1])):
+                  malformees.append(ligne[:60])
+          if malformees:
+              refus.append(f"{len(malformees)} lignes malformées "
+                           f"(date, ticker ou nombre de champs) : "
+                           f"{malformees[:3]}")
 
           connues = {cle(l) for l in archive}
           deja = [l for l in incr if cle(l) in connues]
@@ -469,9 +514,33 @@ jobs:
           # journal doit encore trouver `referentiel.csv` à la racine pour
           # l'émettre. Le déplacer privait le filet de la moitié de ce
           # qu'il doit rattraper.
+          #
+          # MAIS PAS SANS UN REGARD. Il remplace la table entière sans
+          # aucun des contrôles des cours : il doit au moins avoir le même
+          # en-tête que celui du dépôt, des tickers bien formés, et ne pas
+          # fondre de plus de moitié. Sinon on garde l'ancien, et on le dit.
           if os.path.exists("referentiel.csv"):
-              shutil.copy("referentiel.csv", "data/referentiel.csv")
-              print("référentiel remplacé par le plus récent")
+              import csv
+              with open("data/referentiel.csv", encoding="utf-8") as f:
+                  actuel = list(csv.reader(f))
+              with open("referentiel.csv", encoding="utf-8") as f:
+                  neuf = list(csv.reader(f))
+              doutes = []
+              if not neuf or neuf[0] != actuel[0]:
+                  doutes.append("en-tête différent")
+              elif any(len(l) != len(actuel[0])
+                       or not re.fullmatch(r"[A-Z0-9]{2,10}", l[0])
+                       for l in neuf[1:]):
+                  doutes.append("ligne malformée")
+              elif len(neuf) < len(actuel) / 2:
+                  doutes.append(f"{len(neuf) - 1} valeurs contre "
+                                f"{len(actuel) - 1}")
+              if doutes:
+                  print(f"référentiel de l'artefact ÉCARTÉ ({', '.join(doutes)}) "
+                        "— l'ancien est gardé.")
+              else:
+                  shutil.copy("referentiel.csv", "data/referentiel.csv")
+                  print("référentiel remplacé par le plus récent")
 
           dates = sorted({d for d, _ in (cle(l) for l in incr)})
           print(f"appliqué : +{len(incr)} lignes, séances {', '.join(dates)}")

@@ -53,6 +53,9 @@ def test_les_dates_se_lisent_en_francais():
     # Une date illisible ressort telle quelle plutôt que de faire tomber
     # la page : c'est l'archive qu'il faudra corriger, pas l'affichage.
     assert pedagogie.jour("pas une date") == "pas une date"
+    # … mais échappée : l'app l'insère dans du HTML.
+    assert (pedagogie.jour('z<img src=x onerror="alert(1)">')
+            == 'z&lt;img src=x onerror=&quot;alert(1)&quot;&gt;')
 
 
 def test_l_ordinal_se_lit_en_francais():

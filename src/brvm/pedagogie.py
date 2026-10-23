@@ -16,6 +16,7 @@ inaperçue.
 
 from __future__ import annotations
 
+import html
 from datetime import date, datetime
 
 MOIS = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet",
@@ -67,6 +68,10 @@ def jour(valeur: str | date | None) -> str:
     L'ISO est le bon format pour un fichier et le mauvais pour une phrase :
     il se lit chiffre par chiffre, alors que le reste de la phrase se lit
     d'un trait.
+
+    Une date illisible ressort telle quelle, mais ÉCHAPPÉE : l'app insère
+    ce texte dans du HTML, et une « date » venue d'une archive corrompue
+    ne doit pas pouvoir y injecter de balise.
     """
     if valeur is None:
         return "—"
@@ -74,5 +79,5 @@ def jour(valeur: str | date | None) -> str:
         try:
             valeur = datetime.strptime(valeur[:10], "%Y-%m-%d").date()
         except ValueError:
-            return str(valeur)
+            return html.escape(str(valeur))
     return f"{valeur.day} {MOIS[valeur.month - 1]} {valeur.year}"

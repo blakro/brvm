@@ -127,14 +127,34 @@ jobs:
           python -m brvm importer
           python -m brvm dividendes
 
+      # LES SAISIES PASSENT PAR L'ENVIRONNEMENT, JAMAIS PAR `${{ }}` DANS LE
+      # SCRIPT. GitHub substitue l'expression avant que bash ne lise la
+      # ligne : un « ticker » comme `X; commande` devenait du shell. Une
+      # variable, elle, reste une donnée — bash ne réinterprète pas ce
+      # qu'elle contient.
+      #
+      # Les tickers sont découpés aux espaces dans un tableau, comme le
+      # faisait l'ancienne substitution, mais sans expansion de motifs.
       - name: Rapatrier
         if: ${{ !inputs.sonde }}
+        env:
+          DEBUT: ${{ inputs.debut }}
+          FIN: ${{ inputs.fin }}
+          PAUSE: ${{ inputs.pause }}
+          VOLUME: ${{ inputs.volume }}
+          TICKERS: ${{ inputs.tickers }}
         run: |
+          options=()
+          if [ -n "$VOLUME" ]; then
+            options+=(--volume "$VOLUME")
+          fi
+          if [ -n "$TICKERS" ]; then
+            read -ra liste <<< "$TICKERS"
+            options+=(--tickers "${liste[@]}")
+          fi
           python -m brvm rapatrier \
-            --debut "${{ inputs.debut }}" --fin "${{ inputs.fin }}" \
-            --pause "${{ inputs.pause }}" \
-            ${{ inputs.volume != '' && format('--volume {0}', inputs.volume) || '' }} \
-            ${{ inputs.tickers != '' && format('--tickers {0}', inputs.tickers) || '' }}
+            --debut "$DEBUT" --fin "$FIN" --pause "$PAUSE" \
+            "${options[@]}"
 
       # La base SQLite est un artefact dérivé ; l'archive CSV est la source
       # de vérité. On reconstruit la première depuis la seconde pour que
