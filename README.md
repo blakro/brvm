@@ -87,6 +87,7 @@ signal d'achat.
 | **Ordre à cours limité** | Un ordre où vous fixez votre prix maximum (achat) ou minimum (vente). |
 | **Liquidité** | La facilité à revendre : certaines actions s'échangent très peu. |
 | **Limite de ±7,5 %** | Un prix ne peut pas varier de plus de 7,5 % en une séance. |
+| **Fractionnement** | Une action découpée en plusieurs, moins chères (SONATEL, octobre 2026 : 1 action = 10). Ce que vous détenez ne change pas de valeur ; l'app ramène les prix d'avant à l'action d'aujourd'hui. |
 
 Le glossaire complet (24 mots) est dans l'onglet 🎓 Comprendre.
 

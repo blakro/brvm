@@ -202,7 +202,8 @@ COLONNES_LIMITES = ["date", "ticker", "precedent", "cloture", "variation",
 
 
 def limites(cours: pd.DataFrame,
-            limite: float = LIMITE_SEANCE) -> pd.DataFrame:
+            limite: float = LIMITE_SEANCE,
+            fractionnements: pd.DataFrame | None = None) -> pd.DataFrame:
     """Les variations qui franchissent ±7,5 %, avec leur cause probable.
 
     POURQUOI C'EST UN RAPPORT ET NON UN REFUS. La BRVM cote avec une
@@ -222,7 +223,9 @@ def limites(cours: pd.DataFrame,
     sans ambiguïté ; cette fonction-ci se contente de DÉCRIRE le reste,
     pour que 356 dépassements cessent d'être un chiffre jamais regardé.
 
-    La cause probable est une hypothèse rangée, pas un verdict.
+    La cause probable est une hypothèse rangée, pas un verdict — sauf
+    pour les séances de `fractionnements` (registre ou détection, voir
+    `fractionnement.evenements`), dont la cause est connue.
     """
     if cours.empty or "cloture" not in cours.columns:
         return pd.DataFrame(columns=COLONNES_LIMITES)
@@ -249,6 +252,19 @@ def limites(cours: pd.DataFrame,
     cause = pd.Series("à examiner", index=hors.index)
     cause[mois.between(5, 8)] = "saison des détachements (mai-août)"
     cause[trou] = "séance précédente à plus d'une semaine"
+    if fractionnements is not None and not fractionnements.empty:
+        # La PREMIÈRE SÉANCE COTÉE à cette date ou après, pas la date
+        # elle-même : le jour officiel tombe parfois un jour où la valeur
+        # n'a pas été échangée — PALC le 03/11/2017.
+        connus = set()
+        for e in fractionnements.itertuples():
+            seances = table.loc[(table["ticker"] == e.ticker)
+                                & (table["date"].astype(str)
+                                   >= str(e.date)[:10]), "date"]
+            if not seances.empty:
+                connus.add((str(e.ticker), str(seances.iloc[0])[:10]))
+        cles = zip(hors["ticker"].astype(str), hors["date"].astype(str).str[:10])
+        cause[[cle in connus for cle in cles]] = "fractionnement d'actions"
     hors["cause_probable"] = cause
     return hors[COLONNES_LIMITES].reset_index(drop=True)
 

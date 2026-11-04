@@ -17,6 +17,7 @@
     python -m brvm exporter              base → CSV versionnés
     python -m brvm importer              CSV versionnés → base
     python -m brvm veille                l'archive s'enrichit-elle encore ?
+    python -m brvm fractionnements       fractionnements d'actions ajustés
     python -m brvm etat                  ce que contient la base
 
 Chaque commande rend 0 en cas de succès et 1 en cas d'échec, pour qu'un
@@ -34,8 +35,22 @@ from pathlib import Path
 import pandas as pd
 
 from . import (backtest, config, conseil, db, dividende, exogene, features,
-               prediction, qualite, recherche, scoring)
+               fractionnement, prediction, qualite, recherche, scoring)
 from .ingestion import brvm_org, dividendes as source_dividendes, sikafinance
+
+
+def _lire_ajuste() -> dict:
+    """Cours, dividendes et fondamentaux de la base, en actions d'aujourd'hui.
+
+    LE SEUL CHEMIN DE LECTURE DES ANALYSES. La base garde les cours tels
+    que publiés ; lus bruts, un fractionnement y passe pour un krach — SNTS
+    a « perdu » 89 % le 26/10/2026 en devenant dix actions. Les trois tables
+    sont ajustées ensemble, sans quoi un cours ajusté rencontrerait un
+    dividende qui ne l'est pas. Voir `fractionnement`.
+    """
+    return fractionnement.ajuster(
+        db.lire("cours"), db.lire("dividendes"), db.lire("fondamentaux"),
+        db.lire("fractionnements"))
 
 
 def _verifier(args) -> int:
@@ -369,7 +384,7 @@ def _sonder(args) -> int:
 
 def _rechercher(args) -> int:
     """Balayage prédicteurs × segments × horizons, correction comprise."""
-    cours = db.lire("cours")
+    cours = _lire_ajuste()["cours"]
     if cours.empty:
         print("aucun cours en base — lancez « brvm rapatrier »", file=sys.stderr)
         return 1
@@ -501,7 +516,7 @@ def _referentiel(args) -> int:
 
 
 def _noter(args) -> int:
-    cours = db.lire("cours")
+    cours = _lire_ajuste()["cours"]
     if cours.empty:
         print("aucun cours en base — lancez « brvm ingerer »", file=sys.stderr)
         return 1
@@ -552,7 +567,8 @@ def _scores_du_signal(cours, nom: str, referentiel=None, reglages=None):
 
 
 def _backtester(args) -> int:
-    cours = db.lire("cours")
+    ajuste = _lire_ajuste()
+    cours = ajuste["cours"]
     if cours.empty:
         print("aucun cours en base — lancez « brvm ingerer »", file=sys.stderr)
         return 1
@@ -583,8 +599,8 @@ def _backtester(args) -> int:
     if args.hors_dividende:
         commun = dict(fondamentaux=None, dividendes=None, scores=scores)
     else:
-        commun = dict(fondamentaux=db.lire("fondamentaux"),
-                      dividendes=db.lire("dividendes"), scores=scores)
+        commun = dict(fondamentaux=ajuste["fondamentaux"],
+                      dividendes=ajuste["dividendes"], scores=scores)
     if args.hors_dividende:
         print("Rendement de COURS seul : le dividende n'est pas compté.\n")
 
@@ -616,7 +632,7 @@ def _backtester(args) -> int:
 
 
 def _conseiller(args) -> int:
-    cours = db.lire("cours")
+    cours = _lire_ajuste()["cours"]
     if cours.empty:
         print("aucun cours en base — lancez « brvm ingerer »", file=sys.stderr)
         return 1
@@ -685,7 +701,7 @@ def _conseiller(args) -> int:
 
 
 def _predire(args) -> int:
-    cours = db.lire("cours")
+    cours = _lire_ajuste()["cours"]
     if cours.empty:
         print("aucun cours en base — lancez « brvm ingerer »", file=sys.stderr)
         return 1
@@ -763,8 +779,8 @@ def _importer_csv(args) -> int:
 
 
 def _rendement(args) -> int:
-    cours = db.lire("cours")
-    dividendes = db.lire("dividendes")
+    ajuste = _lire_ajuste()
+    cours, dividendes = ajuste["cours"], ajuste["dividendes"]
     if cours.empty:
         print("aucun cours en base", file=sys.stderr)
         return 1
@@ -882,7 +898,9 @@ def _limites() -> None:
     dividende au détachement, la limite ne relie pas deux séances séparées
     d'un mois, et une division du nominal la franchit par construction.
     """
-    hors = qualite.limites(pd.read_csv(db.chemin_archive("cours")))
+    archive = pd.read_csv(db.chemin_archive("cours"), dtype={"date": str})
+    hors = qualite.limites(archive, fractionnements=fractionnement.evenements(
+        archive, db.charger_archive("fractionnements")))
     if hors.empty:
         print("\nAucune variation hors de la limite de ±7,5 %.")
         return
@@ -904,7 +922,11 @@ def _desaccords() -> None:
     qui diffère, pas une faute de saisie, et préférer une source sans
     savoir reviendrait à choisir pour la commodité.
     """
-    ecarts = qualite.desaccords(db.lire("dividendes"), db.lire("fondamentaux"))
+    # Ajustés, les deux : sikafinance peut republier son tableau en actions
+    # nouvelles quand le calendrier garde le montant d'origine, et la
+    # comparaison brute verrait un facteur 10 là où il n'y a qu'une échelle.
+    ajuste = _lire_ajuste()
+    ecarts = qualite.desaccords(ajuste["dividendes"], ajuste["fondamentaux"])
     if ecarts.empty:
         print("\nDividendes : les deux sources s'accordent.")
         return
@@ -982,13 +1004,70 @@ def _qualite(args) -> int:
     return 0
 
 
+def _fractionnements(args) -> int:
+    """Ce qui est ajusté, d'où ça vient, et ce que la détection a vu.
+
+    Lit les CSV, pas la base : c'est le registre versionné qu'on veut voir,
+    et cette commande doit répondre sur un dépôt fraîchement cloné.
+
+    `--enregistrer` verse au registre les détections CONFIRMÉES — celles
+    que plusieurs séances ont suivies. Ce n'est pas nécessaire pour qu'elles
+    s'appliquent, la détection s'en charge à chaque lecture ; c'est ce qui
+    les rend visibles dans un diff, et corrigeables à la main.
+    """
+    archive = db.charger_archive("cours")
+    registre = db.charger_archive("fractionnements")
+    liste = fractionnement.evenements(archive, registre)
+
+    if liste.empty:
+        print("Aucun fractionnement déclaré ni détecté : les cours sont "
+              "lus tels que publiés.")
+        return 0
+
+    print(f"{len(liste)} fractionnement(s) appliqué(s) à la lecture — les "
+          "cours d'avant sont\ndivisés par le rapport, les quantités "
+          "échangées multipliées :\n")
+    for e in liste.itertuples():
+        print(f"  {e.ticker:<6} {e.date}  {fractionnement.decrire(e):<36} "
+              f"{e.origine}")
+
+    nouveaux = liste[liste["origine"] == "détecté"]
+    a_confirmer = liste[liste["origine"] == "détecté, à confirmer"]
+    if not a_confirmer.empty:
+        print(f"\n{len(a_confirmer)} détection(s) encore à confirmer : "
+              f"moins de {fractionnement.CONFIRMATION} séances ont suivi. "
+              "Elle(s) s'applique(nt)\ndéjà, et cesseront de s'appliquer "
+              "si le nouveau niveau ne tient pas.")
+
+    if nouveaux.empty:
+        return 0
+    if not args.enregistrer:
+        print(f"\n{len(nouveaux)} détection(s) absente(s) du registre. "
+              "« brvm fractionnements --enregistrer »\nles y verse ; un "
+              "rapport de 1 au registre fait taire une détection fausse.")
+        return 0
+
+    ajout = nouveaux.assign(
+        note=[f"détecté : {e.precedent:g} → {e.cloture:g} FCFA"
+              for e in nouveaux.itertuples()])[fractionnement.COLONNES]
+    complet = (pd.concat([registre.reindex(columns=fractionnement.COLONNES),
+                          ajout], ignore_index=True)
+               .sort_values(["ticker", "date"]))
+    chemin = db.chemin_archive("fractionnements")
+    chemin.parent.mkdir(parents=True, exist_ok=True)
+    complet.to_csv(chemin, index=False)
+    db.enregistrer(ajout, "fractionnements")
+    print(f"\n{len(ajout)} ligne(s) versée(s) au registre → {chemin}")
+    return 0
+
+
 # TOUTES LES TABLES ARCHIVÉES, PAS DEUX. Le couple export/import ne
 # connaissait que `cours` et `referentiel` : les dividendes et les
 # fondamentaux étaient bien versionnés mais jamais rechargés, et le
 # backtest les trouvait vides tout en les ayant sur disque. Le symptôme
 # était muet — il rendait simplement les mêmes chiffres qu'avant.
 TABLES_ARCHIVEES = ("cours", "referentiel", "dividendes", "fondamentaux",
-                    "exogenes")
+                    "exogenes", "fractionnements")
 
 
 def _transferer(sens: str) -> int:
@@ -1269,6 +1348,16 @@ def construire_analyseur() -> argparse.ArgumentParser:
         help="effacer les lignes signalées au lieu de seulement les lister",
     )
     qual.set_defaults(fonction=_qualite)
+
+    fract = commandes.add_parser(
+        "fractionnements",
+        help="fractionnements d'actions : déclarés, détectés, appliqués",
+    )
+    fract.add_argument(
+        "--enregistrer", action="store_true",
+        help="verser au registre les fractionnements détectés et confirmés",
+    )
+    fract.set_defaults(fonction=_fractionnements)
 
     exporter = commandes.add_parser(
         "exporter", help="base → CSV versionnés de data/"

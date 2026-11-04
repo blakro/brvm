@@ -29,7 +29,7 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from brvm import db, pedagogie, prediction
+from brvm import db, fractionnement, pedagogie, prediction
 from brvm.config import DEFAUTS, charger
 from brvm.ingestion import brvm_org
 
@@ -464,7 +464,8 @@ def _theme_graphiques() -> alt.theme.ThemeConfig:
 @st.cache_data(ttl=900)
 def charger_archive():
     return (db.charger_archive("cours"), db.charger_archive("referentiel"),
-            db.charger_archive("dividendes"), db.charger_archive("fondamentaux"))
+            db.charger_archive("dividendes"), db.charger_archive("fondamentaux"),
+            db.charger_archive("fractionnements"))
 
 
 @st.cache_data(ttl=900, show_spinner="Lecture de brvm.org…")
@@ -539,6 +540,19 @@ def prevoir(_cours, _referentiel, cle, horizon: int) -> dict:
     }
 
 
+@st.cache_data(ttl=900, max_entries=2, show_spinner=False)
+def ajuster_fractionnements(_cours, _dividendes, _fondamentaux, _registre,
+                            cle) -> dict:
+    """Les trois tables en actions d'aujourd'hui — voir `fractionnement`.
+
+    Un cinquième de seconde à chaque clic sinon : la détection relit toute
+    l'archive. `cle` porte l'empreinte des cours BRUTS et le registre ; la
+    même échéance que `charger_archive` couvre dividendes et fondamentaux.
+    """
+    return fractionnement.ajuster(_cours, _dividendes, _fondamentaux,
+                                  _registre)
+
+
 @st.cache_data(max_entries=2, show_spinner=False)
 def agitation_du_marche(_cours, cle) -> pd.Series:
     """Ampleur habituelle des mouvements d'une semaine, par valeur, sur un an."""
@@ -548,7 +562,8 @@ def agitation_du_marche(_cours, cle) -> pd.Series:
     return (rendements.groupby(an["ticker"]).std() * 5 ** 0.5).dropna()
 
 
-cours, referentiel, dividendes, fondamentaux = charger_archive()
+(cours, referentiel, dividendes, fondamentaux,
+ registre_fractionnements) = charger_archive()
 if referentiel.empty:
     referentiel = brvm_org.referentiel_amorce()
 
@@ -575,6 +590,20 @@ if cours.empty:
     st.warning("**Aucune donnée.** L'archive est vide et brvm.org n'a pas "
                "répondu" + (f" — {echec}." if echec else "."))
     st.stop()
+
+# LES FRACTIONNEMENTS, APRÈS LA SÉANCE EN DIRECT ET AVANT TOUT LE RESTE.
+# Le 26/10/2026, une action SNTS est devenue dix : lue brute, la série
+# chute de 89 % en une séance et le dernier dividende rapporte 40 %. Tout
+# l'historique est donc exprimé en actions d'aujourd'hui — registre et
+# détection automatique, voir `fractionnement`. Après la séance en direct,
+# pour qu'un fractionnement du jour même soit déjà pris en compte.
+_ajuste = ajuster_fractionnements(
+    cours, dividendes, fondamentaux, registre_fractionnements,
+    (len(cours), cours["date"].max(), float(cours["cloture"].sum(skipna=True)),
+     registre_fractionnements.to_csv(index=False)))
+cours, dividendes, fondamentaux = (_ajuste["cours"], _ajuste["dividendes"],
+                                   _ajuste["fondamentaux"])
+fractionnements = _ajuste["evenements"]
 
 dates = sorted(cours["date"].unique())
 derniere = dates[-1]
@@ -882,6 +911,27 @@ if onglets[1].open:
         if dernier["date"] != derniere:
             st.warning(f"⚠️ Pas de prix pour {choix} à la dernière séance : le "
                        f"dernier connu date du {pedagogie.jour(dernier['date'])}.")
+
+        # Dit en clair, parce que le lecteur a connu l'ancien prix : SNTS
+        # valait 43 850 FCFA la veille, et la courbe affiche 4 385.
+        for _e in fractionnements[fractionnements["ticker"] == choix] \
+                .itertuples():
+            _rapport = float(_e.rapport)
+            st.info(
+                f"✂️ **Action fractionnée le {pedagogie.jour(_e.date)}** : "
+                f"{fractionnement.decrire(_e)}. "
+                + (f"Chaque action a été remplacée par {_rapport:g} actions "
+                   f"{_rapport:g} fois moins chères : la valeur détenue n'a "
+                   "pas changé. " if _rapport >= 1 else
+                   f"{1 / _rapport:g} actions ont été regroupées en une, "
+                   f"{1 / _rapport:g} fois plus chère : la valeur détenue "
+                   "n'a pas changé. ")
+                + "Pour que les prix restent comparables, ceux d'avant "
+                "cette date sont "
+                + (f"divisés par {_rapport:g}" if _rapport >= 1 else
+                   f"multipliés par {1 / _rapport:g}")
+                + ", et les dividendes aussi — comme s'il y avait toujours "
+                "eu autant d'actions qu'aujourd'hui.")
 
         _html(
             f'<div class="carte anime" style="margin-top:.6rem;border-left:8px '
@@ -1255,6 +1305,10 @@ if onglets[1].open:
             "exactement vos frais d'achat et de vente.",
             "**±7,5 %** : la BRVM interdit à un prix de varier de plus de 7,5 % "
             "en une séance.",
+            "**✂️ Action fractionnée** : la société a découpé chaque action en "
+            "plusieurs, moins chères. Les prix et les dividendes d'avant sont "
+            "ramenés à l'action d'aujourd'hui, pour que la courbe ne montre "
+            "pas une chute qui n'a pas eu lieu.",
             "**La météo de la prévision** : ☀️ dans le tiers le mieux placé "
             "par le modèle, ⛅ dans le tiers du milieu, 🌧️ dans le dernier "
             "tiers. La règle colorée place l'action entre 40 % et 60 % de "

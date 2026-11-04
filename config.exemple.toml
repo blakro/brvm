@@ -27,6 +27,9 @@ archive_referentiel  = "data/referentiel.csv"
 archive_dividendes   = "data/dividendes.csv"
 archive_fondamentaux = "data/fondamentaux.csv"
 archive_exogenes     = "data/exogenes.csv"
+# Fractionnements d'actions déclarés. Les cours archivés restent bruts ;
+# l'analyse les ajuste d'après ce registre et la détection automatique.
+archive_fractionnements = "data/fractionnements.csv"
 
 [analyse]
 # Un volume médian sous ce seuil écarte la valeur avant toute notation :

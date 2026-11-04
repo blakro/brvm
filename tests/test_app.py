@@ -241,6 +241,35 @@ def test_la_fiche_d_une_action_va_au_bout(lanceur):
         "une valeur manquante s'affiche « nan »"
 
 
+def test_une_action_fractionnee_ne_s_effondre_pas(lanceur):
+    """SNTS, fractionnée au 26/10/2026 : une action devenue dix. Lue brute,
+    la fiche affichait une pire chute de 90 % et un dividende rapportant
+    40 % par an. La fiche doit le dire, et ses chiffres rester ceux d'une
+    action qui n'a rien perdu."""
+    from brvm import db
+
+    if db.charger_archive("cours")["date"].max() < "2026-10-26":
+        pytest.skip("archive antérieure au fractionnement de SNTS")
+    at = _app(lanceur)
+    at.query_params["onglet"] = "action"
+    at.query_params["valeur"] = "SNTS"
+    at.run()
+    assert not at.exception, [str(e) for e in at.exception]
+    infos = " ".join(bloc.value for bloc in at.info)
+    assert "Action fractionnée le 26 octobre 2026" in infos
+    assert "10 nouvelles" in infos
+
+    texte = re.sub(r"<[^>]+>", " ", _textes(at))
+
+    def pourcentage_apres(libelle: str) -> float:
+        suite = texte[texte.index(libelle):]
+        trouve = re.search(r"([+-−]?\d+(?:,\d+)?)\s*%", suite)
+        return float(trouve.group(1).replace(",", ".").replace("−", "-"))
+
+    assert pourcentage_apres("Pire chute (1 an)") > -50
+    assert pourcentage_apres("Dividendes ?") < 15
+
+
 def test_aucune_valeur_manquante_ne_s_affiche_nan_sur_l_accueil(lanceur):
     at = _app(lanceur).run()
     assert not re.search(r"\bnan\b", _textes(at), re.IGNORECASE)
