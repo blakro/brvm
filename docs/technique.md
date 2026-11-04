@@ -1392,11 +1392,11 @@ soit 24 000 : l'action ancienne), et l'échelle retenue est celle qui le
 ramène au cours ajusté de l'exercice. Un montant déjà republié en actions
 nouvelles n'est donc pas divisé une seconde fois.
 
-Le registre contient trois lignes. SNTS, et PALC (2 pour 1 le 03/11/2017)
-sont documentés. ONTBF (×2 le 05/02/2018) ne l'est pas : la détection l'a
-trouvé, le cours divisé par deux est resté à ce niveau, et les dividendes
-passent de 34 à 68 millions d'actions entre 2018 et 2019, mais aucun avis
-n'a été retrouvé — la note le dit. `python -m brvm fractionnements` liste
+Le registre contient trois lignes, toutes confirmées : SNTS, PALC (2 pour
+1 le 03/11/2017) et ONTBF (2 pour 1 le 05/02/2018, le capital passant de
+34 à 68 millions d'actions). Les deux dernières n'avaient jamais été
+ajustées dans l'archive ; c'est la détection qui les a trouvées, en
+cherchant celle de SNTS. `python -m brvm fractionnements` liste
 ce qui est appliqué et d'où ça vient ; `python -m brvm qualite` range ces
 trois séances sous « fractionnement d'actions » plutôt que « à examiner ».
 
