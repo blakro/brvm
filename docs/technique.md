@@ -1064,7 +1064,7 @@ python -m brvm exporter      # base → CSV versionnés
 python -m brvm importer      # CSV versionnés → base
 python -m brvm etat          # ce que contient la base
 python -m brvm veille        # l'archive s'enrichit-elle encore ?
-python -m brvm qualite       # séances fantômes et désaccords entre sources
+python -m brvm qualite       # séances fantômes, recopiées ou vides ; désaccords
 python -m brvm fractionnements               # fractionnements ajustés
 python -m brvm fractionnements --enregistrer # verse les détections au registre
 python -m brvm importer-dividendes fichier.csv
@@ -1337,6 +1337,44 @@ mécanisme se lit à découvert sur ONTBF : cours divisé par deux, quantité
 doublée, capitaux échangés identiques au franc près à ceux de la veille.
 Ce ne sont pas des cours mal transcrits, ce sont des échos de la séance
 précédente rejoués à une autre échelle.
+
+### Les séances qui n'ont pas eu lieu
+
+Un jour de fermeture, la source **republie la veille sous la date du
+jour** : mêmes cours, mêmes quantités au titre près. Deux échanges égaux
+au titre près sont déjà improbables pour une valeur ; pour la plupart
+des valeurs d'une même séance, c'est impossible. Le 04/11/2026, l'archive
+en portait **102**, de 4 à 14 par an depuis 2015, toutes sur des jours
+fériés : 1er janvier, lundi de Pâques, 1er mai, Ascension, Pentecôte, 7 et
+15 août, 1er et 15 novembre, Noël, Korité, Tabaski, Maouloud. S'y ajoutait
+le **07/11/2025**, où aucune des 47 valeurs n'avait été échangée. Elles
+étaient entrées par l'historique de sikafinance, qu'aucun contrôle ne
+filtrait.
+
+Comptées comme des séances, ces copies ajoutaient une dizaine de jours
+par an où rien ne bouge : elles écrasaient la volatilité, dupliquaient la
+liquidité et décalaient les horizons de prévision, qui comptent des
+séances. Elles ont été retirées (3 924 lignes), ainsi que la séance
+fantôme ONTBF du 24/12/2015 que la copie du 25 masquait.
+
+`qualite.seances_republiees` retient une séance quand au moins 75 % de
+ses valeurs échangées reprennent le volume **et** le cours de leur séance
+précédente, ou quand aucune valeur n'a été échangée. Le seuil se lit sur
+l'archive, coupée en deux sans ambiguïté : les vraies séances ne
+dépassent jamais 56 % (la source répète parfois la ligne d'un titre non
+échangé), les copies vont de 76 à 100 %. Le même contrôle s'applique
+partout :
+
+- `python -m brvm qualite` les signale et rend 1 ; `--retirer` les efface,
+  comme les séances fantômes. Un rapatriement qui les réintroduirait met
+  donc son action au rouge ;
+- `ingerer_jour` refuse une page sans vraie séance, et `versement.yml` la
+  met en quarantaine ;
+- **l'app** ne prend plus pour la séance du jour une page lue avant
+  l'ouverture : brvm.org y porte déjà la date du jour, avec les cours de
+  la veille et des volumes nuls, et « Actualiser » affichait alors 0
+  hausse, 0 baisse, 0 FCFA. L'accueil garde la dernière séance close et
+  dit pourquoi.
 
 ### Les fractionnements d'actions
 

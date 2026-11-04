@@ -119,6 +119,99 @@ def retirer(cours: pd.DataFrame, suspects: pd.DataFrame) -> pd.DataFrame:
     return cours[~cle.isin(a_retirer)].copy()
 
 
+# --- Les séances qui n'ont pas eu lieu --------------------------------------
+#
+# Part des valeurs échangées qui reprennent À L'IDENTIQUE le volume ET le
+# cours de leur séance précédente, au-delà de laquelle la séance entière
+# est une copie. Le seuil se lit sur l'archive du 04/11/2026, où la
+# distribution est coupée en deux sans ambiguïté : 2 900 séances sous 56 %
+# — la source répète parfois, valeur par valeur, la ligne d'un titre non
+# échangé —, rien entre 56 et 75 %, puis 102 séances de 76 à 100 %, qui
+# tombent toutes sur des jours de fermeture : 1er janvier, lundi de
+# Pâques, 1er mai, Ascension, Pentecôte, 7 et 15 août, 1er et 15
+# novembre, Noël, Korité, Tabaski, Maouloud.
+SEUIL_REPUBLICATION = 0.75
+
+# En deçà, la coïncidence redevient possible et le contrôle ne prouverait
+# rien ; c'est le seuil de `versement.yml`.
+MINIMUM_ECHANGEES = 5
+
+COLONNES_REPUBLIEES = ["date", "lignes", "echangees", "repetees", "motif"]
+
+
+def seances_republiees(cours: pd.DataFrame,
+                       seuil: float = SEUIL_REPUBLICATION,
+                       minimum: int = MINIMUM_ECHANGEES) -> pd.DataFrame:
+    """Les séances qui n'ont pas eu lieu, une ligne par date.
+
+    DEUX SIGNATURES, ET AUCUNE N'EST UN MARCHÉ.
+
+    1. LA SÉANCE RECOPIÉE. Un jour de fermeture, la source republie la
+       veille sous la date du jour : mêmes cours, mêmes quantités au titre
+       près. Deux échanges égaux au titre près sont déjà improbables pour
+       une valeur ; pour la plupart des valeurs d'une même séance, c'est
+       impossible. Comptées comme des séances, ces copies ajoutent une
+       dizaine de jours par an où rien ne bouge : elles écrasent la
+       volatilité, gonflent les « stables » de l'accueil, dupliquent la
+       liquidité et décalent les horizons de prévision, qui comptent des
+       séances.
+
+    2. LA SÉANCE SANS ÉCHANGE. Aucune valeur échangée, des cours à plat
+       qui ne sont pas des transactions : le 07/11/2025 dans l'archive, et
+       la page de brvm.org lue avant l'ouverture, qui porte déjà la date
+       du jour avec les cours de la veille et des volumes nuls.
+
+    La comparaison se fait avec la séance précédente DE CHAQUE VALEUR dans
+    `cours` : une chaîne de copies (trois jours fériés d'affilée) est donc
+    attrapée en entier, et la vraie séance qui suit, différente, ne l'est
+    pas. Rend un tableau vide aux bonnes colonnes quand il n'y a rien.
+    """
+    vide = pd.DataFrame(columns=COLONNES_REPUBLIEES)
+    if cours is None or cours.empty or "volume_titres" not in cours.columns:
+        return vide
+
+    table = cours.sort_values(["ticker", "date"]).reset_index(drop=True)
+    volume = pd.to_numeric(table["volume_titres"], errors="coerce").fillna(0)
+    cloture = pd.to_numeric(table["cloture"], errors="coerce")
+    groupes = table.groupby("ticker")
+    echangee = volume > 0
+    repetee = (echangee
+               & (volume == pd.to_numeric(groupes["volume_titres"].shift(),
+                                          errors="coerce"))
+               & (cloture == pd.to_numeric(groupes["cloture"].shift(),
+                                           errors="coerce")))
+    # Une valeur sans séance précédente ne peut rien recopier.
+    repetee &= groupes.cumcount() > 0
+
+    par_jour = pd.DataFrame({"date": table["date"].astype(str),
+                             "echangee": echangee, "repetee": repetee})
+    bilan = par_jour.groupby("date").agg(lignes=("echangee", "size"),
+                                         echangees=("echangee", "sum"),
+                                         repetees=("repetee", "sum"))
+    recopiee = ((bilan["echangees"] >= minimum)
+                & (bilan["repetees"] >= seuil * bilan["echangees"]))
+    sans_echange = (bilan["lignes"] >= minimum) & (bilan["echangees"] == 0)
+    retenues = bilan[recopiee | sans_echange].copy()
+    if retenues.empty:
+        return vide
+    retenues["motif"] = "recopie de la séance précédente"
+    retenues.loc[sans_echange[recopiee | sans_echange], "motif"] = \
+        "aucune valeur échangée"
+    retenues[["lignes", "echangees", "repetees"]] = \
+        retenues[["lignes", "echangees", "repetees"]].astype(int)
+    return retenues.reset_index()[COLONNES_REPUBLIEES]
+
+
+def lignes_des_seances(cours: pd.DataFrame, seances: pd.DataFrame) -> pd.DataFrame:
+    """Les clés (date, ticker) de toutes les lignes des séances données —
+    la forme qu'attendent `retirer` et `db.effacer_cours`."""
+    if seances is None or seances.empty:
+        return pd.DataFrame(columns=["date", "ticker"])
+    dates = set(seances["date"].astype(str))
+    return cours.loc[cours["date"].astype(str).isin(dates),
+                     ["date", "ticker"]].reset_index(drop=True)
+
+
 # Au-delà, les deux sources ne décrivent pas le même versement. 10 %
 # laisse passer les arrondis et les acomptes comptés d'un côté seulement ;
 # un facteur 2 ne passe pas.

@@ -379,3 +379,88 @@ def test_une_archive_vide_n_a_pas_de_trou():
     from brvm.cli import _seances_manquantes
 
     assert _seances_manquantes(pd.DataFrame()) == []
+
+
+# --------------------------------------------------------------------
+# Les séances qui n'ont pas eu lieu : recopiées, ou sans échange
+# --------------------------------------------------------------------
+
+def _marche(jours: dict[str, list[tuple[float, float]]]) -> pd.DataFrame:
+    """{date: [(cloture, volume) par valeur]} → table de cours."""
+    lignes = []
+    for date, valeurs in jours.items():
+        for i, (cloture, volume) in enumerate(valeurs):
+            lignes.append({"date": date, "ticker": f"V{i:02d}",
+                           "cloture": cloture, "volume_titres": volume})
+    return pd.DataFrame(lignes)
+
+
+VEILLE = [(1000 + 10 * i, 100 + i) for i in range(10)]
+VRAIE = [(1005 + 10 * i, 37 + i) for i in range(10)]
+
+
+def test_attrape_la_seance_recopiee_d_un_jour_ferme():
+    """Le 25 décembre republie le 24, au titre près."""
+    cours = _marche({"2025-12-24": VEILLE, "2025-12-25": VEILLE,
+                     "2025-12-26": VRAIE})
+    vaines = qualite.seances_republiees(cours)
+    assert list(vaines["date"]) == ["2025-12-25"]
+    assert vaines.iloc[0]["motif"] == "recopie de la séance précédente"
+
+
+def test_attrape_une_chaine_de_jours_fermes():
+    """Trois copies d'affilée — 23, 24, 25/09/2020 dans l'archive : chacune
+    se compare à la précédente, toutes tombent, et la vraie qui suit reste."""
+    cours = _marche({"2020-09-22": VEILLE, "2020-09-23": VEILLE,
+                     "2020-09-24": VEILLE, "2020-09-25": VEILLE,
+                     "2020-09-28": VRAIE})
+    assert list(qualite.seances_republiees(cours)["date"]) == [
+        "2020-09-23", "2020-09-24", "2020-09-25"]
+
+
+def test_attrape_la_seance_sans_aucun_echange():
+    """Le 07/11/2025, ou brvm.org avant l'ouverture : des cours, aucun
+    échange."""
+    vide = [(c, 0.0) for c, _ in VRAIE]
+    cours = _marche({"2025-11-06": VEILLE, "2025-11-07": vide})
+    vaines = qualite.seances_republiees(cours)
+    assert list(vaines["date"]) == ["2025-11-07"]
+    assert vaines.iloc[0]["motif"] == "aucune valeur échangée"
+
+
+def test_une_seance_calme_n_est_pas_une_copie():
+    """Sur ce marché, beaucoup de valeurs ne bougent pas d'un jour à
+    l'autre, et la source répète parfois la ligne d'un titre non échangé :
+    jusqu'à 56 % de lignes identiques dans une vraie séance de l'archive.
+    Seul le volume identique AU TITRE PRÈS sur la plupart des valeurs
+    signe une copie — pas des cours identiques."""
+    memes_cours = [(c, v + 1) for c, v in VEILLE]
+    moitie = VEILLE[:5] + VRAIE[5:]
+    cours = _marche({"2026-01-05": VEILLE, "2026-01-06": memes_cours,
+                     "2026-01-07": memes_cours[:5] + VRAIE[5:]})
+    assert qualite.seances_republiees(cours).empty
+    cours = _marche({"2026-01-05": VEILLE, "2026-01-06": moitie})
+    assert qualite.seances_republiees(cours).empty
+
+
+def test_trop_peu_de_valeurs_pour_conclure():
+    cours = _marche({"2026-01-05": VEILLE[:4], "2026-01-06": VEILLE[:4]})
+    assert qualite.seances_republiees(cours).empty
+
+
+def test_lignes_des_seances_donne_toutes_les_cles():
+    cours = _marche({"2025-12-24": VEILLE, "2025-12-25": VEILLE})
+    cles = qualite.lignes_des_seances(cours, qualite.seances_republiees(cours))
+    assert len(cles) == 10 and set(cles["date"]) == {"2025-12-25"}
+    assert len(qualite.retirer(cours, cles)) == 10
+
+
+def test_l_archive_reelle_n_a_plus_de_seance_vaine():
+    """Une fois nettoyée, l'archive versionnée ne doit plus en porter :
+    un rapatriement qui les réintroduirait ferait tomber ce test, comme
+    il fait déjà rougir `brvm qualite`."""
+    archive = db.charger_archive("cours")
+    if archive.empty:
+        pytest.skip("archive absente")
+    vaines = qualite.seances_republiees(archive)
+    assert vaines.empty, list(vaines["date"])

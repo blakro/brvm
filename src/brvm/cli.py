@@ -17,6 +17,7 @@
     python -m brvm exporter              base → CSV versionnés
     python -m brvm importer              CSV versionnés → base
     python -m brvm veille                l'archive s'enrichit-elle encore ?
+    python -m brvm qualite               séances fantômes, recopiées, vides
     python -m brvm fractionnements       fractionnements d'actions ajustés
     python -m brvm etat                  ce que contient la base
 
@@ -948,7 +949,8 @@ def _desaccords() -> None:
 
 
 def _qualite(args) -> int:
-    """Signale — et sur demande retire — les séances fantômes.
+    """Signale — et sur demande retire — ce qui n'est pas une vraie séance :
+    les séances fantômes, et les séances recopiées ou sans échange.
 
     Le code de retour est 1 quand il reste des lignes signalées : la
     commande peut ainsi garder une action au rouge après un rapatriement
@@ -967,38 +969,51 @@ def _qualite(args) -> int:
         print(f"pas d'archive à contrôler : {chemin}", file=sys.stderr)
         return 1
 
-    archive = pd.read_csv(chemin)
-    suspects = qualite.pics_isoles(archive)
+    archive = pd.read_csv(chemin, dtype={"date": str, "ticker": str})
+    fantomes = qualite.pics_isoles(archive)
+    seances = qualite.seances_republiees(archive)
 
     print(f"{len(archive)} lignes contrôlées ← {chemin}")
-    if suspects.empty:
+    if fantomes.empty:
         print("aucune séance fantôme.")
-        _limites()
-        _desaccords()
-        return 0
+    else:
+        print(f"\n{len(fantomes)} séances fantômes — cours valant un multiple "
+              f"entier de la veille ET du lendemain :\n")
+        for ticker, lot in fantomes.groupby("ticker"):
+            facteurs = ", ".join(f"×{f:g}" if f >= 1 else f"÷{1 / f:g}"
+                                 for f in sorted(set(lot["facteur"])))
+            print(f"  {ticker:<6} {len(lot):>3} lignes  {facteurs}  "
+                  f"{lot['date'].min()} → {lot['date'].max()}")
 
-    print(f"\n{len(suspects)} séances fantômes — cours valant un multiple "
-          f"entier de la veille ET du lendemain :\n")
-    for ticker, lot in suspects.groupby("ticker"):
-        facteurs = ", ".join(f"×{f:g}" if f >= 1 else f"÷{1 / f:g}"
-                             for f in sorted(set(lot["facteur"])))
-        print(f"  {ticker:<6} {len(lot):>3} lignes  {facteurs}  "
-              f"{lot['date'].min()} → {lot['date'].max()}")
+    if seances.empty:
+        print("aucune séance recopiée ni sans échange.")
+    else:
+        print(f"\n{len(seances)} séances qui n'ont pas eu lieu — jours de "
+              "fermeture recopiés de la veille,\nou aucune valeur échangée :\n")
+        for motif, lot in seances.groupby("motif"):
+            print(f"  {len(lot):>4}  {motif}")
+        print("  dont : " + ", ".join(seances["date"].tail(8)) + ".")
 
     _limites()
     _desaccords()
 
+    if fantomes.empty and seances.empty:
+        return 0
+
+    a_retirer = pd.concat([fantomes[["date", "ticker"]],
+                           qualite.lignes_des_seances(archive, seances)],
+                          ignore_index=True).drop_duplicates()
     if not args.retirer:
-        print("\nRien n'a été modifié. « brvm qualite --retirer » les efface "
-              "de l'archive.\n"
+        print(f"\nRien n'a été modifié. « brvm qualite --retirer » efface ces "
+              f"{len(a_retirer)} lignes de l'archive.\n"
               "Le retrait plutôt que la réparation : ces lignes n'ont pas de "
               "vrai cours derrière elles, leur substituer une valeur "
               "fabriquerait une observation.", file=sys.stderr)
         return 1
 
-    propre = qualite.retirer(archive, suspects)
+    propre = qualite.retirer(archive, a_retirer)
     propre.to_csv(chemin, index=False)
-    efface = db.effacer_cours(suspects)
+    efface = db.effacer_cours(a_retirer)
     print(f"\n{len(archive)} → {len(propre)} lignes → {chemin}")
     print(f"{efface} lignes effacées de la base.")
     return 0
@@ -1341,7 +1356,7 @@ def construire_analyseur() -> argparse.ArgumentParser:
     veille.set_defaults(fonction=_veille)
 
     qual = commandes.add_parser(
-        "qualite", help="séances fantômes dans l'archive des cours"
+        "qualite", help="séances fantômes, recopiées ou sans échange"
     )
     qual.add_argument(
         "--retirer", action="store_true",
