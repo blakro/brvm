@@ -48,7 +48,7 @@ import pandas as pd
 import requests
 from bs4 import BeautifulSoup
 
-from .. import db
+from .. import db, qualite
 from ..config import RACINE, charger
 
 # ---------------------------------------------------------------------------
@@ -841,6 +841,25 @@ def ingerer_jour() -> int:
             f"séance du {date} mise à jour à {heure}, avant la clôture "
             f"({limite}) : les cours affichés sont provisoires. Relancez "
             "après la clôture, ou ajustez ingestion.heure_cloture_seance."
+        )
+
+    # UNE PAGE DATÉE N'EST PAS UNE SÉANCE. Un jour de fermeture, brvm.org
+    # peut republier la veille sous la date du jour ; une séance non tenue
+    # n'affiche aucun échange. Le même contrôle que `brvm qualite`, face à
+    # la séance précédente de la base — 103 séances de ce genre avaient
+    # gagné l'archive par l'historique de sikafinance.
+    connu = db.lire("cours")
+    avant = connu[connu["date"].astype(str) < date] if not connu.empty \
+        else connu
+    if not avant.empty:
+        avant = avant[avant["date"] == avant["date"].max()]
+    vaines = qualite.seances_republiees(pd.concat([avant, cote],
+                                                  ignore_index=True))
+    vaines = vaines[vaines["date"] == date]
+    if not vaines.empty:
+        raise SourceIllisible(
+            f"séance du {date} : {vaines['motif'].iloc[0]} — jour de "
+            "fermeture ou séance non tenue, rien n'est enregistré."
         )
 
     n = db.enregistrer(cote, "cours")

@@ -272,6 +272,48 @@ def test_refus_pendant_la_seance():
             raise AssertionError("l'ingestion aurait dû être refusée à 12:45")
 
 
+def test_refus_d_une_page_sans_aucun_echange():
+    """Une page datée, des cours, aucun échange : brvm.org avant
+    l'ouverture, ou une séance non tenue — le 07/11/2025 dans l'archive.
+    Ce n'est pas une séance, rien ne doit s'écrire."""
+    vide = brvm_org.lire_cote(PAGE_CLOTURE)
+    vide["volume_titres"] = 0.0
+    vide["volume_fcfa"] = 0.0
+    origine = brvm_org.lire_cote
+    brvm_org.lire_cote = lambda *a, **k: vide
+    try:
+        with _horloge("2026-07-28"):
+            brvm_org.ingerer_jour()
+    except brvm_org.SourceIllisible as erreur:
+        assert "aucune valeur échangée" in str(erreur)
+    else:
+        raise AssertionError("une séance sans échange a été enregistrée")
+    finally:
+        brvm_org.lire_cote = origine
+
+
+def test_refus_d_une_page_qui_recopie_la_veille():
+    """Un jour de fermeture, la veille republiée sous la date du jour : la
+    base connaît déjà ces cours et ces quantités, au titre près."""
+    from brvm import db
+
+    cote = brvm_org.lire_cote(PAGE_CLOTURE)
+    veille = cote.assign(date="2026-07-26")
+    db.enregistrer(veille, "cours")
+    try:
+        with _horloge("2026-07-28"), _telechargement(
+            lambda url: PAGE_CLOTURE.read_text(encoding="utf-8",
+                                               errors="replace")
+        ):
+            brvm_org.ingerer_jour()
+    except brvm_org.SourceIllisible as erreur:
+        assert "recopie de la séance précédente" in str(erreur)
+    else:
+        raise AssertionError("une séance recopiée a été enregistrée")
+    finally:
+        db.effacer_cours(veille)
+
+
 # --- Référentiel ----------------------------------------------------------
 #
 # La page societes-cotees n'a jamais été observée : l'environnement de

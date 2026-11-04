@@ -430,11 +430,30 @@ jobs:
                   continue
               repetees = sum(1 for t, v, c in valeurs
                              if derniers_volumes.get(t) == (v, c))
-              if repetees >= 0.9 * len(valeurs):
+              # 75 % ET NON 90 % : le seuil de `qualite.seances_republiees`,
+              # lu sur l'archive. Les vraies séances n'y dépassent jamais
+              # 56 % ; Noël 2017 et 2018, recopiés, s'arrêtaient à 81-87 %
+              # et passaient sous l'ancien seuil.
+              if repetees >= 0.75 * len(valeurs):
                   quarantaine.setdefault(date, []).append(
                       f"{repetees}/{len(valeurs)} valeurs au volume ET au "
                       "cours identiques à leur séance précédente — séance "
                       "republiée, pas une séance neuve")
+
+          # LA SÉANCE SANS AUCUN ÉCHANGE N'EN EST PAS UNE NON PLUS. Des
+          # cours à plat, des volumes nuls partout : une page lue avant
+          # l'ouverture, ou une séance non tenue — le 07/11/2025 avait
+          # gagné l'archive ainsi. Le contrôle précédent ne la voyait pas,
+          # il ne compte que les valeurs échangées.
+          lignes_par_seance = {}
+          for ligne in incr:
+              date = ligne.split(",", 1)[0]
+              lignes_par_seance[date] = lignes_par_seance.get(date, 0) + 1
+          for date, nombre in sorted(lignes_par_seance.items()):
+              if nombre >= 5 and date not in par_seance:
+                  quarantaine.setdefault(date, []).append(
+                      f"aucune des {nombre} valeurs échangée — séance non "
+                      "tenue ou lue avant l'ouverture")
 
           # LA LIMITE DE ±7,5 % EST DÉCRITE, JAMAIS OPPOSÉE, et ce n'est pas
           # de la mollesse — c'est ce que le projet a MESURÉ. Sur l'archive,

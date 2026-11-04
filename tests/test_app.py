@@ -104,8 +104,15 @@ def lanceur(tmp_path, monkeypatch) -> str:
     veille = socle[socle["date"] == socle["date"].max()].copy()
 
     def cote_simulee():
-        seance = veille.copy()
+        # UNE VRAIE SÉANCE, PAS LA VEILLE RECOPIÉE. L'app écarte une page
+        # qui republie la veille sous une autre date — c'est ce qu'affiche
+        # brvm.org un jour de fermeture. Les quantités bougent donc d'un
+        # titre et les cours d'un franc sur une ligne sur deux.
+        seance = veille.copy().reset_index(drop=True)
         seance["date"] = SEANCE_SIMULEE
+        seance["volume_titres"] = seance["volume_titres"].fillna(0) + 1
+        seance.loc[::2, "cloture"] = seance.loc[::2, "cloture"] + 1
+        seance["volume_fcfa"] = seance["volume_titres"] * seance["cloture"]
         seance.attrs["heure_mise_a_jour"] = "15:30"
         return seance
 
@@ -182,6 +189,45 @@ def test_la_seance_lue_en_direct_survit_aux_relances(lanceur):
     assert SEANCE_AFFICHEE in _seance_affichee(at), (
         "la séance a été reperdue en changeant d'onglet"
     )
+
+
+@pytest.mark.parametrize("cas, attendu", [
+    ("avant_ouverture", "n'a pas encore commencé"),
+    ("jour_ferme", "Pas de séance le"),
+])
+def test_une_page_sans_vraie_seance_ne_remplace_pas_la_derniere(
+        lanceur, monkeypatch, cas, attendu):
+    """LE DÉFAUT DU 04/11/2026, 9 H 30. Avant l'ouverture, brvm.org porte
+    déjà la date du jour, avec les cours de la veille et des volumes nuls ;
+    un jour de fermeture, il republie la veille sous la date du jour.
+    « Actualiser » en faisait la séance de l'accueil : 0 hausse, 0 baisse,
+    tout stable, 0 FCFA. La dernière séance close doit rester affichée, et
+    l'accueil doit dire pourquoi."""
+    from brvm import db
+    from brvm.ingestion import brvm_org
+
+    archive = db.charger_archive("cours")
+    veille = archive[archive["date"] == archive["date"].max()].copy()
+
+    def page():
+        seance = veille.copy()
+        seance["date"] = SEANCE_SIMULEE
+        if cas == "avant_ouverture":
+            seance["volume_titres"] = 0.0
+            seance["volume_fcfa"] = 0.0
+        seance.attrs["heure_mise_a_jour"] = "09:30"
+        return seance
+
+    monkeypatch.setattr(brvm_org, "lire_cote", page)
+    at = _app(lanceur).run()
+    avant = _seance_affichee(at)
+    at.button[0].click().run()
+    assert not at.exception, [str(e) for e in at.exception]
+    assert SEANCE_AFFICHEE not in _seance_affichee(at)
+    assert _seance_affichee(at) == avant
+    infos = " ".join(bloc.value for bloc in at.info)
+    assert attendu in infos, infos
+    assert "0 actions montent, 0 baissent" not in _textes(at)
 
 
 def test_l_onglet_ouvert_tient_d_une_relance_a_l_autre(lanceur):

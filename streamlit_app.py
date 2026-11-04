@@ -29,7 +29,7 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from brvm import db, fractionnement, pedagogie, prediction
+from brvm import db, fractionnement, pedagogie, prediction, qualite
 from brvm.config import DEFAUTS, charger
 from brvm.ingestion import brvm_org
 
@@ -582,6 +582,28 @@ with haut_2:
 direct, echec = (None, None)
 if cours.empty or st.session_state.get("en_direct"):
     direct, echec = lire_en_direct()
+
+# UNE PAGE DATÉE DU JOUR N'EST PAS ENCORE UNE SÉANCE. Avant l'ouverture,
+# brvm.org porte déjà la date du jour avec les cours de la veille et des
+# volumes nuls ; un jour de fermeture, il peut republier la veille sous la
+# date du jour. Versée telle quelle, l'une ou l'autre devenait la « séance
+# du jour » de l'accueil : 0 hausse, 0 baisse, tout stable, 0 FCFA — c'est
+# l'utilisateur qui l'a vu, le 04/11/2026 à 9 h 30. Le contrôle est celui
+# de l'archive (`qualite.seances_republiees`), face à la dernière séance
+# close ; la page est alors écartée, et l'accueil dit pourquoi.
+attente = None
+if (direct is not None and not direct.empty and not cours.empty
+        and str(direct["date"].max()) > str(cours["date"].max())):
+    _temoin = pd.concat([cours[cours["date"] == cours["date"].max()], direct],
+                        ignore_index=True)
+    _vaines = qualite.seances_republiees(_temoin)
+    _vaines = _vaines[_vaines["date"] == str(direct["date"].max())]
+    if not _vaines.empty:
+        attente = (str(direct["date"].max()),
+                   direct.attrs.get("heure_mise_a_jour"),
+                   _vaines["motif"].iloc[0])
+        direct = None
+
 if direct is not None and not direct.empty:
     cours = (pd.concat([cours, direct], ignore_index=True)
              .drop_duplicates(subset=["date", "ticker"], keep="last"))
@@ -630,6 +652,19 @@ with haut_1:
 
 if echec:
     st.caption(f"brvm.org injoignable ({echec}) — affichage de l'archive.")
+if attente:
+    _jour_attendu, _heure, _motif = attente
+    _quand = f" à {_heure}" if _heure else ""
+    st.info(
+        (f"⏳ **La séance du {pedagogie.jour(_jour_attendu)} n'a pas encore "
+         f"commencé** : brvm.org n'affiche encore aucun échange{_quand}. "
+         f"Voici la dernière séance close, celle du {pedagogie.jour(derniere)}"
+         " ; réessayez « Actualiser » après les premiers échanges."
+         if _motif == "aucune valeur échangée" else
+         f"⏳ **Pas de séance le {pedagogie.jour(_jour_attendu)}** : brvm.org "
+         f"republie la séance précédente{_quand}, sans aucun échange nouveau "
+         "— la bourse est sans doute fermée ce jour-là. Voici la dernière "
+         f"séance close, celle du {pedagogie.jour(derniere)}."))
 
 st.write("")
 
