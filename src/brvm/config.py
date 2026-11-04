@@ -54,6 +54,8 @@ DEFAUTS: dict[str, dict] = {
         "archive_dividendes": "data/dividendes.csv",
         "archive_fondamentaux": "data/fondamentaux.csv",
         "archive_exogenes": "data/exogenes.csv",
+        # Fractionnements et regroupements déclarés — voir `fractionnement`.
+        "archive_fractionnements": "data/fractionnements.csv",
     },
     "analyse": {
         # Seuil de liquidité, en FCFA de volume médian quotidien. Une

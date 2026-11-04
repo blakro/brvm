@@ -787,6 +787,7 @@ data/                     L'ARCHIVE — c'est la base de données du projet
   dividendes.csv            309 détachements datés
   fondamentaux.csv          indicateurs par société
   exogenes.csv              séries externes (commodités), à charger à la main
+  fractionnements.csv       fractionnements d'actions déclarés (SNTS, PALC…)
   referentiel_amorce.csv    filet de secours si la collecte du référentiel échoue
 
 src/brvm/
@@ -803,6 +804,7 @@ src/brvm/
   dividende.py              détachements, et si le cours les reflète
   exogene.py                séries externes
   qualite.py                détection des anomalies d'archive
+  fractionnement.py         fractionnements : détection et cours ajustés
   pedagogie.py              montants, dates et pourcentages en français
   ingestion/
     brvm_org.py               la cote du jour
@@ -1063,6 +1065,8 @@ python -m brvm importer      # CSV versionnés → base
 python -m brvm etat          # ce que contient la base
 python -m brvm veille        # l'archive s'enrichit-elle encore ?
 python -m brvm qualite       # séances fantômes et désaccords entre sources
+python -m brvm fractionnements               # fractionnements ajustés
+python -m brvm fractionnements --enregistrer # verse les détections au registre
 python -m brvm importer-dividendes fichier.csv
 python -m brvm importer-fondamentaux fichier.csv
 python -m brvm importer-exogenes fichier.csv
@@ -1150,7 +1154,7 @@ dupliquer.
 
 ### Les tables
 
-Six tables, déclarées dans `src/brvm/db.py` :
+Sept tables, déclarées dans `src/brvm/db.py` :
 
 | Table | Clé | Contenu |
 |---|---|---|
@@ -1159,6 +1163,7 @@ Six tables, déclarées dans `src/brvm/db.py` :
 | `dividendes` | (ticker, date_detachement) | montant net, exercice |
 | `fondamentaux` | (ticker, date, indicateur) | dividende, rendement, et ce qui viendra |
 | `exogenes` | (date, serie) | commodités, taux — chargés à la main |
+| `fractionnements` | (ticker, date) | rapport (actions nouvelles pour une ancienne), note |
 | `journal_ingestion` | — | trace de chaque exécution |
 
 ### Le référentiel garde la mémoire des sociétés disparues
@@ -1332,6 +1337,68 @@ mécanisme se lit à découvert sur ONTBF : cours divisé par deux, quantité
 doublée, capitaux échangés identiques au franc près à ceux de la veille.
 Ce ne sont pas des cours mal transcrits, ce sont des échos de la séance
 précédente rejoués à une autre échelle.
+
+### Les fractionnements d'actions
+
+Le 26 octobre 2026, la SONATEL (SNTS) a été fractionnée : une action
+ancienne est devenue dix nouvelles, le nominal passant de 500 à 50 FCFA.
+L'archive porte 43 850 FCFA le 23 octobre et 4 700 le 26. Lue brute, la
+série affichait une chute de 89 % en une séance — et l'app une pire chute
+de 90,8 % sur un an, une évolution de −82,8 % sur un an, et un dividende
+rapportant 40,5 % par an : les 1 740 FCFA du dernier détachement, versés
+sur l'action ancienne, rapportés au prix de la nouvelle. Le modèle de
+prévision, lui, apprenait sur un krach qui n'a pas eu lieu.
+
+**L'archive garde les cours tels qu'ils ont été publiés** ; c'est la
+lecture qui les ajuste (`src/brvm/fractionnement.py`). Avant un
+fractionnement de rapport *r*, les cours sont divisés par *r*, les
+quantités échangées multipliées par *r* (les capitaux en FCFA ne bougent
+pas), et les dividendes divisés par *r*. C'est la convention de toutes les
+séries ajustées : le dernier cours est le vrai, le passé est exprimé en
+actions d'aujourd'hui. Pour SNTS, la veille ajustée retombe sur 4 385
+FCFA — le prix de référence ajusté publié par la BRVM — et la séance du 26
+redevient une hausse de 7,18 %. Après ajustement, la fiche SNTS affiche
+4,0 % de dividende, −11,7 % de pire chute et +72 % sur un an.
+
+Les événements viennent de deux endroits :
+
+- **Le registre `data/fractionnements.csv`** fait foi : ticker, première
+  séance sur la nouvelle base, rapport (10 pour « 1 pour 10 », 0,1 pour
+  un regroupement de dix actions en une), note. Une ligne au rapport de 1
+  dit « ceci n'est pas un fractionnement » et fait taire la détection à
+  cette date.
+- **La détection automatique** couvre les fractionnements à venir sans
+  que personne ait à y penser. Sous la limite de ±7,5 % par séance, un
+  cours divisé par deux ou plus n'est pas un mouvement de marché. La
+  signature : le saut, une fois retirée une variation ordinaire d'au plus
+  10 %, tombe sur un entier d'au moins 2 (le plus rond s'il y en a
+  plusieurs : 10 plutôt que 9), et le nouveau niveau **tient** — les
+  séances suivantes restent plus près du nouveau cours que de l'ancien,
+  les précédentes plus près de l'ancien. Les séances fantômes et leur
+  retour sont ainsi écartés, comme le détachement exceptionnel de FTSC le
+  26/09/2025 (−42 %, aucun entier à 10 % près).
+
+Un fractionnement est ajusté **dès la séance où il a lieu**, sans attendre
+de confirmation ; si le nouveau niveau ne tient pas (une clôture mal
+transcrite), la détection le voit à la séance suivante et cesse d'ajuster.
+Un rapport non entier (trois pour deux) ou un saut noyé dans un long trou
+de cotation ne sont pas reconnus : ils se déclarent au registre.
+
+Les dividendes par exercice des fondamentaux n'ont pas de date de
+versement, et la source peut republier son tableau déjà ajusté. Le
+rendement publié à côté de chaque montant sert de témoin : leur rapport
+donne le cours sur lequel le montant est exprimé (1 740 FCFA à 7,25 %,
+soit 24 000 : l'action ancienne), et l'échelle retenue est celle qui le
+ramène au cours ajusté de l'exercice. Un montant déjà republié en actions
+nouvelles n'est donc pas divisé une seconde fois.
+
+Le registre contient trois lignes. SNTS, et PALC (2 pour 1 le 03/11/2017)
+sont documentés. ONTBF (×2 le 05/02/2018) ne l'est pas : la détection l'a
+trouvé, le cours divisé par deux est resté à ce niveau, et les dividendes
+passent de 34 à 68 millions d'actions entre 2018 et 2019, mais aucun avis
+n'a été retrouvé — la note le dit. `python -m brvm fractionnements` liste
+ce qui est appliqué et d'où ça vient ; `python -m brvm qualite` range ces
+trois séances sous « fractionnement d'actions » plutôt que « à examiner ».
 
 ---
 

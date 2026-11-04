@@ -100,6 +100,21 @@ SCHEMAS: dict[str, str] = {
             PRIMARY KEY (date, serie)
         )
     """,
+    # Fractionnements et regroupements d'actions : le registre qui fait foi
+    # — voir `fractionnement`. `date` est la première séance cotée sur la
+    # nouvelle base ; `rapport` le nombre d'actions nouvelles pour une
+    # ancienne (10 pour « 1 pour 10 », 0,1 pour un regroupement). Les
+    # cours de l'archive, eux, restent tels que publiés : l'ajustement se
+    # fait à la lecture, d'après cette table.
+    "fractionnements": """
+        CREATE TABLE IF NOT EXISTS fractionnements (
+            ticker  TEXT NOT NULL,
+            date    TEXT NOT NULL,
+            rapport REAL NOT NULL,
+            note    TEXT,
+            PRIMARY KEY (ticker, date)
+        )
+    """,
     "journal_ingestion": """
         CREATE TABLE IF NOT EXISTS journal_ingestion (
             horodatage TEXT NOT NULL,
@@ -263,6 +278,7 @@ ARCHIVES = {
     "dividendes": ("archive_dividendes", ["ticker", "date_detachement"]),
     "fondamentaux": ("archive_fondamentaux", ["ticker", "date", "indicateur"]),
     "exogenes": ("archive_exogenes", ["date", "serie"]),
+    "fractionnements": ("archive_fractionnements", ["ticker", "date"]),
 }
 
 
