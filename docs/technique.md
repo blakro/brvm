@@ -1370,6 +1370,13 @@ partout :
   donc son action au rouge ;
 - `ingerer_jour` refuse une page sans vraie séance, et `versement.yml` la
   met en quarantaine ;
+- **une ingestion ne comble plus de trou.** Son artefact porte l'archive
+  entière de son jour : le soir même du nettoyage, le versement a pris les
+  102 dates retirées pour des séances manquées et les a recomblées depuis
+  les artefacts des jours précédents. Seul un rapatriement, lancé à la
+  main, reprend désormais une date absente, et la recopie s'y juge face à
+  la séance qui précède chaque date, non plus face à la dernière de
+  l'archive ;
 - **l'app** ne prend plus pour la séance du jour une page lue avant
   l'ouverture : brvm.org y porte déjà la date du jour, avec les cours de
   la veille et des volumes nuls, et « Actualiser » affichait alors 0
