@@ -869,24 +869,31 @@ celui de l'app sur ce que son lecteur en fera. Une météo de la semaine
 invite à passer un ordre par semaine, et c'est la cadence que les frais
 punissent le plus — le second tableau ci-dessous.
 
-Ce que vaut le modèle à chaque échéance, sur l'archive arrêtée au 8 octobre
-2026 (validation glissante, dix années de test ; l'avance est celle des dix
-premières **achetables**, sur la durée de l'échéance) :
+Ce que vaut le modèle à chaque échéance, sur l'archive arrêtée au 16
+novembre 2026, sans les séances recopiées (validation glissante, dix années
+de test ; l'avance est celle des dix premières **achetables**, sur la durée
+de l'échéance) :
 
 | Échéance | Bonnes réponses | Années au-dessus de 50 % | Avance des 10 favorites | t de l'avance |
 |---|---|---|---|---|
-| 5 séances (l'ancienne météo) | 52,4 % | 9 / 10 | +0,32 % par semaine | +5,4 |
-| **20 séances, le mois** | **52,4 %** | **9 / 10** | **+0,63 % par mois** | **+2,9** |
-| **60 séances, le trimestre** | **52,1 %** | **9 / 10** | **+0,89 % par trimestre** | **+1,2** |
+| 5 séances (l'ancienne météo) | 52,3 % | 10 / 10 | +0,32 % par semaine | +5,2 |
+| **20 séances, le mois** | **52,1 %** | **9 / 10** | **+0,57 % par mois** | **+2,5** |
+| **60 séances, le trimestre** | **51,9 %** | **9 / 10** | **+0,84 % par trimestre** | **+1,1** |
+
+Sur l'archive du 8 octobre, qui portait encore les 102 séances recopiées,
+le tableau rendait 52,4, 52,4 et 52,1 % de bonnes réponses et +0,32, +0,63
+et +0,89 % d'avance, avec 9 années sur 10 à la semaine : le retrait
+déplace les chiffres de quelques dixièmes de point au plus, et aucun
+verdict.
 
 La porte de production de `valider` (IC et avance positifs hors
 échantillon) s'ouvre aux trois échéances, et les bonnes réponses ne bougent
 presque pas. C'est l'avance qui se dilue : par an, elle passe de +16 % à
-+8 % puis +4 %, et **au trimestre elle n'est plus démontrée** — l'archive ne
-contient que 37 trimestres indépendants pour la juger, et l'écart reste dans
-sa marge d'erreur. Ce n'est pas un accident de l'archive du jour : arrêtée
-fin 2023, mi-2024, fin 2024, mi-2025, fin 2025 ou fin avril 2026, la
-validation rend au trimestre un t de l'avance entre 0,9 et 1,4, jamais
++7 % puis +3,5 %, et **au trimestre elle n'est plus démontrée** — l'archive
+ne contient que 35 trimestres indépendants pour la juger, et l'écart reste
+dans sa marge d'erreur. Ce n'est pas un accident de l'archive du jour :
+arrêtée fin 2023, mi-2024, fin 2024, mi-2025, fin 2025 ou fin avril 2026 (et
+mesurée alors avec les séances recopiées), la validation rend au trimestre un t de l'avance entre 0,9 et 1,4, jamais
 significatif, et au mois entre 2,6 et 3,5, toujours significatif ; la porte
 de production s'ouvre aux deux échéances sur les six. L'onglet Prédictions
 et la fiche d'une action le disent en clair chaque fois que
@@ -911,21 +918,34 @@ l'univers, en moyenne sur plusieurs calendriers décalés :
 
 | Échéance et cadence | Calendriers | Frais nuls | 1,50 % par sens | Seuil de rentabilité, selon le calendrier |
 |---|---|---|---|---|
-| 5 séances | 5 | +9,9 % | −36,3 % | 0,18 à 0,35 % |
-| **20 séances** | 7 | **+5,2 %** | **−14,5 %** | 0,06 à 0,80 % |
-| **60 séances** | 6 | **+1,3 %** | **−5,7 %** | aucun (2 fois sur 6) à 0,85 % |
+| 5 séances | 5 | +8,8 % | −37,8 % | 0,14 à 0,28 % |
+| **20 séances** | 7 | **+4,4 %** | **−14,9 %** | 0,09 à 0,63 % |
+| **60 séances** | 6 | **+2,9 %** | **−4,3 %** | aucun (1 fois sur 6) à 1,52 % |
 
-Aucune échéance ne paie ses frais ; le verdict de l'onglet est le même aux
-trois, et seulement moins sévère quand on tourne moins. La ligne à cinq
-séances rend sur l'archive du 8 octobre ce que le tableau de `config.py`
-rendait sur celle du 28 septembre (+10,3 % et −36,1 %), au demi-point près.
+Aucune échéance ne paie ses frais en moyenne ; le verdict de l'onglet est le
+même aux trois, et seulement moins sévère quand on tourne moins.
+
+Une case mérite d'être lue lentement : au trimestre, le meilleur calendrier
+a un seuil de 1,52 %, et passe donc les frais réels — de **+0,07 % l'an**.
+Un autre ne bat le marché à aucun niveau de frais, et la moyenne des six
+reste à −4,3 %. Ce n'est pas une stratégie qui paie, c'est la dispersion
+qu'on attend d'une quarantaine de décisions par calendrier, et la raison
+pour laquelle le tableau en fait la moyenne.
+
+> **Ces chiffres ont changé le 17 novembre 2026.** Ils étaient mesurés sur
+> l'archive du 8 octobre, qui portait encore les 102 séances recopiées :
+> +9,9 / −36,3 % à la semaine, +5,2 / −14,5 % au mois, +1,3 / −5,7 % au
+> trimestre. Une copie ajoute une séance où rien ne bouge, donc décale les
+> horizons, qui comptent des séances ; le retrait déplace chaque ligne d'un
+> à deux points sans frais — la semaine et le mois vers le bas, le
+> trimestre vers le haut —, et ne change aucun verdict.
 
 Les deux tableaux ne se lisent pas l'un avec l'autre sans précaution.
 L'avance du premier compte chaque séance, au prix du jour de la décision ;
 le rejeu du second achète à la séance suivante et seulement une fois par
-échéance, comme on le ferait vraiment. Au mois, +0,63 % par période fait
-environ +8 % l'an, et le rejeu sans frais en garde +5,2 % ; au trimestre,
-environ +3,7 % l'an contre +1,3 %. L'app le rappelle sous le piège des
+échéance, comme on le ferait vraiment. Au mois, +0,57 % par période fait
+environ +7 % l'an, et le rejeu sans frais en garde +4,4 % ; au trimestre,
+environ +3,5 % l'an contre +2,9 %. L'app le rappelle sous le piège des
 frais.
 
 Les rendements du rejeu sont les seuls chiffres de l'onglet écrits en dur,
