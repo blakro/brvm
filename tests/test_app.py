@@ -24,7 +24,10 @@ Ce qui est testé ici est donc l'ÉTAT, pas le calcul :
 6. une échéance dont l'avance n'est pas démontrée est signalée sur la
    fiche d'une action comme dans l'onglet Prédictions ;
 7. une échéance où le modèle échoue à sa porte de production le dit, sur
-   les deux onglets, au lieu d'afficher le classement de secours.
+   les deux onglets, au lieu d'afficher le classement de secours ;
+8. un chiffre animé vaut sa cible même quand l'animation est coupée ;
+9. une ligne cliquée dans le tableau de la séance ouvre la fiche de sa
+   société.
 
 Le réseau n'est jamais touché : `brvm_org.lire_cote` est remplacé par une
 séance fabriquée, comme le reste de la suite travaille sur les captures de
@@ -402,6 +405,60 @@ def test_la_fiche_et_l_onglet_predictions_font_la_meme_reserve(lanceur):
             f"{duree} : l'onglet Prédictions "
             f"{'émet' if dans_l_onglet else 'n’émet pas'} la réserve, la "
             f"fiche {'non' if dans_l_onglet else 'si'}")
+
+
+def test_un_compteur_ne_depend_pas_de_son_animation(lanceur):
+    """LE DÉFAUT DES « 0 ACTIONS EN HAUSSE ». Le nombre d'une carte
+    animée n'existait qu'au bout de l'animation ; quand le système demande
+    moins de mouvement, elle est coupée, et l'accueil affichait « 0 » au
+    milieu d'une séance à 9 hausses — l'onglet Prédictions « 0 année
+    au-dessus de 50 % » à côté d'un graphique qui en montrait 9.
+
+    Deux garanties : la valeur finale est la valeur de BASE du compteur,
+    et le vrai nombre est écrit en texte, pour les lecteurs d'écran."""
+    at = _app(lanceur).run()
+    assert not at.exception, [str(e) for e in at.exception]
+    textes = _textes(at)
+    assert re.search(r"\.compteur \{[^}]*--n: var\(--cible\)", textes), \
+        "le compteur ne vaut sa cible que si l'animation tourne"
+
+    barre = re.search(r"▲ (\d+) en hausse.*?▼ (\d+) en baisse", textes)
+    assert barre, "la barre tricolore est absente"
+    for libelle, attendu in (("Montent", barre.group(1)),
+                             ("Baissent", barre.group(2))):
+        carte = next(b.value for b in at.markdown
+                     if f'class="label">{libelle}</div>' in b.value)
+        assert f'--cible:{attendu}"' in carte
+        assert f'<span class="lecteur">{attendu}</span>' in carte, \
+            f"« {libelle} » : le nombre n'est pas écrit en texte"
+
+
+@pytest.mark.parametrize("selection", [
+    {"rows": [3], "columns": [], "cells": []},
+    # Un clic sur une cellule : c'est le geste naturel, et il ne
+    # sélectionne pas la ligne.
+    {"rows": [], "columns": [], "cells": [[3, "nom"]]},
+])
+def test_une_ligne_cliquee_ouvre_la_fiche_de_sa_societe(lanceur, selection):
+    """Le tableau de la séance mène aux fiches : cliquer une ligne ouvre
+    l'onglet « Une action » sur cette société, et l'URL suit."""
+    at = _app(lanceur).run()
+    tableau = at.dataframe[0]
+    attendu = tableau.value["ticker"].iloc[3]
+    at.session_state[tableau.key] = {"selection": selection}
+    at.run()
+    assert not at.exception, [str(e) for e in at.exception]
+    assert at.session_state["onglet"] == "🔎 Une action"
+    assert at.session_state["valeur"] == attendu
+    assert at.query_params["valeur"] == attendu
+
+    # De retour sur l'accueil, la ligne n'est plus sélectionnée : sans
+    # quoi la recliquer ne ferait plus rien.
+    at.session_state["onglet"] = "🏠 Aujourd'hui"
+    at.run()
+    assert not at.exception, [str(e) for e in at.exception]
+    assert at.session_state["onglet"] == "🏠 Aujourd'hui"
+    assert at.dataframe[0].key != tableau.key
 
 
 def test_le_glossaire_se_filtre(lanceur):

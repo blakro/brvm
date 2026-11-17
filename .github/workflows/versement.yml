@@ -225,14 +225,27 @@ jobs:
                   # verse ce qui est postérieur, et ce qui comble une date
                   # dont l'archive ne sait rien. Jamais une ligne qu'elle a
                   # écartée d'une date qu'elle connaît.
-                  ajout, ecartees = {}, 0
+                  #
+                  # ET SEUL UN RAPATRIEMENT COMBLE UN TROU. L'artefact d'une
+                  # ingestion porte l'archive ENTIÈRE de son jour, plus la
+                  # séance qu'elle a lue. Le 04/11/2026, 102 séances
+                  # recopiées venaient d'être retirées de l'archive — des
+                  # dates entières, donc des « trous » — et les artefacts
+                  # des ingestions précédentes, qui les portaient encore,
+                  # les ont toutes recomblées le soir même. Une ingestion
+                  # n'apporte qu'une chose : ce qui est postérieur à
+                  # l'archive. Reprendre une séance manquée, c'est le rôle
+                  # du rapatriement, lancé à la main.
+                  ajout, ecartees, refusees = {}, 0, set()
                   combles = set()
                   for (d, t), l in absentes.items():
                       if d > derniere:
                           ajout[(d, t)] = l
-                      elif d not in datees:
+                      elif d not in datees and atelier == "rapatriement.yml":
                           ajout[(d, t)] = l
                           combles.add(d)
+                      elif d not in datees:
+                          refusees.add(d)
                       else:
                           ecartees += 1
                   dates = sorted({d for d, _ in ajout})
@@ -241,6 +254,11 @@ jobs:
                   if combles:
                       print(f"      dont {len(combles)} séance(s) comblée(s) "
                             f"dans l'archive : {', '.join(sorted(combles))}")
+                  if refusees:
+                      print(f"      {len(refusees)} date(s) absente(s) de "
+                            "l'archive IGNORÉE(S) : une ingestion ne comble "
+                            "pas de trou — séances retirées à dessein, ou à "
+                            "reprendre par rapatriement")
                   if ecartees:
                       anciennes = sorted({d for d, _ in absentes
                                           if d <= derniere and d in datees})
@@ -412,11 +430,28 @@ jobs:
           # Les volumes NULS se répètent normalement — une valeur qui
           # n'échange pas deux jours de suite — et sont donc exclus du
           # décompte, comme dans le contrôle d'origine.
-          derniers_volumes = {}
-          for ligne in archive:
+          #
+          # FACE À LA SÉANCE QUI PRÉCÈDE CHAQUE DATE, PAS À LA DERNIÈRE DE
+          # L'ARCHIVE. Comparer à la dernière ne vaut que pour une séance
+          # postérieure ; une date comblée en plein historique se
+          # comparait au cours d'aujourd'hui, et les 102 recopies du
+          # 04/11/2026 sont passées. Les lignes de l'incrément comptent
+          # aussi : trois jours fériés d'affilée se recopient en chaîne.
+          import bisect
+          historique: dict[str, list] = {}
+          for ligne in archive + incr:
               champs = ligne.split(",")
-              if champs[6]:
-                  derniers_volumes[champs[1]] = (champs[6], champs[5])
+              if champs[5] and champs[6]:
+                  historique.setdefault(champs[1], []).append(
+                      (champs[0], float(champs[6]), float(champs[5])))
+          for serie in historique.values():
+              serie.sort()
+
+          def precedente(ticker: str, jour: str):
+              serie = historique.get(ticker, [])
+              rang = bisect.bisect_left(serie, (jour,))
+              return serie[rang - 1][1:] if rang else None
+
           par_seance = {}
           for ligne in incr:
               champs = ligne.split(",")
@@ -429,7 +464,7 @@ jobs:
               if len(valeurs) < 5:
                   continue
               repetees = sum(1 for t, v, c in valeurs
-                             if derniers_volumes.get(t) == (v, c))
+                             if precedente(t, date) == (float(v), float(c)))
               # 75 % ET NON 90 % : le seuil de `qualite.seances_republiees`,
               # lu sur l'archive. Les vraies séances n'y dépassent jamais
               # 56 % ; Noël 2017 et 2018, recopiés, s'arrêtaient à 81-87 %

@@ -20,7 +20,7 @@ Rien à installer, tout se passe dans le navigateur.
 
 | Onglet | À quoi il sert |
 |---|---|
-| 🏠 **Aujourd'hui** | La « météo » du marché : combien d'actions montent, combien baissent, les plus fortes hausses et baisses, les secteurs. |
+| 🏠 **Aujourd'hui** | La « météo » du marché : combien d'actions montent, combien baissent, les plus fortes hausses et baisses, les secteurs. Un clic sur une action du tableau ouvre sa fiche. |
 | 🔎 **Une action** | Tout savoir avant d'acheter ou de vendre : prix et évolution, une **fiche en six points** (facile à revendre ? prix agité ? pire chute ? dividendes ? frais ?), un **simulateur d'achat** (frais compris, prix pour ne rien perdre) et la prévision du modèle pour le mois et le trimestre qui viennent. |
 | 🔮 **Prédictions** | La « boule de cristal honnête » : la météo du mois ou du trimestre qui vient pour chaque action, combien de fois le modèle a eu raison par le passé, et pourquoi les frais mangent son avance. |
 | 💰 **Dividendes** | Les sociétés qui reversent le plus, les derniers versements, et un calculateur : « combien rapporterait mon épargne ? » |
