@@ -112,23 +112,25 @@ LIMITE_SEANCE = 0.075
 # décalés, sans frais puis à 1,50 % par sens :
 #
 #     échéance          calendriers   sans frais   1,50 % par sens
-#      5 (semaine)           5           +9,9 %        -36,3 %
-#     20 (mois)              7           +5,2 %        -14,5 %
-#     60 (trimestre)         6           +1,3 %         -5,7 %
+#      5 (semaine)           5           +8,8 %        -37,8 %
+#     20 (mois)              7           +4,4 %        -14,9 %
+#     60 (trimestre)         6           +2,9 %         -4,3 %
 #
-# Archive arrêtée au 8 octobre 2026 ; les commandes qui refont chaque ligne
-# sont dans docs/technique.md.
+# Archive arrêtée au 16 novembre 2026, sans les 102 séances recopiées que
+# celle du 8 octobre portait encore (+5,2 / -14,5 % au mois, +1,3 / -5,7 %
+# au trimestre). Les commandes qui refont chaque ligne sont dans
+# docs/technique.md.
 HORIZONS = {
     20: {"bouton": "🗓️ Le mois qui vient", "mots": "le mois qui vient",
          "unite": "mois", "unites": "mois", "un": "un mois",
-         "sans_frais": 0.0516, "avec_frais": -0.1447},
+         "sans_frais": 0.0438, "avec_frais": -0.1491},
     60: {"bouton": "🔭 Le trimestre qui vient",
          "mots": "le trimestre qui vient",
          "unite": "trimestre", "unites": "trimestres", "un": "un trimestre",
-         "sans_frais": 0.0129, "avec_frais": -0.0574},
+         "sans_frais": 0.0288, "avec_frais": -0.0428},
 }
 HORIZON_DEFAUT = 20
-ARCHIVE_DU_REJEU = "8 octobre 2026"
+ARCHIVE_DU_REJEU = "16 novembre 2026"
 
 
 def _secteur(nom) -> tuple[str, str]:
