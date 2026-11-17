@@ -951,6 +951,11 @@ Streamlit rejoue tout le script à chaque clic :
   `?onglet=action&valeur=SNTS` pour partager une fiche.
 - **L'échéance de la prévision tient aussi**, d'un onglet à l'autre : le
   mois ou le trimestre choisi dans 🔮 Prédictions reste choisi.
+- **Un clic sur une ligne ouvre la fiche.** Dans le tableau de la séance
+  comme dans le détail des prédictions, cliquer n'importe quelle cellule
+  d'une ligne ouvre 🔎 Une action sur cette société. Le tableau est rendu
+  après les onglets et ne peut plus les changer au même passage : il
+  dépose la destination et relance, et elle s'applique avant `st.tabs`.
 - **Seul l'onglet visible se calcule**, et les calculs lourds sont gardés
   en mémoire tant que l'archive ne change pas. Une prévision prend une
   quinzaine de secondes par échéance la première fois (la validation
@@ -963,7 +968,13 @@ Streamlit rejoue tout le script à chaque clic :
 Hausse en vert, baisse en rouge — mais **toujours avec une flèche ▲ ▼**,
 pour qu'un lecteur qui confond les deux couleurs lise quand même le sens.
 Le mode sombre a sa propre palette, et les animations se coupent quand le
-système demande « moins de mouvement ».
+système demande « moins de mouvement ». Les chiffres qui défilent n'en
+dépendent pas : leur valeur finale est leur valeur de base, et l'animation
+ne fait que partir de zéro. Ce n'était pas le cas, et l'accueil annonçait
+alors « 0 actions en hausse » au-dessus d'une barre qui en comptait 9.
+
+Sur un téléphone, les cinq onglets passent sur plusieurs lignes plutôt que
+de défiler hors de l'écran, et les cartes empilées gardent leur écart.
 
 ### Redéployer l'application
 

@@ -135,6 +135,23 @@ def _secteur(nom) -> tuple[str, str]:
     return SECTEURS.get(nom, ("🏢", BLEU))
 
 
+# Où couper un nom de secteur trop long pour sa carte. Sept cartes côte à
+# côte laissent une douzaine de lettres par ligne, et le navigateur coupait
+# « Télécommunicatio / ns » là où le mot débordait, sans trait d'union. Une
+# césure conditionnelle (U+00AD) ne se voit que si la ligne casse, et la
+# fait casser à une syllabe, avec son tiret. Seulement les mots qui ne
+# tiennent pas seuls sur une ligne : le navigateur remplit chaque ligne au
+# plus loin, et une césure dans « Financiers » donnait « Services Finan- /
+# ciers » là où « Services / Financiers » tenait.
+CESURES = {"Télécommunications": "Télé­commu­nications",
+           "Consommation": "Consom­mation",
+           "Discrétionnaire": "Discré­tionnaire"}
+
+
+def _cesure(nom: str) -> str:
+    return " ".join(CESURES.get(mot, mot) for mot in nom.split(" "))
+
+
 def _rgba(couleur: str, alpha: float) -> str:
     c = couleur.lstrip("#")
     r, v, b = (int(c[i:i + 2], 16) for i in (0, 2, 4))
@@ -216,9 +233,20 @@ html, body, [class*="css"], .stMarkdown, button, input {{
 .d5 {{ animation-delay: .33s; }} .d6 {{ animation-delay: .40s; }}
 .d7 {{ animation-delay: .47s; }}
 
-.compteur {{ animation: compte 1.4s cubic-bezier(.2,.8,.2,1) forwards;
-            counter-reset: n var(--n); }}
+/* LA VALEUR FINALE EST LA VALEUR DE BASE ; l'animation ne fait que partir
+   de zéro. Quand le système demande « moins de mouvement », la règle du bas
+   coupe l'animation : `--n` gardait alors sa valeur initiale, et l'accueil
+   annonçait « 0 actions en hausse » au-dessus d'une barre qui en comptait 9,
+   l'onglet Prédictions « 0 année au-dessus de 50 % » à côté d'un graphique
+   qui en montrait 9. */
+.compteur {{ --n: var(--cible); counter-reset: n var(--n);
+            animation: compte 1.4s cubic-bezier(.2,.8,.2,1) forwards; }}
 .compteur::after {{ content: counter(n); }}
+/* Lu par les lecteurs d'écran, invisible à l'œil : le chiffre qui défile
+   est un dessin, celui-ci est le texte. */
+.lecteur {{ position: absolute; width: 1px; height: 1px; padding: 0;
+           margin: -1px; overflow: hidden; clip: rect(0 0 0 0);
+           white-space: nowrap; border: 0; }}
 
 /* --- Bandeau d'accueil ------------------------------------------------ */
 .bandeau {{
@@ -292,7 +320,8 @@ html, body, [class*="css"], .stMarkdown, button, input {{
 .secteur {{ border-top: 5px solid; text-align: center; }}
 .secteur .emo {{ font-size: 1.9rem; }}
 .secteur .nomsec {{ font-size: .78rem; font-weight: 700; color: {DOUX};
-                   min-height: 2.4em; line-height: 1.2; margin: .2rem 0; }}
+                   min-height: 2.4em; line-height: 1.2; margin: .2rem 0;
+                   hyphens: manual; }}
 
 .meteo {{ display: flex; align-items: center; gap: 1.1rem; }}
 .meteo .emoji {{ font-size: 3.6rem; animation: flotte 4s ease-in-out infinite; }}
@@ -390,6 +419,17 @@ html, body, [class*="css"], .stMarkdown, button, input {{
 @media (max-width: 640px) {{
   .bandeau {{ padding: 1.3rem; }} .bandeau h1 {{ font-size: 1.5rem !important; }}
   .stat .valeur {{ font-size: 1.7rem; }}
+  /* Sur un téléphone, les colonnes s'empilent — et Streamlit retire 1 rem
+     sous chaque bloc de texte, ce qui annulait l'écart entre deux cartes :
+     elles se touchaient, celles des secteurs se chevauchaient. */
+  [data-testid="stColumn"] .carte {{ margin-bottom: 1rem; }}
+  /* Les cinq onglets sur deux lignes plutôt qu'un ruban qui défile : à
+     390 px, « Prédictions », « Dividendes » et « Comprendre » restaient
+     cachés hors de l'écran, et rien ne disait qu'ils existaient. */
+  .stTabs [role="tablist"] {{ flex-wrap: wrap; justify-content: center;
+                             border-radius: 22px; width: 100%; }}
+  .stTabs [role="tab"] {{ padding: .45rem .8rem !important; }}
+  .stTabs [role="tab"] p {{ font-size: .9rem; }}
 }}
 @media (prefers-reduced-motion: reduce) {{
   *, *::before, *::after {{ animation: none !important; transition: none !important; }}
@@ -409,9 +449,13 @@ def _titre(texte: str, sous: str = "") -> None:
 def _stat(colonne, label: str, valeur: str, note: str, couleurs: tuple,
           icone: str, delai: int = 1, nombre: int | None = None) -> None:
     """Une carte colorée. `nombre` : un entier qui défile de 0 à sa valeur."""
-    contenu = (f'<span class="compteur" style="--cible:{nombre}" '
-               f'aria-label="{nombre}"></span>' if nombre is not None
-               else valeur)
+    # `aria-label` sur un <span> sans rôle n'est pas lu de façon fiable, et
+    # le chiffre dessiné par `::after` peut l'être à mi-course (« 3 »). Le
+    # dessin est donc caché aux lecteurs d'écran, et le nombre leur est
+    # donné en texte.
+    contenu = (f'<span class="compteur" style="--cible:{int(nombre)}" '
+               f'aria-hidden="true"></span><span class="lecteur">{int(nombre)}'
+               '</span>' if nombre is not None else valeur)
     colonne.markdown(
         f'<div class="carte stat anime d{min(delai, 7)}" style="background:'
         f'linear-gradient(135deg,{couleurs[0]},{couleurs[1]});'
@@ -681,6 +725,16 @@ _demande = st.query_params.get("onglet")
 if "onglet" not in st.session_state and _demande in ONGLETS:
     st.session_state["onglet"] = ONGLETS[_demande]
 
+# UNE LIGNE CLIQUÉE DANS UN TABLEAU OUVRE LA FICHE DE SA SOCIÉTÉ. Le tableau
+# est rendu DANS un onglet, donc après `st.tabs` : il ne peut plus changer
+# l'onglet ouvert au passage où on clique. Il dépose la destination et
+# relance (`_ouvrir_la_fiche`) ; c'est ici, avant que les onglets et la
+# liste des sociétés existent, qu'elle s'applique.
+_destination = st.session_state.pop("aller_a", None)
+if _destination is not None:
+    st.session_state["onglet"] = ONGLETS["action"]
+    st.session_state["valeur"] = _destination
+
 onglets = st.tabs(list(ONGLETS.values()), key="onglet", on_change="rerun")
 
 _actuel = PAR_LIBELLE.get(st.session_state["onglet"], "aujourdhui")
@@ -729,6 +783,43 @@ def _palmares(lignes: pd.DataFrame, couleur: str) -> str:
             f'{_rgba(couleur, .5)},{couleur});animation-delay:{.1 * i:.1f}s">'
             f'</div></div></div>{_pastille(ligne.variation)}</div>')
     return "".join(morceaux)
+
+
+def _cle_tableau(nom: str) -> str:
+    """La clé d'un tableau cliquable, renouvelée à chaque fiche ouverte.
+
+    Sans elle, la ligne cliquée resterait sélectionnée au retour sur
+    l'onglet — et la cliquer de nouveau ne ferait plus rien, puisqu'elle
+    l'est déjà."""
+    return f"{nom}_{st.session_state.get('fiches_ouvertes', 0)}"
+
+
+def _ouvrir_la_fiche(evenement, symboles: list) -> None:
+    """Si une ligne a été cliquée, ouvre la fiche de sa société.
+
+    UNE CELLULE SUFFIT. En sélection de lignes seule, il fallait viser la
+    petite case à gauche de la ligne ; un clic sur le nom ou le prix ne
+    faisait rien, et rien ne disait pourquoi. Les tableaux acceptent donc
+    aussi la sélection d'une cellule, et la cellule désigne sa ligne.
+
+    `rows` comme `cells` donnent la position de la ligne dans la table
+    PASSÉE à `st.dataframe`, et non dans l'ordre affiché : un tri fait à la
+    souris ne la déplace pas. La destination est appliquée au passage
+    suivant, avant les onglets — voir `_destination`.
+    """
+    try:
+        selection = evenement["selection"]
+    except (KeyError, TypeError):
+        return
+    lignes = list(selection.get("rows") or [])
+    lignes += [cellule[0] for cellule in selection.get("cells") or []]
+    if not lignes or not 0 <= int(lignes[0]) < len(symboles):
+        return
+    lignes = [int(lignes[0])]
+    st.session_state["aller_a"] = str(symboles[lignes[0]])
+    st.session_state["fiches_ouvertes"] = (
+        st.session_state.get("fiches_ouvertes", 0) + 1)
+    st.rerun()
 
 
 def _horizon_en_mots(horizon: int) -> str:
@@ -872,18 +963,21 @@ if onglets[0].open:
                         f'style="border-top-color:{teinte};background:'
                         f'linear-gradient(180deg,{_rgba(teinte, .14)},{SURFACE} 70%)">'
                         f'<div class="emo">{emo}</div>'
-                        f'<div class="nomsec">{html.escape(nom)}</div>'
+                        f'<div class="nomsec">{_cesure(html.escape(nom))}</div>'
                         f'{_pastille(var)}</div>', unsafe_allow_html=True)
 
         _titre("📋 Toutes les actions de la séance",
-               "Cliquez sur un titre de colonne pour trier.")
+               "Cliquez sur un titre de colonne pour trier, ou sur une ligne "
+               "pour ouvrir la fiche de la société.")
         tableau = jour[["ticker", "nom", "secteur", "cloture", "variation",
                         "volume_fcfa"]].sort_values("variation", ascending=False)
-        st.dataframe(
+        choisie = st.dataframe(
             tableau.style.map(
                 lambda v: f"color:{_couleur(v)};font-weight:700",
                 subset=["variation"]),
             width="stretch", hide_index=True, height=420,
+            key=_cle_tableau("seance"), on_select="rerun",
+            selection_mode=["single-row", "single-cell"],
             column_config={
                 "ticker": st.column_config.TextColumn("Symbole"),
                 "nom": st.column_config.TextColumn("Société"),
@@ -898,6 +992,7 @@ if onglets[0].open:
                     "Échangé (FCFA)", format="localized",
                     help="Montant total des achats et ventes de la séance."),
             })
+        _ouvrir_la_fiche(choisie, tableau["ticker"].tolist())
         _legende(
             "**Météo** ☀️ / ⛅ / 🌧️ : plus d'actions en hausse, autant des deux, "
             "ou plus d'actions en baisse.",
@@ -1566,10 +1661,14 @@ if onglets[2].open:
                             + alt.Chart(pd.DataFrame({"x": [0.5]})).mark_rule(
                                 color=ENCRE, strokeDash=[6, 4]).encode(x="x:Q"),
                             width="stretch")
-                        st.dataframe(
+                        st.caption("Cliquez sur une ligne pour ouvrir la fiche "
+                                   "de la société.")
+                        choisie = st.dataframe(
                             detail[["ticker", "nom", "meteo", "probabilite",
                                     "incertitude"]],
                             width="stretch", hide_index=True,
+                            key=_cle_tableau("detail"), on_select="rerun",
+                            selection_mode=["single-row", "single-cell"],
                             column_config={
                                 "ticker": st.column_config.TextColumn("Symbole"),
                                 "nom": st.column_config.TextColumn("Société"),
@@ -1582,6 +1681,7 @@ if onglets[2].open:
                                          "un autre historique. L'incertitude du "
                                          "marché lui-même est bien plus grande."),
                             })
+                        _ouvrir_la_fiche(choisie, detail["ticker"].tolist())
 
                 # --- Le piège des frais -------------------------------------
                 _titre("🪤 Le piège des frais",
